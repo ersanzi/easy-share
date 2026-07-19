@@ -1,10 +1,44 @@
-build/bin
+# ─── 构建产物 ───
+build/bin/
 build/windows/installer/tmp/
-/core.exe
-node_modules
-frontend/dist
-.wails
+*.exe
+!build/windows/*.ico
+
+# ─── Wails ───
+.wails/
+
+# ─── Go ───
+vendor/
+*.test
+*.out
+coverage.*
+
+# ─── 前端 ───
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# ─── 运行时配置与数据 ───
+config.json
 *.log
 *.tmp
-config.json
+
+# ─── IDE / 编辑器 ───
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── 操作系统 ───
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# ─── 环境变量 ───
+.env
+.env.*
+
+# ─── 旧脚手架目录 ───
 easyshare-scaffold/
