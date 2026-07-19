@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/discovery"
 	"easyshare/internal/drive"
@@ -29,11 +30,12 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 type Status struct {
-	Core        bool `json:"core"`
-	Discovery   bool `json:"discovery"`
-	Receiver    bool `json:"receiver"`
-	WebDAV      bool `json:"webdav"`
-	DriveMapped bool `json:"driveMapped"`
+	Core         bool `json:"core"`
+	Discovery    bool `json:"discovery"`
+	Receiver     bool `json:"receiver"`
+	WebDAV       bool `json:"webdav"`
+	DriveMapped  bool `json:"driveMapped"`
+	CloudEnabled bool `json:"cloudEnabled"`
 }
 
 type driveService interface {
@@ -58,6 +60,7 @@ type Server struct {
 	shutdown     chan struct{}
 	driveService driveService
 	mapper       driveMapper
+	cloud        *cloud.Service
 	statusMutex  sync.RWMutex
 	status       Status
 	peers        func() []discovery.Peer
@@ -112,6 +115,11 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/transfers/{id}/accept", server.auth(http.HandlerFunc(server.acceptTransfer)))
 	mux.Handle("POST /api/transfers/{id}/reject", server.auth(http.HandlerFunc(server.rejectTransfer)))
 	mux.Handle("POST /api/config/reload", server.auth(http.HandlerFunc(server.reloadConfig)))
+	mux.Handle("GET /api/cloud/files", server.auth(http.HandlerFunc(server.cloudList)))
+	mux.Handle("POST /api/cloud/upload", server.auth(http.HandlerFunc(server.cloudUpload)))
+	mux.Handle("POST /api/cloud/download", server.auth(http.HandlerFunc(server.cloudDownload)))
+	mux.Handle("DELETE /api/cloud/files", server.auth(http.HandlerFunc(server.cloudDelete)))
+	mux.Handle("POST /api/cloud/share", server.auth(http.HandlerFunc(server.cloudShare)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, pattern := mux.Handler(request)
 		if pattern == "" {
@@ -185,6 +193,12 @@ func (server *Server) ConfigureDiscovery(service *discovery.Service) {
 }
 func (server *Server) ConfigureTransfer(receiver *transfer.Receiver) {
 	server.receiver = receiver
+}
+func (server *Server) ConfigureCloud(service *cloud.Service) {
+	server.cloud = service
+	server.statusMutex.Lock()
+	server.status.CloudEnabled = service != nil
+	server.statusMutex.Unlock()
 }
 func (server *Server) MarkDiscovery(running bool) {
 	server.statusMutex.Lock()
@@ -412,6 +426,109 @@ func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) 
 	}
 	log.Printf("config reloaded: device=%s receive=%s", value.DeviceName, value.ReceiveDir)
 	writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
+}
+
+func (server *Server) cloudList(writer http.ResponseWriter, request *http.Request) {
+	if server.cloud == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
+		return
+	}
+	prefix := request.URL.Query().Get("prefix")
+	files, err := server.cloud.List(request.Context(), prefix)
+	if err != nil {
+		log.Printf("cloud list: %v", err)
+		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_list_failed", Message: err.Error()})
+		return
+	}
+	if files == nil {
+		files = []cloud.File{}
+	}
+	writeJSON(writer, http.StatusOK, files)
+}
+
+func (server *Server) cloudUpload(writer http.ResponseWriter, request *http.Request) {
+	if server.cloud == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
+		return
+	}
+	var input struct {
+		FilePath string `json:"filePath"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil || input.FilePath == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "filePath required"})
+		return
+	}
+	result, err := server.cloud.Upload(request.Context(), input.FilePath)
+	if err != nil {
+		log.Printf("cloud upload: %v", err)
+		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_upload_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func (server *Server) cloudDownload(writer http.ResponseWriter, request *http.Request) {
+	if server.cloud == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
+		return
+	}
+	var input struct {
+		Key string `json:"key"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
+		return
+	}
+	url, err := server.cloud.DownloadURL(request.Context(), input.Key, 0)
+	if err != nil {
+		log.Printf("cloud download url: %v", err)
+		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_download_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"url": url})
+}
+
+func (server *Server) cloudDelete(writer http.ResponseWriter, request *http.Request) {
+	if server.cloud == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
+		return
+	}
+	var input struct {
+		Key string `json:"key"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
+		return
+	}
+	if err := server.cloud.Delete(request.Context(), input.Key); err != nil {
+		log.Printf("cloud delete: %v", err)
+		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_delete_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+func (server *Server) cloudShare(writer http.ResponseWriter, request *http.Request) {
+	if server.cloud == nil {
+		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
+		return
+	}
+	var input struct {
+		Key    string `json:"key"`
+		Expiry int    `json:"expiryHours"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
+		return
+	}
+	expiry := time.Duration(input.Expiry) * time.Hour
+	url, err := server.cloud.ShareLink(request.Context(), input.Key, expiry)
+	if err != nil {
+		log.Printf("cloud share: %v", err)
+		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_share_failed", Message: err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]string{"url": url})
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

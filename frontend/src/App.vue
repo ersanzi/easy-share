@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import CloudPanel from './components/CloudPanel.vue'
 import DrivePanel from './components/DrivePanel.vue'
 import PeerList from './components/PeerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
@@ -10,6 +11,19 @@ import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
 const app = useEasyShare()
 const view = ref<'overview' | 'settings'>('overview')
+const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
+
+const handleCloudUpload = async () => {
+  await app.cloudUpload()
+  cloudRef.value?.refresh()
+}
+const handleCloudDownload = async (key: string) => {
+  await app.cloudDownload(key)
+}
+const handleCloudDelete = async (key: string) => {
+  await app.cloudDelete(key)
+  cloudRef.value?.refresh()
+}
 </script>
 
 <template>
@@ -54,6 +68,10 @@ const view = ref<'overview' | 'settings'>('overview')
           <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
             <svg viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5Z"/><path d="M4 15h16M16.5 17.5h.01"/></svg>
             网络驱动器
+          </button>
+          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
+            <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
+            网盘
           </button>
           <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
@@ -131,6 +149,14 @@ const view = ref<'overview' | 'settings'>('overview')
                 @stop="app.stopDrive"
                 @map="app.mapDrive"
                 @unmap="app.unmapDrive"
+              />
+              <CloudPanel
+                ref="cloudRef"
+                id="cloud"
+                :enabled="app.snapshot.value.status.cloudEnabled"
+                @upload="handleCloudUpload"
+                @download="handleCloudDownload"
+                @delete="handleCloudDelete"
               />
             </div>
           </template>

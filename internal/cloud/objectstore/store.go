@@ -4,6 +4,7 @@ package objectstore
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -19,11 +20,13 @@ const (
 // Store contains only the S3 data-plane operations needed by EasyShare's
 // multipart upload and download flows.
 type Store interface {
+	PutObject(context.Context, PutObjectInput) (CompleteResult, error)
 	CreateMultipartUpload(context.Context, CreateMultipartUploadInput) (MultipartUpload, error)
 	PresignUploadPart(context.Context, PresignUploadPartInput) (PresignedRequest, error)
 	CompleteMultipartUpload(context.Context, CompleteMultipartUploadInput) (CompleteResult, error)
 	AbortMultipartUpload(context.Context, AbortMultipartUploadInput) error
 	HeadObject(context.Context, ObjectRef) (ObjectInfo, error)
+	ListObjects(context.Context, ListObjectsInput) (ListObjectsResult, error)
 	PresignDownload(context.Context, PresignDownloadInput) (PresignedRequest, error)
 	DeleteObject(context.Context, ObjectRef) error
 }
@@ -41,6 +44,56 @@ func (value ObjectRef) Validate() error {
 		return invalidInput("object key must not be empty")
 	}
 	return nil
+}
+
+// PutObjectInput is a simple single-request upload for small files.
+type PutObjectInput struct {
+	ObjectRef
+	ContentType string
+	Metadata    map[string]string
+	Body        io.Reader
+	Size        int64
+}
+
+func (value PutObjectInput) Validate() error {
+	if err := value.ObjectRef.Validate(); err != nil {
+		return err
+	}
+	if value.Size < 0 {
+		return invalidInput("size must not be negative")
+	}
+	return nil
+}
+
+// ListObjectsInput requests a page of objects under a prefix.
+type ListObjectsInput struct {
+	Bucket            string
+	Prefix            string
+	MaxKeys           int32
+	ContinuationToken string
+}
+
+func (value ListObjectsInput) Validate() error {
+	if strings.TrimSpace(value.Bucket) == "" {
+		return invalidInput("bucket must not be empty")
+	}
+	return nil
+}
+
+// ObjectEntry is a lightweight listing entry.
+type ObjectEntry struct {
+	Key          string
+	Size         int64
+	ETag         string
+	LastModified time.Time
+	ContentType  string
+}
+
+// ListObjectsResult is a page of listing results.
+type ListObjectsResult struct {
+	Objects               []ObjectEntry
+	ContinuationToken     string
+	IsTruncated           bool
 }
 
 type CreateMultipartUploadInput struct {

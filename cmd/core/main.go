@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"easyshare/internal/api"
+	"easyshare/internal/cloud"
+	"easyshare/internal/cloud/objectstore/s3store"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/discovery"
@@ -56,6 +58,21 @@ func main() {
 	server.ConfigureDrive(drive.NewService(value.WebDAVRoot, value.WebDAVUsername, value.WebDAVPassword), drive.NewMapper())
 	server.ConfigureShutdown(cancelCore)
 	server.ConfigureConfigPath(*configPath)
+	if value.Cloud.Enabled() {
+		store, err := s3store.New(s3store.Config{
+			Endpoint:          value.Cloud.Endpoint,
+			Region:            value.Cloud.Region,
+			AccessKeyID:       value.Cloud.AccessKeyID,
+			SecretAccessKey:   value.Cloud.SecretAccessKey,
+			AllowInsecureHTTP: value.Cloud.AllowInsecureHTTP,
+		})
+		if err != nil {
+			log.Printf("cloud drive disabled: %v", err)
+		} else {
+			server.ConfigureCloud(cloud.NewService(store, value.Cloud.Bucket))
+			log.Printf("cloud drive enabled: endpoint=%s bucket=%s", value.Cloud.Endpoint, value.Cloud.Bucket)
+		}
+	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

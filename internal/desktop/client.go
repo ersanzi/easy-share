@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"easyshare/internal/api"
+	"easyshare/internal/cloud"
 	"easyshare/internal/discovery"
 	"easyshare/internal/task"
 )
@@ -91,4 +92,31 @@ func (client *Client) ClearTasks(ctx context.Context) error {
 }
 func (client *Client) DeleteTask(ctx context.Context, id string) error {
 	return client.request(ctx, http.MethodDelete, "/api/tasks/"+id, nil, nil)
+}
+func (client *Client) CloudList(ctx context.Context) ([]cloud.File, error) {
+	var result []cloud.File
+	err := client.request(ctx, http.MethodGet, "/api/cloud/files", nil, &result)
+	return result, err
+}
+func (client *Client) CloudUpload(ctx context.Context, filePath string) (cloud.UploadResult, error) {
+	var result cloud.UploadResult
+	err := client.request(ctx, http.MethodPost, "/api/cloud/upload", map[string]string{"filePath": filePath}, &result)
+	return result, err
+}
+func (client *Client) CloudDownload(ctx context.Context, key string) (string, error) {
+	var result struct {
+		URL string `json:"url"`
+	}
+	err := client.request(ctx, http.MethodPost, "/api/cloud/download", map[string]string{"key": key}, &result)
+	return result.URL, err
+}
+func (client *Client) CloudDelete(ctx context.Context, key string) error {
+	return client.request(ctx, http.MethodDelete, "/api/cloud/files", map[string]string{"key": key}, nil)
+}
+func (client *Client) CloudShare(ctx context.Context, key string, expiryHours int) (string, error) {
+	var result struct {
+		URL string `json:"url"`
+	}
+	err := client.request(ctx, http.MethodPost, "/api/cloud/share", map[string]any{"key": key, "expiryHours": expiryHours}, &result)
+	return result.URL, err
 }

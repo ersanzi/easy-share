@@ -6,6 +6,7 @@ export namespace api {
 	    receiver: boolean;
 	    webdav: boolean;
 	    driveMapped: boolean;
+	    cloudEnabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Status(source);
@@ -18,6 +19,65 @@ export namespace api {
 	        this.receiver = source["receiver"];
 	        this.webdav = source["webdav"];
 	        this.driveMapped = source["driveMapped"];
+	        this.cloudEnabled = source["cloudEnabled"];
+	    }
+	}
+
+}
+
+export namespace cloud {
+	
+	export class File {
+	    key: string;
+	    name: string;
+	    size: number;
+	    contentType: string;
+	    // Go type: time
+	    lastModified: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new File(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.contentType = source["contentType"];
+	        this.lastModified = this.convertValues(source["lastModified"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UploadResult {
+	    key: string;
+	    etag: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UploadResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.etag = source["etag"];
 	    }
 	}
 
@@ -108,6 +168,28 @@ export namespace discovery {
 
 export namespace main {
 	
+	export class CloudSettings {
+	    endpoint: string;
+	    region: string;
+	    accessKeyId: string;
+	    secretAccessKey: string;
+	    bucket: string;
+	    allowInsecureHttp: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloudSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpoint = source["endpoint"];
+	        this.region = source["region"];
+	        this.accessKeyId = source["accessKeyId"];
+	        this.secretAccessKey = source["secretAccessKey"];
+	        this.bucket = source["bucket"];
+	        this.allowInsecureHttp = source["allowInsecureHttp"];
+	    }
+	}
 	export class Settings {
 	    deviceName: string;
 	    receiveDir: string;

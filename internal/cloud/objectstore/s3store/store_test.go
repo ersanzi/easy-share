@@ -164,3 +164,11 @@ func (client *recordingS3Client) HeadObject(context.Context, *s3.HeadObjectInput
 func (client *recordingS3Client) DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	panic("unexpected DeleteObject call")
 }
+
+func (client *recordingS3Client) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	panic("unexpected PutObject call")
+}
+
+func (client *recordingS3Client) ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	panic("unexpected ListObjectsV2 call")
+}

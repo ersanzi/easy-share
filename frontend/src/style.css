@@ -273,6 +273,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .transfer-meta { display: flex; align-items: center; gap: 9px; min-height: 18px; color: #8e8e93; font-size: 8px; }
 .inline-error { color: var(--red); }
 .duration-text { color: #8e8e93; }
+.speed-active { color: #076bc9; font-weight: 600; }
 .delete-btn { margin-left: auto; padding: 0 4px; color: #aeaeb2; background: none; border: 0; font-size: 14px; line-height: 1; cursor: pointer; border-radius: 4px; transition: color .12s, background .12s; }
 .delete-btn:hover { color: var(--red); background: rgba(255,59,48,.08); }
 .row-actions { display: flex; gap: 6px; margin-left: auto; }
@@ -364,6 +365,23 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .save-success { color: #25883d; font-size: 12px; font-weight: 600; }
 .fade-enter-active, .fade-leave-active { transition: opacity .3s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+/* ─── 网盘面板 ─── */
+.cloud-panel { padding-bottom: 14px; }
+.cloud-toolbar { display: flex; padding: 4px 18px 12px; }
+.cloud-list { max-height: 320px; overflow-y: auto; }
+.cloud-row { display: flex; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid rgba(60,60,67,.07); }
+.cloud-row:last-child { border-bottom: 0; }
+.cloud-icon { display: grid; place-items: center; width: 34px; height: 38px; flex: 0 0 auto; color: #77777e; background: #f2f2f4; border-radius: 8px; }
+.cloud-icon svg { width: 20px; height: 24px; }
+.cloud-info { min-width: 0; flex: 1; }
+.cloud-info strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.cloud-info span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+.cloud-actions { display: flex; gap: 5px; flex: 0 0 auto; }
+.share-bar { display: flex; align-items: center; gap: 8px; margin: 10px 18px 4px; padding: 10px 12px; background: #f7f9fc; border: 1px solid rgba(0,122,255,.12); border-radius: 10px; font-size: 9px; }
+.share-label { flex: 0 0 auto; color: var(--muted); font-weight: 600; }
+.share-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); font-size: 9px; }
+.empty-illustration.cloud-off svg, .empty-illustration.cloud-empty svg { width: 32px; height: 32px; stroke: currentColor; stroke-width: 1.5; fill: none; }
 
 @media (max-width: 1050px) {
   .workspace { padding: 24px 22px 30px; }

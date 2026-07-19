@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/drive"
@@ -315,6 +316,115 @@ func (a *App) SelectFile() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要发送的文件"})
 	a.reportError("select file", err)
 	return path, err
+}
+
+// CloudSettings is the user-facing RustFS configuration.
+type CloudSettings struct {
+	Endpoint          string `json:"endpoint"`
+	Region            string `json:"region"`
+	AccessKeyID       string `json:"accessKeyId"`
+	SecretAccessKey   string `json:"secretAccessKey"`
+	Bucket            string `json:"bucket"`
+	AllowInsecureHTTP bool   `json:"allowInsecureHttp"`
+}
+
+func (a *App) GetCloudSettings() CloudSettings {
+	c := a.config.Cloud
+	return CloudSettings{
+		Endpoint:          c.Endpoint,
+		Region:            c.Region,
+		AccessKeyID:       c.AccessKeyID,
+		SecretAccessKey:   c.SecretAccessKey,
+		Bucket:            c.Bucket,
+		AllowInsecureHTTP: c.AllowInsecureHTTP,
+	}
+}
+
+func (a *App) SaveCloudSettings(endpoint, region, accessKeyID, secretAccessKey, bucket string, allowInsecureHTTP bool) error {
+	a.config.Cloud = config.CloudConfig{
+		Endpoint:          strings.TrimSpace(endpoint),
+		Region:            strings.TrimSpace(region),
+		AccessKeyID:       strings.TrimSpace(accessKeyID),
+		SecretAccessKey:   strings.TrimSpace(secretAccessKey),
+		Bucket:            strings.TrimSpace(bucket),
+		AllowInsecureHTTP: allowInsecureHTTP,
+	}
+	if err := config.Save(a.configPath, a.config); err != nil {
+		a.reportError("save cloud settings", err)
+		return fmt.Errorf("保存网盘配置失败：%w", err)
+	}
+	// Notify Core to reload; cloud service will be re-initialized on next restart.
+	if client, err := a.coreClient(); err == nil {
+		_ = client.Action(a.ctx, "/api/config/reload")
+	}
+	a.logger.Printf("cloud settings saved: endpoint=%s bucket=%s", endpoint, bucket)
+	return nil
+}
+
+func (a *App) SelectFiles() ([]string, error) {
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要发送的文件（可多选）"})
+	a.reportError("select files", err)
+	return paths, err
+}
+
+// --- Cloud drive ---
+
+func (a *App) CloudList() ([]cloud.File, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.CloudList(a.ctx)
+	a.reportError("cloud list", err)
+	return result, err
+}
+
+func (a *App) CloudUpload() (cloud.UploadResult, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
+	if err != nil || path == "" {
+		return cloud.UploadResult{}, err
+	}
+	client, clientErr := a.coreClient()
+	if clientErr != nil {
+		return cloud.UploadResult{}, clientErr
+	}
+	result, err := client.CloudUpload(a.ctx, path)
+	a.reportError("cloud upload", err)
+	return result, err
+}
+
+func (a *App) CloudDownload(key string) error {
+	client, err := a.coreClient()
+	if err != nil {
+		return err
+	}
+	url, err := client.CloudDownload(a.ctx, key)
+	if err != nil {
+		a.reportError("cloud download", err)
+		return err
+	}
+	runtime.BrowserOpenURL(a.ctx, url)
+	return nil
+}
+
+func (a *App) CloudDelete(key string) error {
+	client, err := a.coreClient()
+	if err != nil {
+		return err
+	}
+	err = client.CloudDelete(a.ctx, key)
+	a.reportError("cloud delete", err)
+	return err
+}
+
+func (a *App) CloudShare(key string, expiryHours int) (string, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return "", err
+	}
+	url, err := client.CloudShare(a.ctx, key, expiryHours)
+	a.reportError("cloud share", err)
+	return url, err
 }
 
 func (a *App) Greet(name string) string {

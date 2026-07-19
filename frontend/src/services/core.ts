@@ -2,15 +2,23 @@
   AcceptTransfer,
   AcceptTransferAs,
   ClearHistory,
+  CloudDelete,
+  CloudDownload,
+  CloudList,
+  CloudShare,
+  CloudUpload,
   DeleteTask,
+  GetCloudSettings,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
   MapDrive,
   RejectTransfer,
   ReportFrontendError,
+  SaveCloudSettings,
   SaveSettings,
   SelectFile,
+  SelectFiles,
   SelectReceiveDirectory,
   SelectShareDirectory,
   SendFile,
@@ -19,7 +27,7 @@
   StopDrive,
   UnmapDrive,
 } from '../../wailsjs/go/main/App'
-import type { CoreSnapshot } from '../types/core'
+import type { CloudFile, CoreSnapshot } from '../types/core'
 
 export interface SettingsData {
   deviceName: string
@@ -28,9 +36,19 @@ export interface SettingsData {
   driveLetter: string
 }
 
+export interface CloudSettingsData {
+  endpoint: string
+  region: string
+  accessKeyId: string
+  secretAccessKey: string
+  bucket: string
+  allowInsecureHttp: boolean
+}
+
 export const core = {
   snapshot: () => GetSnapshot() as Promise<CoreSnapshot>,
   selectFile: SelectFile,
+  selectFiles: SelectFiles,
   send: SendFile,
   accept: AcceptTransfer,
   acceptAs: AcceptTransferAs,
@@ -48,4 +66,11 @@ export const core = {
   selectShareDirectory: SelectShareDirectory,
   clearHistory: ClearHistory,
   deleteTask: DeleteTask,
+  cloudList: () => CloudList() as Promise<CloudFile[]>,
+  cloudUpload: CloudUpload,
+  cloudDownload: CloudDownload,
+  cloudDelete: CloudDelete,
+  cloudShare: CloudShare,
+  getCloudSettings: () => GetCloudSettings() as Promise<CloudSettingsData>,
+  saveCloudSettings: SaveCloudSettings,
 }

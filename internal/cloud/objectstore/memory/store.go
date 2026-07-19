@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,6 +203,95 @@ func (store *Store) DeleteObject(_ context.Context, ref objectstore.ObjectRef) e
 	defer store.mutex.Unlock()
 	delete(store.objects, objectKey(ref))
 	return nil
+}
+
+func (store *Store) PutObject(_ context.Context, input objectstore.PutObjectInput) (objectstore.CompleteResult, error) {
+	if err := input.Validate(); err != nil {
+		return objectstore.CompleteResult{}, err
+	}
+	body, err := io.ReadAll(input.Body)
+	if err != nil {
+		return objectstore.CompleteResult{}, fmt.Errorf("%w: read body: %v", objectstore.ErrInvalidInput, err)
+	}
+	digest := sha256.Sum256(body)
+	etag := hex.EncodeToString(digest[:])
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	store.objects[objectKey(input.ObjectRef)] = storedObject{
+		body:         body,
+		etag:         etag,
+		contentType:  input.ContentType,
+		metadata:     objectstore.CloneMetadata(input.Metadata),
+		lastModified: store.now(),
+	}
+	return objectstore.CompleteResult{ETag: etag}, nil
+}
+
+func (store *Store) ListObjects(_ context.Context, input objectstore.ListObjectsInput) (objectstore.ListObjectsResult, error) {
+	if err := input.Validate(); err != nil {
+		return objectstore.ListObjectsResult{}, err
+	}
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+
+	prefix := input.Prefix
+	var keys []string
+	for compositeKey, obj := range store.objects {
+		// compositeKey is "bucket\x00key"
+		parts := strings.SplitN(compositeKey, "\x00", 2)
+		if len(parts) != 2 || parts[0] != input.Bucket {
+			continue
+		}
+		key := parts[1]
+		if prefix == "" || strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+		_ = obj
+	}
+	sort.Strings(keys)
+
+	// Apply continuation token (exclusive start after token key).
+	startIndex := 0
+	if input.ContinuationToken != "" {
+		for i, k := range keys {
+			if k == input.ContinuationToken {
+				startIndex = i + 1
+				break
+			}
+		}
+	}
+
+	maxKeys := int(input.MaxKeys)
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
+	endIndex := startIndex + maxKeys
+	truncated := endIndex < len(keys)
+	if endIndex > len(keys) {
+		endIndex = len(keys)
+	}
+
+	entries := make([]objectstore.ObjectEntry, 0, endIndex-startIndex)
+	for _, key := range keys[startIndex:endIndex] {
+		obj := store.objects[input.Bucket+"\x00"+key]
+		entries = append(entries, objectstore.ObjectEntry{
+			Key:          key,
+			Size:         int64(len(obj.body)),
+			ETag:         obj.etag,
+			LastModified: obj.lastModified,
+			ContentType:  obj.contentType,
+		})
+	}
+
+	var token string
+	if truncated && len(entries) > 0 {
+		token = entries[len(entries)-1].Key
+	}
+	return objectstore.ListObjectsResult{
+		Objects:           entries,
+		ContinuationToken: token,
+		IsTruncated:       truncated,
+	}, nil
 }
 
 // ReadObject returns a copy of object bytes for tests. It is not part of

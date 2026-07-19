@@ -24,20 +24,34 @@ const (
 	defaultWebDAVPort    = 19080
 )
 
+// CloudConfig holds RustFS (S3-compatible) connection settings.
+// An empty Endpoint means the cloud drive is disabled.
+type CloudConfig struct {
+	Endpoint          string `json:"endpoint"`
+	Region            string `json:"region"`
+	AccessKeyID       string `json:"accessKeyId"`
+	SecretAccessKey   string `json:"secretAccessKey"`
+	Bucket            string `json:"bucket"`
+	AllowInsecureHTTP bool   `json:"allowInsecureHttp"`
+}
+
+func (c CloudConfig) Enabled() bool { return c.Endpoint != "" }
+
 type Config struct {
-	DeviceID       string `json:"deviceId"`
-	DeviceName     string `json:"deviceName"`
-	APIHost        string `json:"apiHost"`
-	APIPort        int    `json:"apiPort"`
-	APIToken       string `json:"apiToken"`
-	DiscoveryPort  int    `json:"discoveryPort"`
-	TransferPort   int    `json:"transferPort"`
-	ReceiveDir     string `json:"receiveDir"`
-	WebDAVRoot     string `json:"webdavRoot"`
-	WebDAVPort     int    `json:"webdavPort"`
-	WebDAVUsername string `json:"webdavUsername"`
-	WebDAVPassword string `json:"webdavPassword"`
-	DriveLetter    string `json:"driveLetter"`
+	DeviceID       string      `json:"deviceId"`
+	DeviceName     string      `json:"deviceName"`
+	APIHost        string      `json:"apiHost"`
+	APIPort        int         `json:"apiPort"`
+	APIToken       string      `json:"apiToken"`
+	DiscoveryPort  int         `json:"discoveryPort"`
+	TransferPort   int         `json:"transferPort"`
+	ReceiveDir     string      `json:"receiveDir"`
+	WebDAVRoot     string      `json:"webdavRoot"`
+	WebDAVPort     int         `json:"webdavPort"`
+	WebDAVUsername string      `json:"webdavUsername"`
+	WebDAVPassword string      `json:"webdavPassword"`
+	DriveLetter    string      `json:"driveLetter"`
+	Cloud          CloudConfig `json:"cloud"`
 }
 
 func Load(path string) (Config, error) {

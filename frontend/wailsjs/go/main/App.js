@@ -14,8 +14,32 @@ export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
 
+export function CloudDelete(arg1) {
+  return window['go']['main']['App']['CloudDelete'](arg1);
+}
+
+export function CloudDownload(arg1) {
+  return window['go']['main']['App']['CloudDownload'](arg1);
+}
+
+export function CloudList() {
+  return window['go']['main']['App']['CloudList']();
+}
+
+export function CloudShare(arg1, arg2) {
+  return window['go']['main']['App']['CloudShare'](arg1, arg2);
+}
+
+export function CloudUpload() {
+  return window['go']['main']['App']['CloudUpload']();
+}
+
 export function DeleteTask(arg1) {
   return window['go']['main']['App']['DeleteTask'](arg1);
+}
+
+export function GetCloudSettings() {
+  return window['go']['main']['App']['GetCloudSettings']();
 }
 
 export function GetLogDirectory() {
@@ -46,12 +70,20 @@ export function ReportFrontendError(arg1, arg2) {
   return window['go']['main']['App']['ReportFrontendError'](arg1, arg2);
 }
 
+export function SaveCloudSettings(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SaveCloudSettings'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function SaveSettings(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SaveSettings'](arg1, arg2, arg3, arg4);
 }
 
 export function SelectFile() {
   return window['go']['main']['App']['SelectFile']();
+}
+
+export function SelectFiles() {
+  return window['go']['main']['App']['SelectFiles']();
 }
 
 export function SelectReceiveDirectory() {

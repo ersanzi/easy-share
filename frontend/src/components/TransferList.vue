@@ -66,7 +66,7 @@ const duration = (task: TransferTask) => {
           </div>
           <div class="transfer-meta">
             <span>{{ progress(item) }}%</span>
-            <span v-if="item.speed">{{ size(item.speed) }}/s</span>
+            <span v-if="item.speed" :class="{ 'speed-active': item.status === 'transferring' }">{{ size(item.speed) }}/s</span>
             <span v-if="duration(item)" class="duration-text">用时 {{ duration(item) }}</span>
             <span v-if="item.error" class="inline-error">{{ item.error }}</span>
             <div v-if="item.status === 'pending' && item.direction === 'receive'" class="row-actions">

@@ -8,6 +8,7 @@ const status = {
   receiver: true,
   webdav: false,
   driveMapped: false,
+  cloudEnabled: false,
 }
 
 describe('DrivePanel', () => {

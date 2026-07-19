@@ -9,6 +9,7 @@ const emptySnapshot = (): CoreSnapshot => ({
     receiver: false,
     webdav: false,
     driveMapped: false,
+    cloudEnabled: false,
   },
   peers: [],
   tasks: [],
@@ -193,14 +194,22 @@ export function useEasyShare() {
     refresh,
     send: async (peerId: string) => {
       if (inactive()) return
-      const path = await core.selectFile()
-      if (path) await act('发送文件', () => core.send(peerId, path))
+      const paths = await core.selectFiles()
+      if (paths && paths.length) {
+        for (const path of paths) {
+          await act('发送文件', () => core.send(peerId, path))
+        }
+      }
     },
     accept: (id: string) => act('接受传输', () => core.accept(id)),
     acceptAs: (id: string) => act('另存传输', () => core.acceptAs(id)),
     reject: (id: string) => act('拒绝传输', () => core.reject(id)),
     clearHistory: () => act('清除记录', core.clearHistory),
     deleteTask: (id: string) => act('删除记录', () => core.deleteTask(id)),
+    cloudUpload: () => act('上传文件', core.cloudUpload),
+    cloudDownload: (key: string) => act('下载文件', () => core.cloudDownload(key)),
+    cloudDelete: (key: string) => act('删除文件', () => core.cloudDelete(key)),
+    cloudShare: (key: string, hours: number) => core.cloudShare(key, hours),
     startDrive: () => act('启动 WebDAV', core.startDrive),
     stopDrive: () => act('停止 WebDAV', core.stopDrive),
     mapDrive: connectDrive,

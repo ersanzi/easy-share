@@ -36,10 +36,12 @@ type Config struct {
 }
 
 type s3API interface {
+	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	CreateMultipartUpload(context.Context, *s3.CreateMultipartUploadInput, ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
 	CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput, ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
 	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 	HeadObject(context.Context, *s3.HeadObjectInput, ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	DeleteObject(context.Context, *s3.DeleteObjectInput, ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 }
 
@@ -255,6 +257,69 @@ func (store *Store) DeleteObject(ctx context.Context, ref objectstore.ObjectRef)
 		return mapError("delete object", err)
 	}
 	return nil
+}
+
+func (store *Store) PutObject(ctx context.Context, input objectstore.PutObjectInput) (objectstore.CompleteResult, error) {
+	if err := input.Validate(); err != nil {
+		return objectstore.CompleteResult{}, err
+	}
+	request := &s3.PutObjectInput{
+		Bucket:        aws.String(input.Bucket),
+		Key:           aws.String(input.Key),
+		Body:          input.Body,
+		ContentLength: aws.Int64(input.Size),
+		Metadata:      objectstore.CloneMetadata(input.Metadata),
+	}
+	if input.ContentType != "" {
+		request.ContentType = aws.String(input.ContentType)
+	}
+	output, err := store.client.PutObject(ctx, request)
+	if err != nil {
+		return objectstore.CompleteResult{}, mapError("put object", err)
+	}
+	return objectstore.CompleteResult{
+		ETag:      aws.ToString(output.ETag),
+		VersionID: aws.ToString(output.VersionId),
+	}, nil
+}
+
+func (store *Store) ListObjects(ctx context.Context, input objectstore.ListObjectsInput) (objectstore.ListObjectsResult, error) {
+	if err := input.Validate(); err != nil {
+		return objectstore.ListObjectsResult{}, err
+	}
+	request := &s3.ListObjectsV2Input{
+		Bucket: aws.String(input.Bucket),
+	}
+	if input.Prefix != "" {
+		request.Prefix = aws.String(input.Prefix)
+	}
+	if input.MaxKeys > 0 {
+		request.MaxKeys = aws.Int32(input.MaxKeys)
+	}
+	if input.ContinuationToken != "" {
+		request.ContinuationToken = aws.String(input.ContinuationToken)
+	}
+	output, err := store.client.ListObjectsV2(ctx, request)
+	if err != nil {
+		return objectstore.ListObjectsResult{}, mapError("list objects", err)
+	}
+	entries := make([]objectstore.ObjectEntry, 0, len(output.Contents))
+	for _, obj := range output.Contents {
+		entry := objectstore.ObjectEntry{
+			Key:  aws.ToString(obj.Key),
+			Size: aws.ToInt64(obj.Size),
+			ETag: aws.ToString(obj.ETag),
+		}
+		if obj.LastModified != nil {
+			entry.LastModified = *obj.LastModified
+		}
+		entries = append(entries, entry)
+	}
+	return objectstore.ListObjectsResult{
+		Objects:           entries,
+		ContinuationToken: aws.ToString(output.NextContinuationToken),
+		IsTruncated:       aws.ToBool(output.IsTruncated),
+	}, nil
 }
 
 func presignedRequest(value *v4.PresignedHTTPRequest, expiresAt time.Time) objectstore.PresignedRequest {
