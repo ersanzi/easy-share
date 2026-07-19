@@ -199,8 +199,40 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .state-text { grid-column: 2; margin-top: -4px; color: #8e8e93; font-size: 9px; }
 .state-text.online { color: #268f41; }
 
+/* ─── 概览摘要卡片 ─── */
+.summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 15px;
+  background: rgba(255,255,255,.94);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(31,41,55,.04);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s, box-shadow .15s, transform .12s;
+}
+.summary-card:hover { border-color: rgba(0,122,255,.25); box-shadow: 0 4px 14px rgba(0,122,255,.08); transform: translateY(-1px); }
+.summary-card:active { transform: scale(.98); }
+.summary-icon { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 auto; border-radius: 10px; }
+.summary-icon svg { width: 20px; height: 20px; }
+.summary-icon.devices-icon { color: #147ad6; background: #eaf5ff; }
+.summary-icon.transfers-icon { color: #6a56c9; background: #f1efff; }
+.summary-icon.cloud-icon { color: #0891b2; background: #e6f7fb; }
+.summary-body { min-width: 0; flex: 1; }
+.summary-body strong { display: block; font-size: 13px; font-weight: 600; letter-spacing: -.01em; }
+.summary-body span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+.summary-arrow { width: 14px; height: 14px; flex: 0 0 auto; color: #c7c7cc; stroke-width: 2.2; }
+.summary-card:hover .summary-arrow { color: var(--blue); }
+
+/* ─── 详情页内容限宽 ─── */
+.workspace > .card { max-width: 720px; }
+
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(290px, .85fr); gap: 18px; align-items: start; }
 .main-column { display: grid; gap: 18px; min-width: 0; }
+.side-column { display: grid; gap: 18px; min-width: 0; align-self: start; }
 .card { overflow: hidden; background: rgba(255,255,255,.94); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 2px 10px rgba(31,41,55,.045); }
 .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 18px 19px 14px; }
 .card-header h2 { margin: 0; font-size: 17px; line-height: 1.2; letter-spacing: -.025em; }
@@ -388,6 +420,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
   .service-overview { grid-template-columns: 145px minmax(0,1fr); gap: 10px; padding-inline: 14px; }
   .overview-heading { padding-right: 10px; }
   .status-item { padding-inline: 3px; }
+  .summary-cards { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr) 280px; }
 }
 @media (max-width: 860px) {
@@ -402,6 +435,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
   .shutdown-btn span { display: none; }
   .service-overview { grid-template-columns: 1fr; }
   .overview-heading { padding: 0 3px 10px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .summary-cards { grid-template-columns: 1fr; }
   .dashboard-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {

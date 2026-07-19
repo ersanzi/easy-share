@@ -9,8 +9,10 @@ import TransferList from './components/TransferList.vue'
 import { useEasyShare } from './composables/useEasyShare'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
+type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
+
 const app = useEasyShare()
-const view = ref<'overview' | 'settings'>('overview')
+const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 
 const handleCloudUpload = async () => {
@@ -55,21 +57,17 @@ const handleCloudDelete = async (key: string) => {
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
             概览
           </button>
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
+          <button :class="['nav-item', view === 'devices' ? 'active' : '']" type="button" @click="view = 'devices'">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
             附近设备
             <span>{{ app.snapshot.value.peers.length }}</span>
           </button>
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
+          <button :class="['nav-item', view === 'transfers' ? 'active' : '']" type="button" @click="view = 'transfers'">
             <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
             传输任务
             <span>{{ app.snapshot.value.tasks.length }}</span>
           </button>
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
-            <svg viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5Z"/><path d="M4 15h16M16.5 17.5h.01"/></svg>
-            网络驱动器
-          </button>
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
+          <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
             网盘
           </button>
@@ -100,66 +98,131 @@ const handleCloudDelete = async (key: string) => {
       </aside>
 
       <section class="workspace">
+        <!-- ═══ 设置页 ═══ -->
         <SettingsPanel v-if="view === 'settings'" />
 
-        <template v-else>
-          <div v-if="app.stopped.value" class="stopped-view" role="status">
-            <div class="stopped-icon">
-              <svg viewBox="0 0 24 24"><path d="M12 3v9M7.2 5.8a8 8 0 1 0 9.6 0"/></svg>
+        <!-- ═══ 服务已退出 ═══ -->
+        <div v-else-if="app.stopped.value" class="stopped-view" role="status">
+          <div class="stopped-icon">
+            <svg viewBox="0 0 24 24"><path d="M12 3v9M7.2 5.8a8 8 0 1 0 9.6 0"/></svg>
+          </div>
+          <h1>EasyShare 服务已安全退出</h1>
+          <p>网络驱动器已取消映射，WebDAV 与后台 Core 均已停止。现在可以关闭此窗口。</p>
+          <span>运行日志保存在 {{ app.logDirectory.value }}</span>
+        </div>
+
+        <!-- ═══ 概览页 ═══ -->
+        <template v-else-if="view === 'overview'">
+          <header class="workspace-header">
+            <div>
+              <span class="section-label">共享中心</span>
+              <h1>你好，欢迎回来</h1>
+              <p>在附近设备间传送文件，或把共享空间挂载到资源管理器。</p>
             </div>
-            <h1>EasyShare 服务已安全退出</h1>
-            <p>网络驱动器已取消映射，WebDAV 与后台 Core 均已停止。现在可以关闭此窗口。</p>
-            <span>运行日志保存在 {{ app.logDirectory.value }}</span>
+            <div :class="['availability', app.snapshot.value.status.core ? 'online' : '']">
+              <span />
+              {{ app.snapshot.value.status.core ? '可被发现' : '正在启动' }}
+            </div>
+          </header>
+
+          <div v-if="app.error.value" class="alert" role="alert">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
+            <span class="alert-copy">
+              <b>{{ app.error.value }}</b>
+              <small>详细运行日志：{{ app.logDirectory.value }}</small>
+            </span>
+            <button type="button" aria-label="关闭错误提示" @click="app.clearError">×</button>
           </div>
 
-          <template v-else>
-            <header class="workspace-header">
-              <div>
-                <span class="section-label">共享中心</span>
-                <h1>你好，欢迎回来</h1>
-                <p>在附近设备间传送文件，或把共享空间挂载到资源管理器。</p>
-              </div>
-              <div :class="['availability', app.snapshot.value.status.core ? 'online' : '']">
-                <span />
-                {{ app.snapshot.value.status.core ? '可被发现' : '正在启动' }}
-              </div>
-            </header>
+          <StatusBar :status="app.snapshot.value.status" :loading="app.loading.value" />
 
-            <div v-if="app.error.value" class="alert" role="alert">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
-              <span class="alert-copy">
-                <b>{{ app.error.value }}</b>
-                <small>详细运行日志：{{ app.logDirectory.value }}</small>
-              </span>
-              <button type="button" aria-label="关闭错误提示" @click="app.clearError">×</button>
+          <!-- 摘要卡片：点击跳转详情 -->
+          <div class="summary-cards">
+            <button class="summary-card" type="button" @click="view = 'devices'">
+              <div class="summary-icon devices-icon">
+                <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
+              </div>
+              <div class="summary-body">
+                <strong>{{ app.snapshot.value.peers.length }} 台设备</strong>
+                <span>附近在线设备</span>
+              </div>
+              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+
+            <button class="summary-card" type="button" @click="view = 'transfers'">
+              <div class="summary-icon transfers-icon">
+                <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
+              </div>
+              <div class="summary-body">
+                <strong>{{ app.snapshot.value.tasks.length }} 个任务</strong>
+                <span>传输任务记录</span>
+              </div>
+              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+
+            <button class="summary-card" type="button" @click="view = 'cloud'">
+              <div class="summary-icon cloud-icon">
+                <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
+              </div>
+              <div class="summary-body">
+                <strong>网盘</strong>
+                <span>{{ app.snapshot.value.status.cloudEnabled ? '云端文件存储' : '未连接' }}</span>
+              </div>
+              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+
+          <!-- 网络驱动器留在概览 -->
+          <DrivePanel
+            :status="app.snapshot.value.status"
+            :mapping="app.mapping.value"
+            @start="app.startDrive"
+            @stop="app.stopDrive"
+            @map="app.mapDrive"
+            @unmap="app.unmapDrive"
+          />
+        </template>
+
+        <!-- ═══ 附近设备详情页 ═══ -->
+        <template v-else-if="view === 'devices'">
+          <header class="workspace-header">
+            <div>
+              <span class="section-label">局域网</span>
+              <h1>附近设备</h1>
+              <p>发现同一局域网内运行 EasyShare 的设备，点击即可发送文件。</p>
             </div>
+          </header>
+          <PeerList :peers="app.snapshot.value.peers" @send="app.send" />
+        </template>
 
-            <StatusBar :status="app.snapshot.value.status" :loading="app.loading.value" />
-
-            <div class="dashboard-grid">
-              <div class="main-column">
-                <PeerList id="devices" :peers="app.snapshot.value.peers" @send="app.send" />
-                <TransferList id="transfers" :tasks="app.snapshot.value.tasks" @accept="app.accept" @accept-as="app.acceptAs" @reject="app.reject" @clear="app.clearHistory" @delete="app.deleteTask" />
-              </div>
-              <DrivePanel
-                id="drive"
-                :status="app.snapshot.value.status"
-                :mapping="app.mapping.value"
-                @start="app.startDrive"
-                @stop="app.stopDrive"
-                @map="app.mapDrive"
-                @unmap="app.unmapDrive"
-              />
-              <CloudPanel
-                ref="cloudRef"
-                id="cloud"
-                :enabled="app.snapshot.value.status.cloudEnabled"
-                @upload="handleCloudUpload"
-                @download="handleCloudDownload"
-                @delete="handleCloudDelete"
-              />
+        <!-- ═══ 传输任务详情页 ═══ -->
+        <template v-else-if="view === 'transfers'">
+          <header class="workspace-header">
+            <div>
+              <span class="section-label">传输</span>
+              <h1>传输任务</h1>
+              <p>查看发送与接收的文件传输进度和历史记录。</p>
             </div>
-          </template>
+          </header>
+          <TransferList :tasks="app.snapshot.value.tasks" @accept="app.accept" @accept-as="app.acceptAs" @reject="app.reject" @clear="app.clearHistory" @delete="app.deleteTask" />
+        </template>
+
+        <!-- ═══ 网盘详情页 ═══ -->
+        <template v-else-if="view === 'cloud'">
+          <header class="workspace-header">
+            <div>
+              <span class="section-label">云端</span>
+              <h1>网盘</h1>
+              <p>将文件安全存储到云端，随时随地下载和分享。</p>
+            </div>
+          </header>
+          <CloudPanel
+            ref="cloudRef"
+            :enabled="app.snapshot.value.status.cloudEnabled"
+            @upload="handleCloudUpload"
+            @download="handleCloudDownload"
+            @delete="handleCloudDelete"
+          />
         </template>
       </section>
     </div>

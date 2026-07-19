@@ -75,7 +75,7 @@ defineExpose({ refresh: loadFiles })
         <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M3 3l18 18"/></svg>
       </span>
       <strong>网盘未启用</strong>
-      <p>请在设置中配置 RustFS 连接信息后使用网盘功能。</p>
+      <p>云端服务暂不可用，请确认后台服务已正常启动。</p>
     </div>
 
     <template v-else>
