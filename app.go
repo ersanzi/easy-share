@@ -203,6 +203,71 @@ func (a *App) SelectShareDirectory() (string, error) {
 	return path, err
 }
 
+func (a *App) SelectReceiveDirectory() (string, error) {
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择文件接收目录", DefaultDirectory: a.config.ReceiveDir})
+	a.reportError("select receive directory", err)
+	return path, err
+}
+
+// Settings is the user-facing subset of configuration exposed to the frontend.
+type Settings struct {
+	DeviceName string `json:"deviceName"`
+	ReceiveDir string `json:"receiveDir"`
+	WebDAVRoot string `json:"webdavRoot"`
+	DriveLetter string `json:"driveLetter"`
+}
+
+func (a *App) GetSettings() Settings {
+	return Settings{
+		DeviceName:  a.config.DeviceName,
+		ReceiveDir:  a.config.ReceiveDir,
+		WebDAVRoot:  a.config.WebDAVRoot,
+		DriveLetter: a.config.DriveLetter,
+	}
+}
+
+func (a *App) SaveSettings(deviceName, receiveDir, webdavRoot, driveLetter string) error {
+	deviceName = strings.TrimSpace(deviceName)
+	if deviceName == "" {
+		return fmt.Errorf("设备名称不能为空")
+	}
+	if receiveDir == "" {
+		return fmt.Errorf("接收目录不能为空")
+	}
+	if webdavRoot == "" {
+		return fmt.Errorf("共享目录不能为空")
+	}
+	driveLetter = strings.TrimSpace(driveLetter)
+	if len(driveLetter) == 1 {
+		driveLetter += ":"
+	}
+	if len(driveLetter) != 2 || driveLetter[1] != ':' {
+		return fmt.Errorf("盘符格式无效，应为单个字母如 Z")
+	}
+	letter := strings.ToUpper(driveLetter[:1])
+	if letter < "D" || letter > "Z" {
+		return fmt.Errorf("盘符须在 D-Z 之间")
+	}
+	driveLetter = letter + ":"
+
+	a.config.DeviceName = deviceName
+	a.config.ReceiveDir = receiveDir
+	a.config.WebDAVRoot = webdavRoot
+	a.config.DriveLetter = driveLetter
+
+	if err := config.Save(a.configPath, a.config); err != nil {
+		a.reportError("save settings", err)
+		return fmt.Errorf("保存配置失败：%w", err)
+	}
+
+	// Attempt to notify Core to reload configuration; non-fatal if unavailable.
+	if client, err := a.coreClient(); err == nil {
+		_ = client.Action(a.ctx, "/api/config/reload")
+	}
+	a.logger.Printf("settings saved: device=%s receive=%s webdav=%s drive=%s", deviceName, receiveDir, webdavRoot, driveLetter)
+	return nil
+}
+
 func (a *App) SelectFile() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要发送的文件"})
 	a.reportError("select file", err)

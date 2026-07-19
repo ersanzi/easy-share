@@ -106,6 +106,29 @@ export namespace discovery {
 
 }
 
+export namespace main {
+	
+	export class Settings {
+	    deviceName: string;
+	    receiveDir: string;
+	    webdavRoot: string;
+	    driveLetter: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Settings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deviceName = source["deviceName"];
+	        this.receiveDir = source["receiveDir"];
+	        this.webdavRoot = source["webdavRoot"];
+	        this.driveLetter = source["driveLetter"];
+	    }
+	}
+
+}
+
 export namespace task {
 	
 	export class Task {

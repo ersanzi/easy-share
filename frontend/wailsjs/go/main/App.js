@@ -10,6 +10,10 @@ export function GetLogDirectory() {
   return window['go']['main']['App']['GetLogDirectory']();
 }
 
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
+}
+
 export function GetSnapshot() {
   return window['go']['main']['App']['GetSnapshot']();
 }
@@ -30,8 +34,16 @@ export function ReportFrontendError(arg1, arg2) {
   return window['go']['main']['App']['ReportFrontendError'](arg1, arg2);
 }
 
+export function SaveSettings(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveSettings'](arg1, arg2, arg3, arg4);
+}
+
 export function SelectFile() {
   return window['go']['main']['App']['SelectFile']();
+}
+
+export function SelectReceiveDirectory() {
+  return window['go']['main']['App']['SelectReceiveDirectory']();
 }
 
 export function SelectShareDirectory() {
