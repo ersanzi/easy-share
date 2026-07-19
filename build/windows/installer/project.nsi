@@ -1,34 +1,32 @@
-Unicode true
+﻿Unicode true
 
 ####
-## Please note: Template replacements don't work in this file. They are provided with default defines like
-## mentioned underneath.
-## If the keyword is not defined, "wails_tools.nsh" will populate them with the values from ProjectInfo.
-## If they are defined here, "wails_tools.nsh" will not touch them. This allows to use this project.nsi manually
-## from outside of Wails for debugging and development of the installer.
-##
-## For development first make a wails nsis build to populate the "wails_tools.nsh":
-## > wails build --target windows/amd64 --nsis
-## Then you can call makensis on this file with specifying the path to your binary:
-## For a AMD64 only installer:
-## > makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\app.exe
-## For a ARM64 only installer:
-## > makensis -DARG_WAILS_ARM64_BINARY=..\..\bin\app.exe
-## For a installer with both architectures:
-## > makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\app-amd64.exe -DARG_WAILS_ARM64_BINARY=..\..\bin\app-arm64.exe
+## EasyShare NSIS 安装包
+## 双进程部署：easyshare.exe（桌面）+ easyshare-core.exe（后台服务）
+## 用户级安装，中文界面，可选开机自启动
 ####
-## The following information is taken from the ProjectInfo file, but they can be overwritten here.
-####
-## !define INFO_PROJECTNAME    "MyProject" # Default "{{.Name}}"
-## !define INFO_COMPANYNAME    "MyCompany" # Default "{{.Info.CompanyName}}"
-## !define INFO_PRODUCTNAME    "MyProduct" # Default "{{.Info.ProductName}}"
-## !define INFO_PRODUCTVERSION "1.0.0"     # Default "{{.Info.ProductVersion}}"
-## !define INFO_COPYRIGHT      "Copyright" # Default "{{.Info.Copyright}}"
-###
-## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
-## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
-####
-## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
+
+## 产品元信息（由 wails_tools.nsh 从 wails.json info 字段注入）
+## 如需手动调试可在此覆盖：
+## !define INFO_PROJECTNAME    "EasyShare"
+## !define INFO_COMPANYNAME    "EasyShare"
+## !define INFO_PRODUCTNAME    "EasyShare"
+## !define INFO_PRODUCTVERSION "0.1.0"
+## !define INFO_COPYRIGHT      "Copyright 2026 laifeng"
+
+!define PRODUCT_EXECUTABLE  "easyshare.exe"
+!define CORE_EXECUTABLE     "easyshare-core.exe"
+!define UNINST_KEY_NAME     "EasyShare"
+
+## 用户级安装，不需要管理员权限
+!define REQUEST_EXECUTION_LEVEL "user"
+!define WAILS_INSTALL_SCOPE "user"
+
+## Core 二进制路径（由 build.ps1 通过 -D 传入，或默认相对路径）
+!ifndef ARG_CORE_BINARY
+    !define ARG_CORE_BINARY "..\..\bin\easyshare-core.exe"
+!endif
+
 ####
 ## Include the wails tools
 ####
@@ -39,84 +37,127 @@ VIProductVersion "${INFO_PRODUCTVERSION}.0"
 VIFileVersion    "${INFO_PRODUCTVERSION}.0"
 
 VIAddVersionKey "CompanyName"     "${INFO_COMPANYNAME}"
-VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"
+VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} 安装包"
 VIAddVersionKey "ProductVersion"  "${INFO_PRODUCTVERSION}"
 VIAddVersionKey "FileVersion"     "${INFO_PRODUCTVERSION}"
 VIAddVersionKey "LegalCopyright"  "${INFO_COPYRIGHT}"
 VIAddVersionKey "ProductName"     "${INFO_PRODUCTNAME}"
 
-# Enable HiDPI support. https://nsis.sourceforge.io/Reference/ManifestDPIAware
+# Enable HiDPI support
 ManifestDPIAware true
 
 !include "MUI.nsh"
 
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
-# !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
-!define MUI_FINISHPAGE_NOAUTOCLOSE # Wait on the INSTFILES page so the user can take a look into the details of the installation steps
-!define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
-!insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
-# !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
-!insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
-!insertmacro MUI_PAGE_INSTFILES # Installing page.
-!insertmacro MUI_PAGE_FINISH # Finished installation page.
+## 中文界面
+!define MUI_WELCOMEPAGE_TITLE "欢迎安装 ${INFO_PRODUCTNAME}"
+!define MUI_WELCOMEPAGE_TEXT "本向导将安装 ${INFO_PRODUCTNAME} 到您的计算机。$\r$\n$\r$\n${INFO_PRODUCTNAME} 是一款局域网文件传输工具，支持设备发现、文件互传和网络驱动器映射。$\r$\n$\r$\n建议在继续之前关闭所有正在运行的 EasyShare 进程。$\r$\n$\r$\n$_CLICK"
+!define MUI_FINISHPAGE_NOAUTOCLOSE
+!define MUI_ABORTWARNING
+!define MUI_ABORTWARNING_TEXT "确定要退出 ${INFO_PRODUCTNAME} 安装向导吗？"
 
-!insertmacro MUI_UNPAGE_INSTFILES # Uinstalling page
+## 完成页选项
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${INFO_PRODUCTNAME}"
+!define MUI_FINISHPAGE_RUN_NOTCHECKED
 
-!insertmacro MUI_LANGUAGE "English" # Set the Language of the installer
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
 
-## The following two statements can be used to sign the installer and the uninstaller. The path to the binaries are provided in %1
-#!uninstfinalize 'signtool --file "%1"'
-#!finalize 'signtool --file "%1"'
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+!insertmacro MUI_LANGUAGE "SimpChinese"
 
 Name "${INFO_PRODUCTNAME}"
-OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe" # Name of the installer's file.
-!ifdef WAILS_INSTALL_SCOPE
-  !if "${WAILS_INSTALL_SCOPE}" == "user"
-    InstallDir "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}"
-  !else
-    InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
-  !endif
-!else
-  InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
-!endif # Default installing folder ($PROGRAMFILES is Program Files folder).
-ShowInstDetails show # This will always show the installation details.
+OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe"
+InstallDir "$LOCALAPPDATA\Programs\${INFO_PRODUCTNAME}"
+InstallDirRegKey HKCU "Software\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" "InstallDir"
+ShowInstDetails show
+ShowUninstDetails show
+
+## 自启动选项变量
+Var AutoStart
 
 Function .onInit
-   !insertmacro wails.checkArchitecture
+    !insertmacro wails.checkArchitecture
+    StrCpy $AutoStart "0"
 FunctionEnd
 
-Section
+## 安装区段
+Section "Install"
     !insertmacro wails.setShellContext
 
+    ## 安装 WebView2 Runtime（如果缺失）
     !insertmacro wails.webview2runtime
 
     SetOutPath $INSTDIR
 
+    ## 部署主程序
     !insertmacro wails.files
 
-    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-    CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    ## 部署 Core 进程
+    File "/oname=${CORE_EXECUTABLE}" "${ARG_CORE_BINARY}"
 
-    !insertmacro wails.associateFiles
-    !insertmacro wails.associateCustomProtocols
+    ## 创建快捷方式
+    CreateDirectory "$SMPROGRAMS\${INFO_PRODUCTNAME}"
+    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+    CreateShortcut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
+    ## 写入安装路径（供升级和卸载使用）
+    WriteRegStr HKCU "Software\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" "InstallDir" "$INSTDIR"
+    WriteRegStr HKCU "Software\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" "Version" "${INFO_PRODUCTVERSION}"
+
+    ## 写入卸载信息
     !insertmacro wails.writeUninstaller
+
+    ## 询问是否开机自启动
+    MessageBox MB_YESNO|MB_ICONQUESTION "是否在 Windows 启动时自动运行 ${INFO_PRODUCTNAME}？" IDNO noAutoStart
+        StrCpy $AutoStart "1"
+        WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\""
+    noAutoStart:
+
 SectionEnd
 
-Section "uninstall"
+## 卸载区段
+Section "Uninstall"
     !insertmacro wails.setShellContext
 
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    ## 终止 EasyShare 进程
+    DetailPrint "正在停止 EasyShare 进程..."
+    nsExec::ExecToLog 'taskkill /F /IM "${PRODUCT_EXECUTABLE}" /T'
+    nsExec::ExecToLog 'taskkill /F /IM "${CORE_EXECUTABLE}" /T'
+    Sleep 1000
 
-    RMDir /r $INSTDIR
+    ## 移除 EasyShare 创建的网络映射
+    ## 通过 UNC 路径匹配：\\127.0.0.1@19080\DavWWWRoot
+    DetailPrint "正在清理网络驱动器映射..."
+    nsExec::ExecToLog 'net use Z: /delete /y'
+    ## 注意：只尝试删除默认盘符 Z:，如果用户修改过盘符则需要手动清理
+    ## net use 在映射不存在时会静默失败，不影响卸载流程
 
-    Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
+    ## 删除开机自启动
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}"
+
+    ## 删除快捷方式
+    Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}\${INFO_PRODUCTNAME}.lnk"
+    RMDir "$SMPROGRAMS\${INFO_PRODUCTNAME}"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
 
-    !insertmacro wails.unassociateFiles
-    !insertmacro wails.unassociateCustomProtocols
+    ## 删除安装目录
+    RMDir /r $INSTDIR
 
+    ## 删除安装信息注册表
+    DeleteRegKey HKCU "Software\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
+
+    ## 删除卸载信息
     !insertmacro wails.deleteUninstaller
+
+    ## 提示用户数据未删除
+    MessageBox MB_OK|MB_ICONINFORMATION "EasyShare 已卸载。$\r$\n$\r$\n您的个人数据（配置、日志、接收的文件和共享目录）未被删除。$\r$\n如需完全清理，请手动删除：$\r$\n%LOCALAPPDATA%\EasyShare$\r$\n%USERPROFILE%\Downloads\EasyShare$\r$\n%USERPROFILE%\EasyShare"
+
 SectionEnd

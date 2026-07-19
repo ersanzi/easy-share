@@ -24,6 +24,7 @@ EasyShare 是一个面向 Windows 10/11 的局域网文件传输桌面应用。�
 - Go 1.25（以 `go.mod` 为准）
 - Node.js 与 npm
 - Wails CLI 2.13.0
+- NSIS 3.x（构建安装包需要，`winget install NSIS.NSIS`）
 - Microsoft WebView2 Runtime
 - Windows `WebClient` 服务（网络驱动器功能需要）
 
@@ -66,11 +67,12 @@ go run ./cmd/core
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-流水线依次执行 Go 测试、前端测试、TypeScript/Vite 构建、Core 编译和 Wails production 构建。产物为：
+流水线依次执行 Go 测试、前端测试、TypeScript/Vite 构建、Core 编译和 Wails production 构建（含 NSIS 安装包）。产物为：
 
 ```text
 build/bin/easyshare.exe
 build/bin/easyshare-core.exe
+build/bin/EasyShare-amd64-installer.exe
 ```
 
 构建前应先退出正在运行的 EasyShare，否则 Windows 可能锁定可执行文件。
@@ -96,6 +98,60 @@ build/bin/easyshare-core.exe
 - [`docs/iterations/README.md`](docs/iterations/README.md)：逐版本目标、决策和验收记录
 - [`docs/troubleshooting.md`](docs/troubleshooting.md)：日志与常见 Windows 故障
 - [`docs/testing/windows-mvp-checklist.md`](docs/testing/windows-mvp-checklist.md)：Windows 手工验收清单
+
+## 开发路线
+
+EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一个清晰主题，验收通过后再进入下一阶段。
+
+### 阶段 0：局域网可用（已完成）
+
+- UDP 设备发现、TCP 流式传输、WebDAV 网络驱动器
+- 启动即自动映射盘符，双击进入共享空间
+- 文件日志、有序退出、重复 Core 检测
+- 生产构建流水线
+
+### 阶段 1：可分发、可日常使用（当前）
+
+- NSIS 安装包：一键安装/卸载，注册到"应用和功能"
+- 安装时自动部署 `easyshare.exe` + `easyshare-core.exe`
+- 可选开机自启动
+- 卸载时清理进程、网络映射和残留数据
+- 统一版本号（单一版本源）
+
+### 阶段 2：产品体验完善
+
+- 系统托盘：最小化到托盘、托盘菜单（打开/状态/退出）
+- 设置页：共享目录、接收目录、盘符、设备名称、端口
+- 传输历史与清理
+- Core 异常恢复与健康监测
+
+### 阶段 3：安全加固
+
+- 局域网设备配对与信任列表
+- 文件传输认证与加密（TLS）
+- Token/密码轮换，Windows 凭据保护
+
+### 阶段 4：云端 MVP
+
+- 账号与设备登录
+- 文件元数据 API + RustFS 对象存储
+- 应用内上传、下载、目录浏览
+- 持久化传输任务（SQLite）
+
+### 阶段 5：同步与原生入口
+
+- 同步文件夹：双向同步、冲突处理、断点续传
+- Windows CfAPI Sync Root：占位文件、按需下载
+- 品牌图标、同步状态、右键菜单
+
+### 阶段 6：云端与内网融合
+
+- 可信设备配对、端到端加密
+- 同内容优先局域网获取
+- 网络切换与离线策略
+
+> 每个阶段的具体目标、设计决策和验收记录见 [`docs/iterations/`](docs/iterations/README.md)。
+> 当前开发进度见 [`docs/progress.md`](docs/progress.md)。
 
 ## 当前限制
 

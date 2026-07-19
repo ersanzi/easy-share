@@ -10,6 +10,9 @@ npm --version
 # Wails 版本与项目保持一致
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
 
+# NSIS 3.x（构建安装包需要）
+winget install NSIS.NSIS
+
 go mod download
 npm ci --prefix frontend
 ```
@@ -95,7 +98,9 @@ docker compose up -d
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-该脚本应是提交或交付前的最终检查。Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 Core。
+该脚本依次执行 Go 测试、前端测试、前端构建、Core 编译和 Wails production 构建（含 NSIS 安装包）。脚本会自动检测 NSIS 安装路径。产物为 `build/bin/easyshare.exe`、`build/bin/easyshare-core.exe` 和 `build/bin/EasyShare-amd64-installer.exe`。
+
+Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 Core。
 
 ## 4. 按功能定位代码
 
@@ -112,6 +117,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 | 前端状态流 | `frontend/src/composables/useEasyShare.ts` | composable 测试、Core 退出后禁止轮询 |
 | UI/样式 | `frontend/src/components`、`style.css` | 组件测试、窗口尺寸、中文显示 |
 | 日志 | `internal/logging`、`app.go`、`cmd/core/main.go` | 敏感信息、轮转、troubleshooting 文档 |
+| 安装包 | `build/windows/installer/project.nsi`、`wails.json` info 字段 | 双进程部署、卸载清理、版本号、NSIS PATH |
 
 ## 5. 生成文件与禁止事项
 

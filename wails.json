@@ -9,5 +9,12 @@
   "author": {
     "name": "laifeng",
     "email": "1572427111@qq.com"
+  },
+  "info": {
+    "companyName": "EasyShare",
+    "productName": "EasyShare",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright 2026 laifeng",
+    "comments": "局域网文件传输与网络云盘"
   }
 }
