@@ -6,7 +6,7 @@ import (
 	"github.com/getlantern/systray"
 )
 
-//go:embed build/appicon.png
+//go:embed build/windows/icon.ico
 var trayIcon []byte
 
 // startTray launches the system tray icon and menu in a background goroutine.
