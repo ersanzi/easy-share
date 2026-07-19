@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -26,8 +28,20 @@ func main() {
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 233, G: 237, B: 243, A: 1},
-		OnStartup:        app.Startup,
-		OnShutdown:       app.Shutdown,
+		OnStartup: func(ctx context.Context) {
+			app.Startup(ctx)
+			startTray(app)
+		},
+		OnShutdown: app.Shutdown,
+		OnBeforeClose: func(ctx context.Context) bool {
+			// If quitting was explicitly requested (from tray or ShutdownAll),
+			// allow the window to close. Otherwise hide to tray.
+			if app.isQuitting() {
+				return false
+			}
+			runtime.WindowHide(ctx)
+			return true
+		},
 		Bind: []interface{}{
 			app,
 		},

@@ -50,6 +50,10 @@ export function StartDrive() {
   return window['go']['main']['App']['StartDrive']();
 }
 
+export function Startup(arg1) {
+  return window['go']['main']['App']['Startup'](arg1);
+}
+
 export function StopDrive() {
   return window['go']['main']['App']['StopDrive']();
 }

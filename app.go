@@ -31,10 +31,19 @@ type App struct {
 	errorLock  sync.Mutex
 	lastError  string
 	lastAt     time.Time
+
+	// Tray and window lifecycle
+	quitting     bool
+	quitLock     sync.Mutex
+	trayStatusCh chan string
+	trayOnce     sync.Once
 }
 
 func NewApp() *App {
-	return &App{logger: log.New(io.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds)}
+	return &App{
+		logger:       log.New(io.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds),
+		trayStatusCh: make(chan string, 1),
+	}
 }
 
 func (a *App) Startup(ctx context.Context) {
@@ -165,7 +174,10 @@ func (a *App) ShutdownAll() error {
 		a.client = nil
 	}
 	a.clientLock.Unlock()
-	a.logger.Printf("Core shutdown accepted")
+	a.quitLock.Lock()
+	a.quitting = true
+	a.quitLock.Unlock()
+	a.logger.Printf("Core shutdown accepted; quitting desktop")
 	return nil
 }
 
@@ -199,4 +211,50 @@ func (a *App) SelectFile() (string, error) {
 
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
+}
+
+// --- Tray and window lifecycle ---
+
+func (a *App) trayReady() {
+	a.logger.Printf("system tray ready")
+	a.updateTrayStatus()
+}
+
+func (a *App) showWindow() {
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+}
+
+func (a *App) quitFromTray() {
+	a.quitLock.Lock()
+	a.quitting = true
+	a.quitLock.Unlock()
+	a.logger.Printf("quit requested from tray")
+
+	// Attempt graceful Core shutdown before exiting the desktop process.
+	if client, err := a.coreClient(); err == nil {
+		_ = client.Action(a.ctx, "/api/shutdown")
+		a.logger.Printf("Core shutdown requested from tray")
+	}
+	runtime.Quit(a.ctx)
+}
+
+func (a *App) isQuitting() bool {
+	a.quitLock.Lock()
+	defer a.quitLock.Unlock()
+	return a.quitting
+}
+
+func (a *App) updateTrayStatus() {
+	client, err := a.coreClient()
+	status := "已停止"
+	if err == nil {
+		if snap, snapErr := client.Snapshot(a.ctx); snapErr == nil && snap.Status.Core {
+			status = "运行中"
+		}
+	}
+	select {
+	case a.trayStatusCh <- status:
+	default:
+	}
 }

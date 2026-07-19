@@ -144,21 +144,41 @@ export function useEasyShare() {
     }
   }
 
+  const startPolling = (intervalMs: number) => {
+    stopPolling()
+    timer = window.setInterval(() => void refresh(), intervalMs)
+  }
+
+  const handleVisibility = () => {
+    if (inactive()) return
+    if (document.hidden) {
+      // Window hidden to tray: reduce polling to save resources
+      startPolling(5000)
+    } else {
+      // Window restored: immediate refresh then fast polling
+      void refresh()
+      startPolling(1000)
+    }
+  }
+
   onMounted(() => {
     disposed = false
+    document.addEventListener('visibilitychange', handleVisibility)
+
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
       .catch(value => reportError('resolve log directory', value))
 
     void initialize().finally(() => {
       if (!inactive() && timer === undefined) {
-        timer = window.setInterval(() => void refresh(), 1000)
+        startPolling(1000)
       }
     })
   })
   onBeforeUnmount(() => {
     disposed = true
     stopPolling()
+    document.removeEventListener('visibilitychange', handleVisibility)
   })
 
   return {
