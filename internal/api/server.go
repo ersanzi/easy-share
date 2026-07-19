@@ -100,6 +100,7 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("GET /api/tasks", server.auth(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, server.tasks.List())
 	})))
+	mux.Handle("POST /api/tasks/clear", server.auth(http.HandlerFunc(server.clearTasks)))
 	mux.Handle("GET /api/events", server.auth(http.HandlerFunc(server.events)))
 	mux.Handle("POST /api/shutdown", server.auth(http.HandlerFunc(server.shutdownAll)))
 	mux.Handle("POST /api/drive/start", server.auth(http.HandlerFunc(server.startDrive)))
@@ -375,6 +376,11 @@ func (server *Server) setDriveStatus(running, mapped bool) {
 	value := server.status
 	server.statusMutex.Unlock()
 	server.Publish(Event{Type: "drive.status.changed", Data: value})
+}
+
+func (server *Server) clearTasks(writer http.ResponseWriter, _ *http.Request) {
+	server.tasks.ClearHistory()
+	writeJSON(writer, http.StatusOK, map[string]bool{"cleared": true})
 }
 
 func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) {

@@ -51,6 +51,7 @@ func main() {
 		return
 	}
 	taskStore := task.NewStore()
+	taskStore.EnablePersistence(filepath.Join(filepath.Dir(*configPath), "history.json"))
 	server := api.NewServer(value, taskStore)
 	server.ConfigureDrive(drive.NewService(value.WebDAVRoot, value.WebDAVUsername, value.WebDAVPassword), drive.NewMapper())
 	server.ConfigureShutdown(cancelCore)

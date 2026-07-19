@@ -10,8 +10,9 @@ import (
 )
 
 type Store struct {
-	mutex sync.RWMutex
-	tasks map[string]Task
+	mutex       sync.RWMutex
+	tasks       map[string]Task
+	persistPath string
 }
 
 func NewStore() *Store {
@@ -41,11 +42,15 @@ func (s *Store) Create(value Task) (Task, error) {
 	}
 
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	if _, exists := s.tasks[value.ID]; exists {
+		s.mutex.Unlock()
 		return Task{}, fmt.Errorf("task %q already exists", value.ID)
 	}
 	s.tasks[value.ID] = value
+	s.mutex.Unlock()
+	if terminal(value.Status) {
+		s.persist()
+	}
 	return value, nil
 }
 
@@ -74,33 +79,43 @@ func (s *Store) List() []Task {
 
 func (s *Store) Update(id string, update func(*Task) error) (Task, error) {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
 
 	current, ok := s.tasks[id]
 	if !ok {
+		s.mutex.Unlock()
 		return Task{}, ErrTaskNotFound
 	}
 	next := current
 	if err := update(&next); err != nil {
+		s.mutex.Unlock()
 		return Task{}, err
 	}
 	if next.ID != current.ID {
+		s.mutex.Unlock()
 		return Task{}, ErrImmutableID
 	}
 	if next.CreatedAt != current.CreatedAt || next.TotalBytes != current.TotalBytes || next.Direction != current.Direction || next.FileName != current.FileName || next.LocalPath != current.LocalPath || next.Peer != current.Peer {
+		s.mutex.Unlock()
 		return Task{}, ErrImmutableField
 	}
 	if !validTransition(current.Status, next.Status) {
+		s.mutex.Unlock()
 		return Task{}, ErrInvalidTransition
 	}
 	if !validProgress(next) {
+		s.mutex.Unlock()
 		return Task{}, ErrInvalidProgress
 	}
 	if next.TransferredBytes < current.TransferredBytes {
+		s.mutex.Unlock()
 		return Task{}, ErrInvalidProgress
 	}
 	next.UpdatedAt = time.Now().UTC()
 	s.tasks[id] = next
+	s.mutex.Unlock()
+	if terminal(next.Status) {
+		s.persist()
+	}
 	return next, nil
 }
 

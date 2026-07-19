@@ -199,6 +199,7 @@ export function useEasyShare() {
     accept: (id: string) => act('接受传输', () => core.accept(id)),
     acceptAs: (id: string) => act('另存传输', () => core.acceptAs(id)),
     reject: (id: string) => act('拒绝传输', () => core.reject(id)),
+    clearHistory: () => act('清除记录', core.clearHistory),
     startDrive: () => act('启动 WebDAV', core.startDrive),
     stopDrive: () => act('停止 WebDAV', core.stopDrive),
     mapDrive: connectDrive,

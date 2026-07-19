@@ -10,6 +10,10 @@ export function AcceptTransferAs(arg1) {
   return window['go']['main']['App']['AcceptTransferAs'](arg1);
 }
 
+export function ClearHistory() {
+  return window['go']['main']['App']['ClearHistory']();
+}
+
 export function GetLogDirectory() {
   return window['go']['main']['App']['GetLogDirectory']();
 }

@@ -222,6 +222,15 @@ func (a *App) ReportFrontendError(message, stack string) {
 
 func (a *App) GetLogDirectory() string { return logging.Directory() }
 
+func (a *App) ClearHistory() error {
+	client, err := a.coreClient()
+	if err == nil {
+		err = client.ClearTasks(a.ctx)
+	}
+	a.reportError("clear history", err)
+	return err
+}
+
 func (a *App) SelectShareDirectory() (string, error) {
 	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择 WebDAV 共享目录", DefaultDirectory: a.config.WebDAVRoot})
 	a.reportError("select share directory", err)

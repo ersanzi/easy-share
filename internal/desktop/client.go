@@ -86,3 +86,6 @@ func (client *Client) Reject(ctx context.Context, id string) error {
 func (client *Client) Action(ctx context.Context, path string) error {
 	return client.request(ctx, http.MethodPost, path, nil, nil)
 }
+func (client *Client) ClearTasks(ctx context.Context) error {
+	return client.request(ctx, http.MethodPost, "/api/tasks/clear", nil, nil)
+}

@@ -1,6 +1,7 @@
 ﻿import {
   AcceptTransfer,
   AcceptTransferAs,
+  ClearHistory,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
@@ -44,4 +45,5 @@ export const core = {
   saveSettings: SaveSettings,
   selectReceiveDirectory: SelectReceiveDirectory,
   selectShareDirectory: SelectShareDirectory,
+  clearHistory: ClearHistory,
 }

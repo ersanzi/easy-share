@@ -2,7 +2,7 @@
 import type { TransferTask } from '../types/core'
 
 defineProps<{ tasks: TransferTask[] }>()
-defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string] }>()
+defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string]; clear: [] }>()
 
 const size = (value: number) => value < 1024
   ? `${value} B`
@@ -26,7 +26,10 @@ const statusLabel = (status: string) => ({
         <span class="section-label">活动</span>
         <h2>文件传输</h2>
       </div>
-      <span class="count-badge">{{ tasks.length }} 项</span>
+      <div class="header-actions">
+        <button v-if="tasks.length" class="text-button" type="button" @click="$emit('clear')">清除记录</button>
+        <span class="count-badge">{{ tasks.length }} 项</span>
+      </div>
     </header>
 
     <div v-if="!tasks.length" class="empty-state compact-empty">
