@@ -49,6 +49,7 @@ type driveMapper interface {
 
 type Server struct {
 	config       config.Config
+	configPath   string
 	tasks        *task.Store
 	hub          *eventHub
 	httpServer   *http.Server
@@ -108,6 +109,7 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/transfers", server.auth(http.HandlerFunc(server.sendTransfer)))
 	mux.Handle("POST /api/transfers/{id}/accept", server.auth(http.HandlerFunc(server.acceptTransfer)))
 	mux.Handle("POST /api/transfers/{id}/reject", server.auth(http.HandlerFunc(server.rejectTransfer)))
+	mux.Handle("POST /api/config/reload", server.auth(http.HandlerFunc(server.reloadConfig)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, pattern := mux.Handler(request)
 		if pattern == "" {
@@ -174,6 +176,7 @@ func (server *Server) ConfigureDrive(service driveService, mapper driveMapper) {
 	server.driveService, server.mapper = service, mapper
 }
 func (server *Server) ConfigureShutdown(cancel context.CancelFunc) { server.cancelCore = cancel }
+func (server *Server) ConfigureConfigPath(path string)            { server.configPath = path }
 func (server *Server) ConfigureDiscovery(service *discovery.Service) {
 	server.discovery = service
 	server.peers = service.Peers
@@ -362,6 +365,25 @@ func (server *Server) setDriveStatus(running, mapped bool) {
 	value := server.status
 	server.statusMutex.Unlock()
 	server.Publish(Event{Type: "drive.status.changed", Data: value})
+}
+
+func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) {
+	if server.configPath == "" {
+		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "config_path_unset", Message: "config path not configured"})
+		return
+	}
+	value, err := config.Load(server.configPath)
+	if err != nil {
+		log.Printf("reload config: %v", err)
+		writeJSON(writer, http.StatusUnprocessableEntity, ErrorResponse{Code: "config_invalid", Message: err.Error()})
+		return
+	}
+	server.config = value
+	if server.discovery != nil {
+		server.discovery.SetDeviceName(value.DeviceName)
+	}
+	log.Printf("config reloaded: device=%s", value.DeviceName)
+	writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

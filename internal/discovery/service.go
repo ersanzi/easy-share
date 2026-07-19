@@ -64,6 +64,13 @@ func (service *Service) Peer(id string) (Peer, bool) {
 	return value, ok
 }
 
+// SetDeviceName updates the name broadcast to peers on the next cycle.
+func (service *Service) SetDeviceName(name string) {
+	service.mutex.Lock()
+	service.options.DeviceName = name
+	service.mutex.Unlock()
+}
+
 func (service *Service) Start(ctx context.Context) error {
 	address := &net.UDPAddr{IP: net.IPv4zero, Port: service.options.Port}
 	connection, err := net.ListenUDP("udp4", address)

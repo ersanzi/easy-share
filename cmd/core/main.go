@@ -54,6 +54,7 @@ func main() {
 	server := api.NewServer(value, taskStore)
 	server.ConfigureDrive(drive.NewService(value.WebDAVRoot, value.WebDAVUsername, value.WebDAVPassword), drive.NewMapper())
 	server.ConfigureShutdown(cancelCore)
+	server.ConfigureConfigPath(*configPath)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

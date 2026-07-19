@@ -15,6 +15,7 @@ import (
 
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
+	"easyshare/internal/drive"
 	"easyshare/internal/logging"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -31,6 +32,9 @@ type App struct {
 	errorLock  sync.Mutex
 	lastError  string
 	lastAt     time.Time
+
+	// Core process management
+	processOptions desktop.ProcessOptions
 
 	// Tray and window lifecycle
 	quitting     bool
@@ -69,6 +73,11 @@ func (a *App) Startup(ctx context.Context) {
 		BaseURL: baseURL, ConfigPath: a.configPath, Token: value.APIToken, DeviceID: value.DeviceID,
 		LogPath: logging.Path("core-process.log"),
 	}
+	a.processOptions = options
+
+	// Clean up stale drive mapping left by a previous crashed Core.
+	a.cleanStaleMapping()
+
 	if err := desktop.EnsureCore(ctx, options); err != nil {
 		a.reportError("ensure Core", err)
 		runtime.LogError(ctx, err.Error())
@@ -78,6 +87,8 @@ func (a *App) Startup(ctx context.Context) {
 	a.client = desktop.NewClient(baseURL, value.APIToken)
 	a.clientLock.Unlock()
 	a.logger.Printf("connected to Core at %s", baseURL)
+
+	go a.watchdog()
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -321,5 +332,58 @@ func (a *App) updateTrayStatus() {
 	select {
 	case a.trayStatusCh <- status:
 	default:
+	}
+}
+
+// --- Core recovery ---
+
+// cleanStaleMapping removes a drive mapping left behind by a previously crashed
+// Core process. This is best-effort: if no mapping exists or the unmap fails,
+// startup proceeds normally.
+func (a *App) cleanStaleMapping() {
+	webdavURL := "http://127.0.0.1:" + strconv.Itoa(a.config.WebDAVPort)
+	mapper := drive.NewMapper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := mapper.Unmap(ctx, a.config.DriveLetter, webdavURL); err == nil {
+		a.logger.Printf("cleaned stale drive mapping %s", a.config.DriveLetter)
+	}
+}
+
+// watchdog monitors Core health and restarts it if unresponsive.
+func (a *App) watchdog() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	failures := 0
+
+	for range ticker.C {
+		if a.isQuitting() {
+			return
+		}
+		if desktop.CoreHealthy(a.processOptions) {
+			if failures > 0 {
+				a.logger.Printf("watchdog: Core recovered (was unhealthy for %d checks)", failures)
+			}
+			failures = 0
+			continue
+		}
+		failures++
+		if failures < 3 {
+			continue
+		}
+		a.logger.Printf("watchdog: Core unresponsive for %d checks, restarting", failures)
+		failures = 0
+
+		if err := desktop.EnsureCore(a.ctx, a.processOptions); err != nil {
+			a.reportError("watchdog restart Core", err)
+			a.logger.Printf("watchdog: restart failed: %v", err)
+			continue
+		}
+		baseURL := "http://" + net.JoinHostPort(a.config.APIHost, strconv.Itoa(a.config.APIPort))
+		a.clientLock.Lock()
+		a.client = desktop.NewClient(baseURL, a.config.APIToken)
+		a.clientLock.Unlock()
+		a.logger.Printf("watchdog: Core restarted successfully")
+		a.updateTrayStatus()
 	}
 }
