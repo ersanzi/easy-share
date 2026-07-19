@@ -77,6 +77,9 @@ func (client *Client) Send(ctx context.Context, peerID, path string) error {
 func (client *Client) Accept(ctx context.Context, id string) error {
 	return client.request(ctx, http.MethodPost, "/api/transfers/"+id+"/accept", nil, nil)
 }
+func (client *Client) AcceptTo(ctx context.Context, id, saveDir string) error {
+	return client.request(ctx, http.MethodPost, "/api/transfers/"+id+"/accept", map[string]string{"saveDir": saveDir}, nil)
+}
 func (client *Client) Reject(ctx context.Context, id string) error {
 	return client.request(ctx, http.MethodPost, "/api/transfers/"+id+"/reject", nil, nil)
 }

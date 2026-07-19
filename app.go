@@ -151,6 +151,20 @@ func (a *App) AcceptTransfer(id string) error {
 	a.reportError("accept transfer", err)
 	return err
 }
+func (a *App) AcceptTransferAs(id string) error {
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择文件保存位置", DefaultDirectory: a.config.ReceiveDir})
+	if err != nil || path == "" {
+		return err
+	}
+	client, clientErr := a.coreClient()
+	if clientErr != nil {
+		a.reportError("accept transfer as", clientErr)
+		return clientErr
+	}
+	err = client.AcceptTo(a.ctx, id, path)
+	a.reportError("accept transfer as", err)
+	return err
+}
 func (a *App) RejectTransfer(id string) error {
 	client, err := a.coreClient()
 	if err == nil {

@@ -2,7 +2,7 @@
 import type { TransferTask } from '../types/core'
 
 defineProps<{ tasks: TransferTask[] }>()
-defineEmits<{ accept: [id: string]; reject: [id: string] }>()
+defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string] }>()
 
 const size = (value: number) => value < 1024
   ? `${value} B`
@@ -57,6 +57,7 @@ const statusLabel = (status: string) => ({
             <span v-if="item.error" class="inline-error">{{ item.error }}</span>
             <div v-if="item.status === 'pending' && item.direction === 'receive'" class="row-actions">
               <button class="secondary-button compact" type="button" @click="$emit('reject', item.id)">拒绝</button>
+              <button class="secondary-button compact" type="button" @click="$emit('acceptAs', item.id)">另存</button>
               <button class="primary-button compact" type="button" @click="$emit('accept', item.id)">接收</button>
             </div>
           </div>

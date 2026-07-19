@@ -229,7 +229,17 @@ func (server *Server) acceptTransfer(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, 503, ErrorResponse{Code: "receiver_unavailable", Message: "receiver unavailable"})
 		return
 	}
-	if err := server.receiver.Accept(request.PathValue("id")); err != nil {
+	var input struct {
+		SaveDir string `json:"saveDir"`
+	}
+	_ = json.NewDecoder(request.Body).Decode(&input)
+	var err error
+	if input.SaveDir != "" {
+		err = server.receiver.AcceptTo(request.PathValue("id"), input.SaveDir)
+	} else {
+		err = server.receiver.Accept(request.PathValue("id"))
+	}
+	if err != nil {
 		writeJSON(writer, 404, ErrorResponse{Code: "task_not_found", Message: err.Error()})
 		return
 	}
@@ -382,7 +392,10 @@ func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) 
 	if server.discovery != nil {
 		server.discovery.SetDeviceName(value.DeviceName)
 	}
-	log.Printf("config reloaded: device=%s", value.DeviceName)
+	if server.receiver != nil {
+		server.receiver.SetReceiveDir(value.ReceiveDir)
+	}
+	log.Printf("config reloaded: device=%s receive=%s", value.DeviceName, value.ReceiveDir)
 	writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
 }
 

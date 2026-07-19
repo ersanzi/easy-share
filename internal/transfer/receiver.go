@@ -111,6 +111,16 @@ func (receiver *Receiver) prepare(connection net.Conn) {
 	})
 }
 func (receiver *Receiver) Accept(id string) error {
+	return receiver.acceptTo(id, "")
+}
+
+// AcceptTo accepts a transfer and saves it to a custom directory instead of the
+// default ReceiveDir. If saveDir is empty, the default directory is used.
+func (receiver *Receiver) AcceptTo(id, saveDir string) error {
+	return receiver.acceptTo(id, saveDir)
+}
+
+func (receiver *Receiver) acceptTo(id, saveDir string) error {
 	receiver.mutex.Lock()
 	value, ok := receiver.pending[id]
 	if ok {
@@ -128,8 +138,15 @@ func (receiver *Receiver) Accept(id string) error {
 	if err := writeMessage(value.connection, response{Allowed: true}); err != nil {
 		return err
 	}
-	go receiver.receive(value)
+	go receiver.receive(value, saveDir)
 	return nil
+}
+
+// SetReceiveDir updates the default receive directory at runtime.
+func (receiver *Receiver) SetReceiveDir(dir string) {
+	receiver.mutex.Lock()
+	receiver.options.ReceiveDir = dir
+	receiver.mutex.Unlock()
 }
 func (receiver *Receiver) Reject(id string) error {
 	receiver.mutex.Lock()
@@ -147,15 +164,19 @@ func (receiver *Receiver) Reject(id string) error {
 	receiver.emit(updated)
 	return err
 }
-func (receiver *Receiver) receive(value pending) {
+func (receiver *Receiver) receive(value pending, saveDir string) {
 	defer value.connection.Close()
-	_ = os.MkdirAll(receiver.options.ReceiveDir, 0o755)
-	destination, err := availablePath(receiver.options.ReceiveDir, value.metadata.FileName)
+	targetDir := receiver.options.ReceiveDir
+	if saveDir != "" {
+		targetDir = saveDir
+	}
+	_ = os.MkdirAll(targetDir, 0o755)
+	destination, err := availablePath(targetDir, value.metadata.FileName)
 	if err != nil {
 		receiver.fail(value.taskID, err)
 		return
 	}
-	file, err := os.CreateTemp(receiver.options.ReceiveDir, ".easyshare-*.part")
+	file, err := os.CreateTemp(targetDir, ".easyshare-*.part")
 	if err != nil {
 		receiver.fail(value.taskID, err)
 		return

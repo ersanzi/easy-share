@@ -121,7 +121,7 @@ const view = ref<'overview' | 'settings'>('overview')
             <div class="dashboard-grid">
               <div class="main-column">
                 <PeerList id="devices" :peers="app.snapshot.value.peers" @send="app.send" />
-                <TransferList id="transfers" :tasks="app.snapshot.value.tasks" @accept="app.accept" @reject="app.reject" />
+                <TransferList id="transfers" :tasks="app.snapshot.value.tasks" @accept="app.accept" @accept-as="app.acceptAs" @reject="app.reject" />
               </div>
               <DrivePanel
                 id="drive"

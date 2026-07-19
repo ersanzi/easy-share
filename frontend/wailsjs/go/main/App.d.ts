@@ -6,6 +6,8 @@ import {context} from '../models';
 
 export function AcceptTransfer(arg1:string):Promise<void>;
 
+export function AcceptTransferAs(arg1:string):Promise<void>;
+
 export function GetLogDirectory():Promise<string>;
 
 export function GetSettings():Promise<main.Settings>;

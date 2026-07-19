@@ -197,6 +197,7 @@ export function useEasyShare() {
       if (path) await act('发送文件', () => core.send(peerId, path))
     },
     accept: (id: string) => act('接受传输', () => core.accept(id)),
+    acceptAs: (id: string) => act('另存传输', () => core.acceptAs(id)),
     reject: (id: string) => act('拒绝传输', () => core.reject(id)),
     startDrive: () => act('启动 WebDAV', core.startDrive),
     stopDrive: () => act('停止 WebDAV', core.stopDrive),

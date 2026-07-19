@@ -6,6 +6,10 @@ export function AcceptTransfer(arg1) {
   return window['go']['main']['App']['AcceptTransfer'](arg1);
 }
 
+export function AcceptTransferAs(arg1) {
+  return window['go']['main']['App']['AcceptTransferAs'](arg1);
+}
+
 export function GetLogDirectory() {
   return window['go']['main']['App']['GetLogDirectory']();
 }

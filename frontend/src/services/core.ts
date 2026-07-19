@@ -1,5 +1,6 @@
 ﻿import {
   AcceptTransfer,
+  AcceptTransferAs,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
@@ -30,6 +31,7 @@ export const core = {
   selectFile: SelectFile,
   send: SendFile,
   accept: AcceptTransfer,
+  acceptAs: AcceptTransferAs,
   reject: RejectTransfer,
   startDrive: StartDrive,
   stopDrive: StopDrive,
