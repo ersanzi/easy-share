@@ -8,14 +8,12 @@
   CloudShare,
   CloudUpload,
   DeleteTask,
-  GetCloudSettings,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
   MapDrive,
   RejectTransfer,
   ReportFrontendError,
-  SaveCloudSettings,
   SaveSettings,
   SelectFile,
   SelectFiles,
@@ -34,15 +32,6 @@ export interface SettingsData {
   receiveDir: string
   webdavRoot: string
   driveLetter: string
-}
-
-export interface CloudSettingsData {
-  endpoint: string
-  region: string
-  accessKeyId: string
-  secretAccessKey: string
-  bucket: string
-  allowInsecureHttp: boolean
 }
 
 export const core = {
@@ -71,6 +60,4 @@ export const core = {
   cloudDownload: CloudDownload,
   cloudDelete: CloudDelete,
   cloudShare: CloudShare,
-  getCloudSettings: () => GetCloudSettings() as Promise<CloudSettingsData>,
-  saveCloudSettings: SaveCloudSettings,
 }

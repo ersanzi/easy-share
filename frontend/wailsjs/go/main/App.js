@@ -38,10 +38,6 @@ export function DeleteTask(arg1) {
   return window['go']['main']['App']['DeleteTask'](arg1);
 }
 
-export function GetCloudSettings() {
-  return window['go']['main']['App']['GetCloudSettings']();
-}
-
 export function GetLogDirectory() {
   return window['go']['main']['App']['GetLogDirectory']();
 }
@@ -68,10 +64,6 @@ export function RejectTransfer(arg1) {
 
 export function ReportFrontendError(arg1, arg2) {
   return window['go']['main']['App']['ReportFrontendError'](arg1, arg2);
-}
-
-export function SaveCloudSettings(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['SaveCloudSettings'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function SaveSettings(arg1, arg2, arg3, arg4) {

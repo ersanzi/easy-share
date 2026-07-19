@@ -168,28 +168,6 @@ export namespace discovery {
 
 export namespace main {
 	
-	export class CloudSettings {
-	    endpoint: string;
-	    region: string;
-	    accessKeyId: string;
-	    secretAccessKey: string;
-	    bucket: string;
-	    allowInsecureHttp: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new CloudSettings(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.endpoint = source["endpoint"];
-	        this.region = source["region"];
-	        this.accessKeyId = source["accessKeyId"];
-	        this.secretAccessKey = source["secretAccessKey"];
-	        this.bucket = source["bucket"];
-	        this.allowInsecureHttp = source["allowInsecureHttp"];
-	    }
-	}
 	export class Settings {
 	    deviceName: string;
 	    receiveDir: string;

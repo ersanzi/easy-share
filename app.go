@@ -318,49 +318,6 @@ func (a *App) SelectFile() (string, error) {
 	return path, err
 }
 
-// CloudSettings is the user-facing RustFS configuration.
-type CloudSettings struct {
-	Endpoint          string `json:"endpoint"`
-	Region            string `json:"region"`
-	AccessKeyID       string `json:"accessKeyId"`
-	SecretAccessKey   string `json:"secretAccessKey"`
-	Bucket            string `json:"bucket"`
-	AllowInsecureHTTP bool   `json:"allowInsecureHttp"`
-}
-
-func (a *App) GetCloudSettings() CloudSettings {
-	c := a.config.Cloud
-	return CloudSettings{
-		Endpoint:          c.Endpoint,
-		Region:            c.Region,
-		AccessKeyID:       c.AccessKeyID,
-		SecretAccessKey:   c.SecretAccessKey,
-		Bucket:            c.Bucket,
-		AllowInsecureHTTP: c.AllowInsecureHTTP,
-	}
-}
-
-func (a *App) SaveCloudSettings(endpoint, region, accessKeyID, secretAccessKey, bucket string, allowInsecureHTTP bool) error {
-	a.config.Cloud = config.CloudConfig{
-		Endpoint:          strings.TrimSpace(endpoint),
-		Region:            strings.TrimSpace(region),
-		AccessKeyID:       strings.TrimSpace(accessKeyID),
-		SecretAccessKey:   strings.TrimSpace(secretAccessKey),
-		Bucket:            strings.TrimSpace(bucket),
-		AllowInsecureHTTP: allowInsecureHTTP,
-	}
-	if err := config.Save(a.configPath, a.config); err != nil {
-		a.reportError("save cloud settings", err)
-		return fmt.Errorf("保存网盘配置失败：%w", err)
-	}
-	// Notify Core to reload; cloud service will be re-initialized on next restart.
-	if client, err := a.coreClient(); err == nil {
-		_ = client.Action(a.ctx, "/api/config/reload")
-	}
-	a.logger.Printf("cloud settings saved: endpoint=%s bucket=%s", endpoint, bucket)
-	return nil
-}
-
 func (a *App) SelectFiles() ([]string, error) {
 	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要发送的文件（可多选）"})
 	a.reportError("select files", err)

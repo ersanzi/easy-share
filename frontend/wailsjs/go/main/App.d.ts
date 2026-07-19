@@ -23,8 +23,6 @@ export function CloudUpload():Promise<cloud.UploadResult>;
 
 export function DeleteTask(arg1:string):Promise<void>;
 
-export function GetCloudSettings():Promise<main.CloudSettings>;
-
 export function GetLogDirectory():Promise<string>;
 
 export function GetSettings():Promise<main.Settings>;
@@ -38,8 +36,6 @@ export function MapDrive():Promise<void>;
 export function RejectTransfer(arg1:string):Promise<void>;
 
 export function ReportFrontendError(arg1:string,arg2:string):Promise<void>;
-
-export function SaveCloudSettings(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:boolean):Promise<void>;
 
 export function SaveSettings(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
 
