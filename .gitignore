@@ -1,0 +1,9 @@
+build/bin
+/core.exe
+node_modules
+frontend/dist
+.wails
+*.log
+*.tmp
+config.json
+easyshare-scaffold/
