@@ -61,6 +61,18 @@ func (s *Store) Get(id string) (Task, bool) {
 	return value, ok
 }
 
+func (s *Store) Delete(id string) error {
+	s.mutex.Lock()
+	if _, ok := s.tasks[id]; !ok {
+		s.mutex.Unlock()
+		return ErrTaskNotFound
+	}
+	delete(s.tasks, id)
+	s.mutex.Unlock()
+	s.persist()
+	return nil
+}
+
 func (s *Store) List() []Task {
 	s.mutex.RLock()
 	values := make([]Task, 0, len(s.tasks))

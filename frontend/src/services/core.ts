@@ -2,6 +2,7 @@
   AcceptTransfer,
   AcceptTransferAs,
   ClearHistory,
+  DeleteTask,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
@@ -46,4 +47,5 @@ export const core = {
   selectReceiveDirectory: SelectReceiveDirectory,
   selectShareDirectory: SelectShareDirectory,
   clearHistory: ClearHistory,
+  deleteTask: DeleteTask,
 }

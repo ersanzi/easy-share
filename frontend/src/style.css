@@ -272,6 +272,9 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .progress-track i { display: block; height: 100%; background: linear-gradient(90deg, #178cfb, #4aa5f8); border-radius: inherit; transition: width .2s; }
 .transfer-meta { display: flex; align-items: center; gap: 9px; min-height: 18px; color: #8e8e93; font-size: 8px; }
 .inline-error { color: var(--red); }
+.duration-text { color: #8e8e93; }
+.delete-btn { margin-left: auto; padding: 0 4px; color: #aeaeb2; background: none; border: 0; font-size: 14px; line-height: 1; cursor: pointer; border-radius: 4px; transition: color .12s, background .12s; }
+.delete-btn:hover { color: var(--red); background: rgba(255,59,48,.08); }
 .row-actions { display: flex; gap: 6px; margin-left: auto; }
 
 .drive-panel { padding-bottom: 14px; }

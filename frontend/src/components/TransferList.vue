@@ -2,7 +2,7 @@
 import type { TransferTask } from '../types/core'
 
 defineProps<{ tasks: TransferTask[] }>()
-defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string]; clear: [] }>()
+defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string]; clear: []; delete: [id: string] }>()
 
 const size = (value: number) => value < 1024
   ? `${value} B`
@@ -17,6 +17,16 @@ const progress = (task: TransferTask) => task.totalBytes
 const statusLabel = (status: string) => ({
   pending: '等待确认', transferring: '传输中', completed: '已完成', failed: '失败', rejected: '已拒绝',
 }[status] ?? status)
+const isTerminal = (status: string) => ['completed', 'failed', 'rejected'].includes(status)
+const duration = (task: TransferTask) => {
+  if (!isTerminal(task.status) || !task.createdAt || !task.updatedAt) return ''
+  const ms = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime()
+  if (ms < 1000) return '<1s'
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return `${m}m${s % 60}s`
+}
 </script>
 
 <template>
@@ -57,12 +67,14 @@ const statusLabel = (status: string) => ({
           <div class="transfer-meta">
             <span>{{ progress(item) }}%</span>
             <span v-if="item.speed">{{ size(item.speed) }}/s</span>
+            <span v-if="duration(item)" class="duration-text">用时 {{ duration(item) }}</span>
             <span v-if="item.error" class="inline-error">{{ item.error }}</span>
             <div v-if="item.status === 'pending' && item.direction === 'receive'" class="row-actions">
               <button class="secondary-button compact" type="button" @click="$emit('reject', item.id)">拒绝</button>
               <button class="secondary-button compact" type="button" @click="$emit('acceptAs', item.id)">另存</button>
               <button class="primary-button compact" type="button" @click="$emit('accept', item.id)">接收</button>
             </div>
+            <button v-if="isTerminal(item.status)" class="delete-btn" type="button" aria-label="删除记录" @click="$emit('delete', item.id)">×</button>
           </div>
         </div>
       </article>

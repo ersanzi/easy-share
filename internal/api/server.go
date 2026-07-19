@@ -101,6 +101,7 @@ func (server *Server) routes() http.Handler {
 		writeJSON(writer, http.StatusOK, server.tasks.List())
 	})))
 	mux.Handle("POST /api/tasks/clear", server.auth(http.HandlerFunc(server.clearTasks)))
+	mux.Handle("DELETE /api/tasks/{id}", server.auth(http.HandlerFunc(server.deleteTask)))
 	mux.Handle("GET /api/events", server.auth(http.HandlerFunc(server.events)))
 	mux.Handle("POST /api/shutdown", server.auth(http.HandlerFunc(server.shutdownAll)))
 	mux.Handle("POST /api/drive/start", server.auth(http.HandlerFunc(server.startDrive)))
@@ -381,6 +382,14 @@ func (server *Server) setDriveStatus(running, mapped bool) {
 func (server *Server) clearTasks(writer http.ResponseWriter, _ *http.Request) {
 	server.tasks.ClearHistory()
 	writeJSON(writer, http.StatusOK, map[string]bool{"cleared": true})
+}
+
+func (server *Server) deleteTask(writer http.ResponseWriter, request *http.Request) {
+	if err := server.tasks.Delete(request.PathValue("id")); err != nil {
+		writeJSON(writer, http.StatusNotFound, ErrorResponse{Code: "task_not_found", Message: err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) {

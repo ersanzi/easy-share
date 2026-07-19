@@ -10,6 +10,8 @@ export function AcceptTransferAs(arg1:string):Promise<void>;
 
 export function ClearHistory():Promise<void>;
 
+export function DeleteTask(arg1:string):Promise<void>;
+
 export function GetLogDirectory():Promise<string>;
 
 export function GetSettings():Promise<main.Settings>;

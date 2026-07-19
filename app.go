@@ -231,6 +231,15 @@ func (a *App) ClearHistory() error {
 	return err
 }
 
+func (a *App) DeleteTask(id string) error {
+	client, err := a.coreClient()
+	if err == nil {
+		err = client.DeleteTask(a.ctx, id)
+	}
+	a.reportError("delete task", err)
+	return err
+}
+
 func (a *App) SelectShareDirectory() (string, error) {
 	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择 WebDAV 共享目录", DefaultDirectory: a.config.WebDAVRoot})
 	a.reportError("select share directory", err)

@@ -14,6 +14,10 @@ export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
 
+export function DeleteTask(arg1) {
+  return window['go']['main']['App']['DeleteTask'](arg1);
+}
+
 export function GetLogDirectory() {
   return window['go']['main']['App']['GetLogDirectory']();
 }

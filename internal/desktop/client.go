@@ -89,3 +89,6 @@ func (client *Client) Action(ctx context.Context, path string) error {
 func (client *Client) ClearTasks(ctx context.Context) error {
 	return client.request(ctx, http.MethodPost, "/api/tasks/clear", nil, nil)
 }
+func (client *Client) DeleteTask(ctx context.Context, id string) error {
+	return client.request(ctx, http.MethodDelete, "/api/tasks/"+id, nil, nil)
+}
