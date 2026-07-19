@@ -451,6 +451,47 @@ func (server *Server) cloudUpload(writer http.ResponseWriter, request *http.Requ
 		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
 		return
 	}
+
+	// Multipart file stream — true streaming: bytes flow directly to S3 without
+	// buffering, so client-side progress reflects real end-to-end upload speed.
+	if strings.HasPrefix(request.Header.Get("Content-Type"), "multipart/form-data") {
+		// Disable read/write deadlines for streaming uploads — large files take
+		// longer than the global ReadTimeout/WriteTimeout allows.
+		rc := http.NewResponseController(writer)
+		_ = rc.SetReadDeadline(time.Time{})
+		_ = rc.SetWriteDeadline(time.Time{})
+
+		mr, err := request.MultipartReader()
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "multipart reader: " + err.Error()})
+			return
+		}
+		part, err := mr.NextPart()
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "file part required"})
+			return
+		}
+		defer part.Close()
+		fileName := part.FileName()
+		if fileName == "" {
+			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "file name required"})
+			return
+		}
+		var fileSize int64
+		if sizeHeader := request.Header.Get("X-File-Size"); sizeHeader != "" {
+			fileSize, _ = strconv.ParseInt(sizeHeader, 10, 64)
+		}
+		result, err := server.cloud.UploadReader(request.Context(), fileName, part, fileSize)
+		if err != nil {
+			log.Printf("cloud upload: %v", err)
+			writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_upload_failed", Message: err.Error()})
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+		return
+	}
+
+	// Legacy JSON filePath (Core reads local file directly)
 	var input struct {
 		FilePath string `json:"filePath"`
 	}

@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import type { CloudFile } from '../types/core'
 import { core } from '../services/core'
+import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
+
+interface UploadProgress {
+  name: string
+  size: number
+  sent: number
+  speed: number
+  eta: number
+  error?: string
+}
 
 defineProps<{ enabled: boolean }>()
 defineEmits<{ upload: []; download: [key: string]; delete: [key: string]; share: [key: string] }>()
@@ -10,6 +20,7 @@ const files = ref<CloudFile[]>([])
 const loading = ref(false)
 const shareUrl = ref('')
 const shareKey = ref('')
+const uploads = ref<UploadProgress[]>([])
 
 const loadFiles = async () => {
   loading.value = true
@@ -30,10 +41,43 @@ const formatSize = (value: number) => value < 1024
       ? `${(value / 1048576).toFixed(1)} MB`
       : `${(value / 1073741824).toFixed(1)} GB`
 
+const formatSpeed = (value: number) => `${formatSize(value)}/s`
+
+const formatETA = (seconds: number) => {
+  if (seconds <= 0) return '即将完成'
+  if (seconds < 60) return `约 ${Math.ceil(seconds)} 秒`
+  const m = Math.floor(seconds / 60)
+  const s = Math.ceil(seconds % 60)
+  return `约 ${m} 分 ${s} 秒`
+}
+
 const formatDate = (value: string) => {
   if (!value) return ''
   const d = new Date(value)
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+const percent = (u: UploadProgress) => u.size > 0 ? Math.min(100, Math.round(u.sent / u.size * 100)) : 0
+
+const handleUploadEvent = (event: { name: string; size: number; sent: number; speed: number; eta: number; done: boolean; error?: string }) => {
+  if (event.done && !event.error) {
+    uploads.value = uploads.value.filter(u => u.name !== event.name)
+    void loadFiles()
+    return
+  }
+  const existing = uploads.value.find(u => u.name === event.name)
+  if (existing) {
+    existing.sent = event.sent
+    existing.speed = event.speed
+    existing.eta = event.eta
+    existing.error = event.error
+  } else {
+    uploads.value.push({ name: event.name, size: event.size, sent: event.sent, speed: event.speed, eta: event.eta, error: event.error })
+  }
+}
+
+const dismissUpload = (name: string) => {
+  uploads.value = uploads.value.filter(u => u.name !== name)
 }
 
 const requestShare = async (key: string) => {
@@ -53,7 +97,13 @@ const copyShare = () => {
   }
 }
 
-onMounted(() => { loadFiles() })
+onMounted(() => {
+  loadFiles()
+  EventsOn('cloud-upload-progress', handleUploadEvent)
+})
+onBeforeUnmount(() => {
+  EventsOff('cloud-upload-progress')
+})
 defineExpose({ refresh: loadFiles })
 </script>
 
@@ -86,11 +136,38 @@ defineExpose({ refresh: loadFiles })
         </button>
       </div>
 
+      <!-- 上传进度区 -->
+      <div v-if="uploads.length" class="upload-queue">
+        <article v-for="u in uploads" :key="u.name" class="upload-row">
+          <div class="upload-icon" :class="{ failed: !!u.error }" aria-hidden="true">
+            <svg v-if="!u.error" viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
+            <svg v-else viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+          </div>
+          <div class="upload-info">
+            <div class="upload-heading">
+              <strong>{{ u.name }}</strong>
+              <span v-if="u.error" class="upload-error">上传失败</span>
+              <span v-else class="upload-percent">{{ percent(u) }}%</span>
+            </div>
+            <div v-if="!u.error" class="upload-track"><i :style="{ width: percent(u) + '%' }" /></div>
+            <div class="upload-meta">
+              <span v-if="u.error">{{ u.error }}</span>
+              <template v-else>
+                <span>{{ formatSize(u.sent) }} / {{ formatSize(u.size) }}</span>
+                <span v-if="u.speed > 0">{{ formatSpeed(u.speed) }}</span>
+                <span v-if="u.eta > 0">{{ formatETA(u.eta) }}</span>
+              </template>
+            </div>
+          </div>
+          <button v-if="u.error" class="delete-btn" type="button" title="移除" @click="dismissUpload(u.name)">×</button>
+        </article>
+      </div>
+
       <div v-if="loading" class="empty-state compact-empty">
         <strong>加载中…</strong>
       </div>
 
-      <div v-else-if="!files.length" class="empty-state compact-empty">
+      <div v-else-if="!files.length && !uploads.length" class="empty-state compact-empty">
         <span class="empty-illustration cloud-empty">
           <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
         </span>
@@ -98,7 +175,7 @@ defineExpose({ refresh: loadFiles })
         <p>点击上方"上传文件"将文件存储到云端。</p>
       </div>
 
-      <div v-else class="cloud-list">
+      <div v-else-if="files.length" class="cloud-list">
         <article v-for="file in files" :key="file.key" class="cloud-row">
           <div class="cloud-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>

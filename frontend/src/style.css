@@ -415,6 +415,22 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .share-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); font-size: 9px; }
 .empty-illustration.cloud-off svg, .empty-illustration.cloud-empty svg { width: 32px; height: 32px; stroke: currentColor; stroke-width: 1.5; fill: none; }
 
+/* ─── 上传进度队列 ─── */
+.upload-queue { margin: 0 18px 12px; padding: 10px 0; border-top: 1px solid rgba(60,60,67,.07); }
+.upload-row { display: flex; align-items: flex-start; gap: 11px; padding: 8px 0; }
+.upload-row + .upload-row { border-top: 1px solid rgba(60,60,67,.06); }
+.upload-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; color: var(--blue); background: #eaf5ff; border-radius: 8px; }
+.upload-icon svg { width: 16px; height: 16px; }
+.upload-icon.failed { color: var(--red); background: #fff0ef; }
+.upload-info { min-width: 0; flex: 1; }
+.upload-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.upload-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.upload-percent { flex: 0 0 auto; color: var(--blue); font-size: 10px; font-weight: 700; }
+.upload-error { flex: 0 0 auto; color: var(--red); font-size: 9px; font-weight: 600; }
+.upload-track { height: 4px; margin: 7px 0 5px; overflow: hidden; background: #e9e9ed; border-radius: 2px; }
+.upload-track i { display: block; height: 100%; background: linear-gradient(90deg, #178cfb, #4aa5f8); border-radius: inherit; transition: width .25s ease; }
+.upload-meta { display: flex; align-items: center; gap: 10px; color: #8e8e93; font-size: 9px; }
+
 @media (max-width: 1050px) {
   .workspace { padding: 24px 22px 30px; }
   .service-overview { grid-template-columns: 145px minmax(0,1fr); gap: 10px; padding-inline: 14px; }

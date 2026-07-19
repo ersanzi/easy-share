@@ -206,7 +206,16 @@ export function useEasyShare() {
     reject: (id: string) => act('拒绝传输', () => core.reject(id)),
     clearHistory: () => act('清除记录', core.clearHistory),
     deleteTask: (id: string) => act('删除记录', () => core.deleteTask(id)),
-    cloudUpload: () => act('上传文件', core.cloudUpload),
+    cloudUpload: async () => {
+      if (inactive()) return
+      try {
+        await core.cloudUpload()
+        clearError()
+      } catch (value) {
+        reportError('上传文件', value)
+        if (!inactive()) setError('operation', value)
+      }
+    },
     cloudDownload: (key: string) => act('下载文件', () => core.cloudDownload(key)),
     cloudDelete: (key: string) => act('删除文件', () => core.cloudDelete(key)),
     cloudShare: (key: string, hours: number) => core.cloudShare(key, hours),

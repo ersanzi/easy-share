@@ -336,18 +336,78 @@ func (a *App) CloudList() ([]cloud.File, error) {
 	return result, err
 }
 
-func (a *App) CloudUpload() (cloud.UploadResult, error) {
+// CloudUploadEvent is the payload emitted to the frontend during cloud uploads.
+type CloudUploadEvent struct {
+	Name    string  `json:"name"`
+	Size    int64   `json:"size"`
+	Sent    int64   `json:"sent"`
+	Speed   float64 `json:"speed"`   // bytes per second
+	ETA     float64 `json:"eta"`     // seconds remaining
+	Done    bool    `json:"done"`
+	Error   string  `json:"error,omitempty"`
+}
+
+func (a *App) CloudUpload() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
 	if err != nil || path == "" {
-		return cloud.UploadResult{}, err
+		return "", err
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	fileName := filepath.Base(path)
+	fileSize := info.Size()
+
 	client, clientErr := a.coreClient()
 	if clientErr != nil {
-		return cloud.UploadResult{}, clientErr
+		return "", clientErr
 	}
-	result, err := client.CloudUpload(a.ctx, path)
-	a.reportError("cloud upload", err)
-	return result, err
+
+	// Notify frontend immediately so the file appears in the upload list.
+	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+		Name: fileName, Size: fileSize, Sent: 0,
+	})
+
+	go func() {
+		start := time.Now()
+		var lastEmit time.Time
+
+		result, uploadErr := client.CloudUploadStream(a.ctx, path, func(sent, total int64) {
+			now := time.Now()
+			// Throttle events to ~5 per second to avoid flooding the frontend.
+			if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
+				return
+			}
+			lastEmit = now
+			elapsed := now.Sub(start).Seconds()
+			speed := 0.0
+			if elapsed > 0 {
+				speed = float64(sent) / elapsed
+			}
+			eta := 0.0
+			if speed > 0 {
+				eta = float64(total-sent) / speed
+			}
+			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+				Name: fileName, Size: total, Sent: sent, Speed: speed, ETA: eta,
+			})
+		})
+
+		if uploadErr != nil {
+			a.reportError("cloud upload", uploadErr)
+			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+				Name: fileName, Size: fileSize, Sent: 0, Error: uploadErr.Error(), Done: true,
+			})
+			return
+		}
+		a.logger.Printf("cloud upload done: key=%s etag=%s", result.Key, result.ETag)
+		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+			Name: fileName, Size: fileSize, Sent: fileSize, Done: true,
+		})
+	}()
+
+	return fileName, nil
 }
 
 func (a *App) CloudDownload(key string) error {

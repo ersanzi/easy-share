@@ -5,7 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"easyshare/internal/api"
@@ -102,6 +107,86 @@ func (client *Client) CloudUpload(ctx context.Context, filePath string) (cloud.U
 	var result cloud.UploadResult
 	err := client.request(ctx, http.MethodPost, "/api/cloud/upload", map[string]string{"filePath": filePath}, &result)
 	return result, err
+}
+
+// ProgressFunc reports upload progress: bytes sent so far and total file size.
+type ProgressFunc func(sent, total int64)
+
+type progressReader struct {
+	reader io.Reader
+	sent   int64
+	total  int64
+	onProgress ProgressFunc
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	pr.sent += int64(n)
+	if pr.onProgress != nil {
+		pr.onProgress(pr.sent, pr.total)
+	}
+	return n, err
+}
+
+// CloudUploadStream uploads a local file via multipart form data, reporting
+// progress through the callback. This enables real-time progress in the UI.
+func (client *Client) CloudUploadStream(ctx context.Context, filePath string, onProgress ProgressFunc) (cloud.UploadResult, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return cloud.UploadResult{}, fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return cloud.UploadResult{}, fmt.Errorf("stat file: %w", err)
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
+
+	go func() {
+		part, partErr := writer.CreateFormFile("file", filepath.Base(filePath))
+		if partErr != nil {
+			_ = pipeWriter.CloseWithError(partErr)
+			return
+		}
+		pr := &progressReader{reader: file, total: info.Size(), onProgress: onProgress}
+		if _, copyErr := io.Copy(part, pr); copyErr != nil {
+			_ = pipeWriter.CloseWithError(copyErr)
+			return
+		}
+		_ = writer.Close()
+		_ = pipeWriter.Close()
+	}()
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/cloud/upload", pipeReader)
+	if err != nil {
+		return cloud.UploadResult{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("X-File-Size", strconv.FormatInt(info.Size(), 10))
+
+	// Use a dedicated client with no timeout for large file uploads.
+	uploadClient := &http.Client{Timeout: 0}
+	response, err := uploadClient.Do(request)
+	if err != nil {
+		return cloud.UploadResult{}, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode >= 300 {
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		return cloud.UploadResult{}, fmt.Errorf("%s", apiError.Message)
+	}
+
+	var result cloud.UploadResult
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return cloud.UploadResult{}, err
+	}
+	return result, nil
 }
 func (client *Client) CloudDownload(ctx context.Context, key string) (string, error) {
 	var result struct {

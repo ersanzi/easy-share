@@ -273,7 +273,10 @@ func (store *Store) PutObject(ctx context.Context, input objectstore.PutObjectIn
 	if input.ContentType != "" {
 		request.ContentType = aws.String(input.ContentType)
 	}
-	output, err := store.client.PutObject(ctx, request)
+	output, err := store.client.PutObject(ctx, request, func(o *s3.Options) {
+		// Streaming bodies are not seekable; skip SHA256 payload hashing.
+		o.APIOptions = append(o.APIOptions, v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware)
+	})
 	if err != nil {
 		return objectstore.CompleteResult{}, mapError("put object", err)
 	}

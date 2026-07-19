@@ -19,7 +19,7 @@ export function CloudList():Promise<Array<cloud.File>>;
 
 export function CloudShare(arg1:string,arg2:number):Promise<string>;
 
-export function CloudUpload():Promise<cloud.UploadResult>;
+export function CloudUpload():Promise<string>;
 
 export function DeleteTask(arg1:string):Promise<void>;
 

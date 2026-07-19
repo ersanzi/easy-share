@@ -17,7 +17,6 @@ const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 
 const handleCloudUpload = async () => {
   await app.cloudUpload()
-  cloudRef.value?.refresh()
 }
 const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)

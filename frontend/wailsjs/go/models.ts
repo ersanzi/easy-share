@@ -66,20 +66,6 @@ export namespace cloud {
 		    return a;
 		}
 	}
-	export class UploadResult {
-	    key: string;
-	    etag: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new UploadResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.key = source["key"];
-	        this.etag = source["etag"];
-	    }
-	}
 
 }
 
