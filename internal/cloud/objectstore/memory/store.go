@@ -227,6 +227,25 @@ func (store *Store) PutObject(_ context.Context, input objectstore.PutObjectInpu
 	return objectstore.CompleteResult{ETag: etag}, nil
 }
 
+func (store *Store) GetObject(_ context.Context, input objectstore.GetObjectInput) (objectstore.GetObjectOutput, error) {
+	if err := input.ObjectRef.Validate(); err != nil {
+		return objectstore.GetObjectOutput{}, err
+	}
+	store.mutex.RLock()
+	value, found := store.objects[objectKey(input.ObjectRef)]
+	store.mutex.RUnlock()
+	if !found {
+		return objectstore.GetObjectOutput{}, notFound("get object")
+	}
+	return objectstore.GetObjectOutput{
+		Body:         io.NopCloser(strings.NewReader(string(value.body))),
+		Size:         int64(len(value.body)),
+		ContentType:  value.contentType,
+		ETag:         value.etag,
+		LastModified: value.lastModified,
+	}, nil
+}
+
 func (store *Store) ListObjects(_ context.Context, input objectstore.ListObjectsInput) (objectstore.ListObjectsResult, error) {
 	if err := input.Validate(); err != nil {
 		return objectstore.ListObjectsResult{}, err

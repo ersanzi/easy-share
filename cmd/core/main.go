@@ -15,6 +15,7 @@ import (
 	"easyshare/internal/api"
 	"easyshare/internal/cloud"
 	"easyshare/internal/cloud/objectstore/s3store"
+	"easyshare/internal/cloud/webdavfs"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/discovery"
@@ -55,9 +56,11 @@ func main() {
 	taskStore := task.NewStore()
 	taskStore.EnablePersistence(filepath.Join(filepath.Dir(*configPath), "history.json"))
 	server := api.NewServer(value, taskStore)
-	server.ConfigureDrive(drive.NewService(value.WebDAVRoot, value.WebDAVUsername, value.WebDAVPassword), drive.NewMapper())
+	server.ConfigureDrive(drive.NewService(value.WebDAVRoot))
 	server.ConfigureShutdown(cancelCore)
 	server.ConfigureConfigPath(*configPath)
+	// 局域网共享 WebDAV 随 Core 自动启动，"此电脑"入口始终可用。
+	server.StartLANDrive()
 	// Cloud drive uses fixed build-time parameters; no user configuration needed.
 	cloudStore, cloudErr := s3store.New(s3store.Config{
 		Endpoint:          cloud.DefaultEndpoint,
@@ -70,6 +73,11 @@ func main() {
 		log.Printf("cloud drive disabled: %v", cloudErr)
 	} else {
 		server.ConfigureCloud(cloud.NewService(cloudStore, cloud.DefaultBucket))
+		// Expose cloud files via WebDAV so Windows Explorer can browse them.
+		cloudFS := webdavfs.New(cloudStore, cloud.DefaultBucket)
+		cloudDriveService := drive.NewCloudService(cloudFS)
+		server.ConfigureCloudDrive(cloudDriveService)
+		server.StartCloudDrive(ctx)
 		log.Printf("cloud drive enabled: endpoint=%s bucket=%s", cloud.DefaultEndpoint, cloud.DefaultBucket)
 	}
 	defer func() {

@@ -11,7 +11,6 @@
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
-  MapDrive,
   RejectTransfer,
   ReportFrontendError,
   SaveSettings,
@@ -23,7 +22,6 @@
   ShutdownAll,
   StartDrive,
   StopDrive,
-  UnmapDrive,
 } from '../../wailsjs/go/main/App'
 import type { CloudFile, CoreSnapshot } from '../types/core'
 
@@ -31,7 +29,6 @@ export interface SettingsData {
   deviceName: string
   receiveDir: string
   webdavRoot: string
-  driveLetter: string
 }
 
 export const core = {
@@ -44,8 +41,6 @@ export const core = {
   reject: RejectTransfer,
   startDrive: StartDrive,
   stopDrive: StopDrive,
-  mapDrive: MapDrive,
-  unmapDrive: UnmapDrive,
   shutdown: ShutdownAll,
   logDirectory: GetLogDirectory,
   reportError: ReportFrontendError,

@@ -21,6 +21,7 @@ const (
 // multipart upload and download flows.
 type Store interface {
 	PutObject(context.Context, PutObjectInput) (CompleteResult, error)
+	GetObject(context.Context, GetObjectInput) (GetObjectOutput, error)
 	CreateMultipartUpload(context.Context, CreateMultipartUploadInput) (MultipartUpload, error)
 	PresignUploadPart(context.Context, PresignUploadPartInput) (PresignedRequest, error)
 	CompleteMultipartUpload(context.Context, CompleteMultipartUploadInput) (CompleteResult, error)
@@ -29,6 +30,20 @@ type Store interface {
 	ListObjects(context.Context, ListObjectsInput) (ListObjectsResult, error)
 	PresignDownload(context.Context, PresignDownloadInput) (PresignedRequest, error)
 	DeleteObject(context.Context, ObjectRef) error
+}
+
+// GetObjectInput requests the content of an object.
+type GetObjectInput struct {
+	ObjectRef
+}
+
+// GetObjectOutput carries the object body and metadata.
+type GetObjectOutput struct {
+	Body         io.ReadCloser
+	Size         int64
+	ContentType  string
+	ETag         string
+	LastModified time.Time
 }
 
 type ObjectRef struct {

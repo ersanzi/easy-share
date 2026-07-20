@@ -6,15 +6,12 @@ interface SettingsForm {
   deviceName: string
   receiveDir: string
   webdavRoot: string
-  driveLetter: string
 }
 
-const form = ref<SettingsForm>({ deviceName: '', receiveDir: '', webdavRoot: '', driveLetter: 'Z:' })
+const form = ref<SettingsForm>({ deviceName: '', receiveDir: '', webdavRoot: '' })
 const saving = ref(false)
 const saved = ref(false)
 const loadError = ref('')
-
-const driveLetters = Array.from({ length: 23 }, (_, i) => String.fromCharCode(68 + i))
 
 const load = async () => {
   try {
@@ -41,7 +38,7 @@ const save = async () => {
   saved.value = false
   loadError.value = ''
   try {
-    await core.saveSettings(form.value.deviceName, form.value.receiveDir, form.value.webdavRoot, form.value.driveLetter)
+    await core.saveSettings(form.value.deviceName, form.value.receiveDir, form.value.webdavRoot)
     saved.value = true
     setTimeout(() => { saved.value = false }, 2500)
   } catch (e) {
@@ -60,7 +57,7 @@ onMounted(load)
       <div>
         <span class="section-label">偏好</span>
         <h1>设置</h1>
-        <p>管理设备名称、文件目录与网络驱动器配置。</p>
+        <p>管理设备名称、文件目录与共享空间配置。</p>
       </div>
     </header>
 
@@ -100,26 +97,19 @@ onMounted(load)
         </div>
       </div>
 
-      <!-- 网络驱动器 -->
+      <!-- 共享空间 -->
       <div class="card settings-card">
         <div class="card-header">
-          <h2>网络驱动器</h2>
+          <h2>共享空间</h2>
         </div>
         <div class="settings-body">
           <div class="setting-row">
             <label class="setting-label">共享目录</label>
-            <p class="setting-hint">通过 WebDAV 对外共享的根目录</p>
+            <p class="setting-hint">在“此电脑”的 EasyShare 共享中显示的根目录</p>
             <div class="setting-path">
               <span class="path-display">{{ form.webdavRoot || '未选择' }}</span>
               <button class="secondary-button compact" type="button" @click="pickShareDir">浏览…</button>
             </div>
-          </div>
-          <div class="setting-row">
-            <label class="setting-label" for="driveLetter">映射盘符</label>
-            <p class="setting-hint">共享目录在资源管理器中显示的盘符</p>
-            <select id="driveLetter" v-model="form.driveLetter" class="setting-select">
-              <option v-for="letter in driveLetters" :key="letter" :value="letter + ':'">{{ letter }}:</option>
-            </select>
           </div>
         </div>
       </div>

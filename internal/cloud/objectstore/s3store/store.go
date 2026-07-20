@@ -37,6 +37,7 @@ type Config struct {
 
 type s3API interface {
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	CreateMultipartUpload(context.Context, *s3.CreateMultipartUploadInput, ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
 	CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput, ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
 	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
@@ -284,6 +285,29 @@ func (store *Store) PutObject(ctx context.Context, input objectstore.PutObjectIn
 		ETag:      aws.ToString(output.ETag),
 		VersionID: aws.ToString(output.VersionId),
 	}, nil
+}
+
+func (store *Store) GetObject(ctx context.Context, input objectstore.GetObjectInput) (objectstore.GetObjectOutput, error) {
+	if err := input.ObjectRef.Validate(); err != nil {
+		return objectstore.GetObjectOutput{}, err
+	}
+	output, err := store.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(input.Bucket),
+		Key:    aws.String(input.Key),
+	})
+	if err != nil {
+		return objectstore.GetObjectOutput{}, mapError("get object", err)
+	}
+	result := objectstore.GetObjectOutput{
+		Body:        output.Body,
+		Size:        aws.ToInt64(output.ContentLength),
+		ContentType: aws.ToString(output.ContentType),
+		ETag:        aws.ToString(output.ETag),
+	}
+	if output.LastModified != nil {
+		result.LastModified = *output.LastModified
+	}
+	return result, nil
 }
 
 func (store *Store) ListObjects(ctx context.Context, input objectstore.ListObjectsInput) (objectstore.ListObjectsResult, error) {

@@ -172,3 +172,7 @@ func (client *recordingS3Client) PutObject(context.Context, *s3.PutObjectInput, 
 func (client *recordingS3Client) ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	panic("unexpected ListObjectsV2 call")
 }
+
+func (client *recordingS3Client) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	panic("unexpected GetObject call")
+}

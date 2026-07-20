@@ -13,43 +13,38 @@
 | 文件 | 主要内容 |
 | --- | --- |
 | `desktop.log` | Wails 启动、Core 连接、API 操作、Vue/浏览器异常 |
-| `core.log` | Core 生命周期、发现、接收、WebDAV、`net use` 完整错误 |
+| `core.log` | Core 生命周期、发现、接收、WebDAV、命名空间注册 |
 | `core-process.log` | 子进程 stdout/stderr、正常日志初始化前的 panic |
 | `desktop.log.1` / `core.log.1` | 5 MiB 轮转备份 |
 
-日志可用于排障，但不要发送 `config.json`，因为它包含 API Token 和 WebDAV 密码。
+日志可用于排障，但不要发送 `config.json`，因为它包含 API Token。
 
-## 2. 网络驱动器错误 67
+## 2. 「此电脑」入口打不开或内容为空
 
-典型日志：
+EasyShare 不再映射盘符。「此电脑」入口直接委托到 WebDAV UNC（共享 `\\127.0.0.1@19080\DavWWWRoot`、网盘 `\\127.0.0.1@19081\DavWWWRoot`）。双击打不开或显示为空时，按顺序检查：
 
-```text
-System error 67 has occurred.
-The network name cannot be found.
-```
+1. 确认正在运行的是最新的 `easyshare.exe` 和配套的 `easyshare-core.exe`，且 `core.log` 出现 WebDAV ready。
+2. 确认端口在监听：
 
-按顺序检查：
-
-1. 确认正在运行的是最新的 `easyshare.exe` 和配套的 `easyshare-core.exe`。
-2. 在 `core.log` 中确认：
-
-   ```text
-   WebDAV ready at http://127.0.0.1:19080 with Digest authentication
+   ```powershell
+   Get-NetTCPConnection -LocalPort 19080,19081 -State Listen
    ```
 
-3. 检查 Windows WebClient：
+3. 确认 Windows WebClient 服务正在运行（解析 WebDAV UNC 必需）：
 
    ```powershell
    Get-Service WebClient | Format-List Name,Status,StartType
    ```
 
-4. 确认目标 UNC 为：
+4. 确认 UNC 可直接访问（无需输入凭据即应列出目录）：
 
-   ```text
-   \\127.0.0.1@19080\DavWWWRoot
+   ```powershell
+   Get-ChildItem '\\127.0.0.1@19080\DavWWWRoot'
    ```
 
-当前实现使用 Digest Authentication，兼容 Windows 默认 `BasicAuthLevel=1`。不要把系统注册表改成 `BasicAuthLevel=2`，也不要退回 HTTP Basic Auth。
+5. 仍不行时，用 `SHParseDisplayName` 确认 Shell 能解析该 UNC，详见迭代记录 [`iterations/2026-07-20-thispc-namespace-no-drive-letter.md`](iterations/2026-07-20-thispc-namespace-no-drive-letter.md)。
+
+当前实现仅监听 127.0.0.1 且无认证，不会弹出凭据框。Windows WebClient 会自动剥离 `DavWWWRoot` 前缀（访问 `...\DavWWWRoot\test.txt` 实际请求 `/test.txt`），因此 WebDAV 服务用 `Prefix: "/"` 即可；手工测试时不要自己再加 `/DavWWWRoot`，否则会因路径多套一层返回 409。
 
 ## 3. `19079 bind` / 端口被占用
 
@@ -86,28 +81,30 @@ Get-Process -Id <OwningProcess> |
 
 4. 如果刚点击“退出全部服务”，这是预期的 Core 终止；前端应停在安全退出页且不继续轮询。如果持续出现新错误，检查 `useEasyShare.ts` 的退出状态机。
 
-## 5. 盘符被占用或无法取消映射
+## 5. 「此电脑」入口显示描述句或错误名称
 
-检查盘符：
+症状：入口磁贴显示「双击进入 EasyShare 网盘」「双击进入局域网共享」这类描述句，而不是干净的名称「EasyShare 网盘」「EasyShare 共享」。
 
-```powershell
-net use Z:
-Get-PSDrive -Name Z -ErrorAction SilentlyContinue
-```
+根因：CLSID 下残留的 `LocalizedString`（或 `System.Category`）会覆盖默认值成为资源管理器显示名。这些是早期实验留下的值，当前代码并不设置，但旧机器上可能残留。
 
-EasyShare 启动时会自动尝试连接一次。它会复用远端地址完全匹配的自身映射，但不会覆盖已有的其他映射，也不会删除远端地址不匹配的映射。若 UI 显示盘符占用，请释放该盘符后点击“重新连接”，或在配置中改用空闲盘符；状态轮询不会反复自动重试。
-
-手工清理前先确认输出确实指向：
-
-```text
-\\127.0.0.1@19080\DavWWWRoot
-```
-
-确认后才可执行：
+检查：
 
 ```powershell
-net use Z: /delete /y
+$k = Get-Item 'HKCU:\Software\Classes\CLSID\{E5A1F2B3-C4D5-6E7F-8A9B-0C1D2E3F4A5B}'
+$k.GetValue('LocalizedString')   # 非空即为元凶
+$k.GetValue('System.Category')
+$k.GetValue('')                  # 期望显示的干净名称
 ```
+
+修复：重启 EasyShare 即可——注册命名空间时 `clearStaleDisplayOverrides` 会删除 `LocalizedString`、`System.Category`、`TileInfo`、`System.ItemTypeText` 这些会劫持显示名的旧值。也可手工删除后重启 Explorer：
+
+```powershell
+$base = 'HKCU:\Software\Classes\CLSID\{E5A1F2B3-C4D5-6E7F-8A9B-0C1D2E3F4A5B}'
+Remove-ItemProperty -Path $base -Name LocalizedString,System.Category -ErrorAction SilentlyContinue
+Stop-Process -Name explorer -Force; Start-Sleep 2; Start-Process explorer
+```
+
+注意：Explorer 对命名空间元数据缓存很顽固，改注册表后必须重启 `explorer` 才刷新，仅 `SHChangeNotify` 往往不够。`InfoTip` 只作鼠标悬停提示，不影响显示名，可保留描述句。
 
 ## 6. 设备无法互相发现
 

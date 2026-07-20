@@ -8,7 +8,6 @@ const emptySnapshot = (): CoreSnapshot => ({
     discovery: false,
     receiver: false,
     webdav: false,
-    driveMapped: false,
     cloudEnabled: false,
   },
   peers: [],
@@ -31,7 +30,6 @@ type ErrorSource = 'refresh' | 'operation' | ''
 export function useEasyShare() {
   const snapshot = ref<CoreSnapshot>(emptySnapshot())
   const loading = ref(true)
-  const mapping = ref(false)
   const error = ref('')
   const shuttingDown = ref(false)
   const stopped = ref(false)
@@ -93,36 +91,18 @@ export function useEasyShare() {
     }
   }
 
-  const connectDrive = async () => {
-    if (inactive() || mapping.value || snapshot.value.status.driveMapped) return false
-    mapping.value = true
-    try {
-      return await act('连接网络驱动器', core.mapDrive)
-    } finally {
-      if (!disposed) mapping.value = false
-    }
-  }
-
   const initialize = async () => {
     // Wails can mount the frontend just before App.Startup has installed the
-    // Core client. Wait for the first successful snapshot so that this startup
-    // race cannot consume the window's one automatic mapping attempt.
+    // Core client. Wait for the first successful snapshot before proceeding.
     while (!inactive()) {
       const refreshed = await refresh()
-      if (refreshed) {
-        if (snapshot.value.status.core && !snapshot.value.status.driveMapped) {
-          // This is intentionally the only automatic attempt for this window.
-          // Polling only observes status, so a mapping failure cannot retry.
-          await connectDrive()
-        }
-        return
-      }
+      if (refreshed) return
       await new Promise(resolve => window.setTimeout(resolve, 1000))
     }
   }
 
   const shutdown = async () => {
-    if (inactive() || mapping.value) return
+    if (inactive()) return
     if (!window.confirm('确定退出 EasyShare 的全部后台服务吗？正在进行的传输将会停止。')) return
 
     // Stop polling before ShutdownAll. Once shutdown begins, no code path is
@@ -185,7 +165,6 @@ export function useEasyShare() {
   return {
     snapshot,
     loading,
-    mapping,
     error,
     shuttingDown,
     stopped,
@@ -221,8 +200,6 @@ export function useEasyShare() {
     cloudShare: (key: string, hours: number) => core.cloudShare(key, hours),
     startDrive: () => act('启动 WebDAV', core.startDrive),
     stopDrive: () => act('停止 WebDAV', core.stopDrive),
-    mapDrive: connectDrive,
-    unmapDrive: () => act('取消网络驱动器', core.unmapDrive),
     shutdown,
   }
 }

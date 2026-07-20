@@ -9,12 +9,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sync"
 )
 
 var configMutex sync.Mutex
-var driveLetterPattern = regexp.MustCompile(`^[A-Za-z]:$`)
 
 const (
 	defaultAPIHost       = "127.0.0.1"
@@ -50,7 +48,6 @@ type Config struct {
 	WebDAVPort     int         `json:"webdavPort"`
 	WebDAVUsername string      `json:"webdavUsername"`
 	WebDAVPassword string      `json:"webdavPassword"`
-	DriveLetter    string      `json:"driveLetter"`
 	Cloud          CloudConfig `json:"cloud"`
 }
 
@@ -164,9 +161,6 @@ func (value Config) Validate() error {
 	if value.ReceiveDir == "" || value.WebDAVRoot == "" {
 		return errors.New("receive and WebDAV directories must not be empty")
 	}
-	if !driveLetterPattern.MatchString(value.DriveLetter) {
-		return errors.New("drive letter must use the form Z:")
-	}
 	return nil
 }
 
@@ -205,7 +199,6 @@ func defaultConfig() (Config, error) {
 		WebDAVPort:     defaultWebDAVPort,
 		WebDAVUsername: "EasyShare",
 		WebDAVPassword: webDAVPassword,
-		DriveLetter:    "Z:",
 	}, nil
 }
 

@@ -3,6 +3,7 @@
 import {cloud} from '../models';
 import {main} from '../models';
 import {desktop} from '../models';
+import {fsutil} from '../models';
 import {context} from '../models';
 
 export function AcceptTransfer(arg1:string):Promise<void>;
@@ -31,13 +32,15 @@ export function GetSnapshot():Promise<desktop.Snapshot>;
 
 export function Greet(arg1:string):Promise<string>;
 
-export function MapDrive():Promise<void>;
+export function ListDir(arg1:string):Promise<Array<fsutil.FileEntry>>;
+
+export function ListDrives():Promise<Array<fsutil.DriveInfo>>;
 
 export function RejectTransfer(arg1:string):Promise<void>;
 
 export function ReportFrontendError(arg1:string,arg2:string):Promise<void>;
 
-export function SaveSettings(arg1:string,arg2:string,arg3:string,arg4:string):Promise<void>;
+export function SaveSettings(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SelectFile():Promise<string>;
 
@@ -56,5 +59,3 @@ export function StartDrive():Promise<void>;
 export function Startup(arg1:context.Context):Promise<void>;
 
 export function StopDrive():Promise<void>;
-
-export function UnmapDrive():Promise<void>;

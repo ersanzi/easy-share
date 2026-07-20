@@ -54,8 +54,12 @@ export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }
 
-export function MapDrive() {
-  return window['go']['main']['App']['MapDrive']();
+export function ListDir(arg1) {
+  return window['go']['main']['App']['ListDir'](arg1);
+}
+
+export function ListDrives() {
+  return window['go']['main']['App']['ListDrives']();
 }
 
 export function RejectTransfer(arg1) {
@@ -66,8 +70,8 @@ export function ReportFrontendError(arg1, arg2) {
   return window['go']['main']['App']['ReportFrontendError'](arg1, arg2);
 }
 
-export function SaveSettings(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['SaveSettings'](arg1, arg2, arg3, arg4);
+export function SaveSettings(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveSettings'](arg1, arg2, arg3);
 }
 
 export function SelectFile() {
@@ -104,8 +108,4 @@ export function Startup(arg1) {
 
 export function StopDrive() {
   return window['go']['main']['App']['StopDrive']();
-}
-
-export function UnmapDrive() {
-  return window['go']['main']['App']['UnmapDrive']();
 }

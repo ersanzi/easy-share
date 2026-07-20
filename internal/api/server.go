@@ -19,7 +19,6 @@ import (
 	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/discovery"
-	"easyshare/internal/drive"
 	"easyshare/internal/task"
 	"easyshare/internal/transfer"
 	"github.com/coder/websocket"
@@ -34,7 +33,6 @@ type Status struct {
 	Discovery    bool `json:"discovery"`
 	Receiver     bool `json:"receiver"`
 	WebDAV       bool `json:"webdav"`
-	DriveMapped  bool `json:"driveMapped"`
 	CloudEnabled bool `json:"cloudEnabled"`
 }
 
@@ -42,11 +40,6 @@ type driveService interface {
 	Start(int) error
 	Stop(context.Context) error
 	Running() bool
-}
-
-type driveMapper interface {
-	Map(context.Context, string, string, string, string) error
-	Unmap(context.Context, string, string) error
 }
 
 type Server struct {
@@ -59,7 +52,7 @@ type Server struct {
 	shutdownOnce sync.Once
 	shutdown     chan struct{}
 	driveService driveService
-	mapper       driveMapper
+	cloudDrive   driveService
 	cloud        *cloud.Service
 	statusMutex  sync.RWMutex
 	status       Status
@@ -68,6 +61,9 @@ type Server struct {
 	receiver     *transfer.Receiver
 	cancelCore   context.CancelFunc
 }
+
+// cloudWebDAVPortOffset is added to WebDAVPort to derive the cloud WebDAV port.
+const cloudWebDAVPortOffset = 1
 
 func NewServer(value config.Config, tasks *task.Store) *Server {
 	server := &Server{config: value, tasks: tasks, hub: newEventHub(), shutdown: make(chan struct{}), status: Status{Core: true}}
@@ -109,8 +105,6 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/shutdown", server.auth(http.HandlerFunc(server.shutdownAll)))
 	mux.Handle("POST /api/drive/start", server.auth(http.HandlerFunc(server.startDrive)))
 	mux.Handle("POST /api/drive/stop", server.auth(http.HandlerFunc(server.stopDrive)))
-	mux.Handle("POST /api/drive/map", server.auth(http.HandlerFunc(server.mapDrive)))
-	mux.Handle("POST /api/drive/unmap", server.auth(http.HandlerFunc(server.unmapDrive)))
 	mux.Handle("POST /api/transfers", server.auth(http.HandlerFunc(server.sendTransfer)))
 	mux.Handle("POST /api/transfers/{id}/accept", server.auth(http.HandlerFunc(server.acceptTransfer)))
 	mux.Handle("POST /api/transfers/{id}/reject", server.auth(http.HandlerFunc(server.rejectTransfer)))
@@ -182,8 +176,8 @@ func (server *Server) Addr() string {
 }
 func (server *Server) Publish(event Event)             { server.hub.publish(event) }
 func (server *Server) ShutdownSignal() <-chan struct{} { return server.shutdown }
-func (server *Server) ConfigureDrive(service driveService, mapper driveMapper) {
-	server.driveService, server.mapper = service, mapper
+func (server *Server) ConfigureDrive(service driveService) {
+	server.driveService = service
 }
 func (server *Server) ConfigureShutdown(cancel context.CancelFunc) { server.cancelCore = cancel }
 func (server *Server) ConfigureConfigPath(path string)            { server.configPath = path }
@@ -199,6 +193,45 @@ func (server *Server) ConfigureCloud(service *cloud.Service) {
 	server.statusMutex.Lock()
 	server.status.CloudEnabled = service != nil
 	server.statusMutex.Unlock()
+}
+
+func (server *Server) ConfigureCloudDrive(service driveService) {
+	server.cloudDrive = service
+}
+
+// StartLANDrive 启动局域网共享 WebDAV 服务。
+// 由 Core 启动时调用，使"此电脑"中的 EasyShare 共享入口始终可用。
+func (server *Server) StartLANDrive() {
+	if server.driveService == nil {
+		return
+	}
+	if err := server.driveService.Start(server.config.WebDAVPort); err != nil && !server.driveService.Running() {
+		log.Printf("start LAN WebDAV: %v", err)
+		return
+	}
+	server.setDriveStatus(true)
+	log.Printf("LAN WebDAV ready at %s", server.webDAVURL())
+}
+
+// StartCloudDrive starts the cloud WebDAV server.
+// Called after ConfigureCloud when cloud is enabled.
+func (server *Server) StartCloudDrive(ctx context.Context) {
+	if server.cloudDrive == nil {
+		return
+	}
+	port := server.config.WebDAVPort + cloudWebDAVPortOffset
+	if err := server.cloudDrive.Start(port); err != nil && !server.cloudDrive.Running() {
+		log.Printf("start cloud WebDAV: %v", err)
+		return
+	}
+	log.Printf("cloud WebDAV ready at http://127.0.0.1:%d", port)
+}
+
+// StopCloudDrive stops the cloud WebDAV server.
+func (server *Server) StopCloudDrive(ctx context.Context) {
+	if server.cloudDrive != nil {
+		_ = server.cloudDrive.Stop(ctx)
+	}
 }
 func (server *Server) MarkDiscovery(running bool) {
 	server.statusMutex.Lock()
@@ -283,8 +316,8 @@ func (server *Server) startDrive(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, 500, ErrorResponse{Code: "drive_start_failed", Message: err.Error()})
 		return
 	}
-	server.setDriveStatus(true, false)
-	log.Printf("WebDAV ready at %s with Digest authentication", server.webDAVURL())
+	server.setDriveStatus(true)
+	log.Printf("WebDAV ready at %s", server.webDAVURL())
 	writeJSON(writer, 200, map[string]bool{"running": true})
 }
 func (server *Server) stopDrive(writer http.ResponseWriter, request *http.Request) {
@@ -295,52 +328,6 @@ func (server *Server) stopDrive(writer http.ResponseWriter, request *http.Reques
 	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"running": false})
 }
-func (server *Server) mapDrive(writer http.ResponseWriter, request *http.Request) {
-	url := server.webDAVURL()
-	if server.mapper == nil {
-		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "mapper_unavailable", Message: "mapper unavailable"})
-		return
-	}
-	if server.driveService == nil {
-		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "drive_unavailable", Message: "drive service unavailable"})
-		return
-	}
-	if !server.driveService.Running() {
-		if err := server.driveService.Start(server.config.WebDAVPort); err != nil {
-			log.Printf("start WebDAV before mapping: %v", err)
-			writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "drive_start_failed", Message: err.Error()})
-			return
-		}
-		server.setDriveStatus(true, false)
-		log.Printf("WebDAV ready at %s with Digest authentication", url)
-	}
-	if err := server.mapper.Map(request.Context(), server.config.DriveLetter, url, server.config.WebDAVUsername, server.config.WebDAVPassword); err != nil {
-		log.Printf("map drive %s to %s: %v", server.config.DriveLetter, url, err)
-		server.setDriveStatus(true, false)
-		message := err.Error()
-		if errors.Is(err, drive.ErrDriveOccupied) {
-			message = fmt.Sprintf("%s 已被其他磁盘或网络位置占用，请释放该盘符后重试", server.config.DriveLetter)
-		}
-		writeJSON(writer, http.StatusConflict, ErrorResponse{Code: "drive_map_failed", Message: message})
-		return
-	}
-	server.setDriveStatus(true, true)
-	log.Printf("drive %s mapped to %s", server.config.DriveLetter, url)
-	writeJSON(writer, http.StatusOK, map[string]bool{"mapped": true})
-}
-func (server *Server) unmapDrive(writer http.ResponseWriter, request *http.Request) {
-	url := server.webDAVURL()
-	if server.mapper != nil {
-		if err := server.mapper.Unmap(request.Context(), server.config.DriveLetter, url); err != nil {
-			log.Printf("unmap drive %s: %v", server.config.DriveLetter, err)
-			writeJSON(writer, 409, ErrorResponse{Code: "drive_unmap_failed", Message: err.Error()})
-			return
-		}
-	}
-	running := server.driveService != nil && server.driveService.Running()
-	server.setDriveStatus(running, false)
-	writeJSON(writer, 200, map[string]bool{"mapped": false})
-}
 func (server *Server) shutdownAll(writer http.ResponseWriter, request *http.Request) {
 	// Cleanup is deliberately synchronous and ordered. The accepted response is
 	// written from this handler while http.Server.Shutdown waits for it to finish.
@@ -350,7 +337,7 @@ func (server *Server) shutdownAll(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusAccepted, map[string]bool{"accepted": true})
 }
 
-// Shutdown tears down resources in dependency order: mapped drive, WebDAV,
+// Shutdown tears down resources in dependency order: WebDAV services,
 // background services, then the Core HTTP server.
 func (server *Server) Shutdown(ctx context.Context) error {
 	err := server.stopDriveServices(ctx)
@@ -363,20 +350,14 @@ func (server *Server) Shutdown(ctx context.Context) error {
 
 func (server *Server) stopDriveServices(ctx context.Context) error {
 	var cleanupErrors []error
-	server.statusMutex.RLock()
-	mapped := server.status.DriveMapped
-	server.statusMutex.RUnlock()
-	if mapped && server.mapper != nil {
-		if err := server.mapper.Unmap(ctx, server.config.DriveLetter, server.webDAVURL()); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("unmap drive: %w", err))
-		}
-	}
 	if server.driveService != nil {
 		if err := server.driveService.Stop(ctx); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("stop WebDAV: %w", err))
 		}
 	}
-	server.setDriveStatus(false, false)
+	// Stop cloud drive WebDAV.
+	server.StopCloudDrive(ctx)
+	server.setDriveStatus(false)
 	return errors.Join(cleanupErrors...)
 }
 
@@ -384,10 +365,9 @@ func (server *Server) webDAVURL() string {
 	return "http://127.0.0.1:" + strconv.Itoa(server.config.WebDAVPort)
 }
 
-func (server *Server) setDriveStatus(running, mapped bool) {
+func (server *Server) setDriveStatus(running bool) {
 	server.statusMutex.Lock()
 	server.status.WebDAV = running
-	server.status.DriveMapped = mapped
 	value := server.status
 	server.statusMutex.Unlock()
 	server.Publish(Event{Type: "drive.status.changed", Data: value})

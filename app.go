@@ -16,8 +16,9 @@ import (
 	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
-	"easyshare/internal/drive"
+	"easyshare/internal/fsutil"
 	"easyshare/internal/logging"
+	"easyshare/internal/namespace"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -76,9 +77,6 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.processOptions = options
 
-	// Clean up stale drive mapping left by a previous crashed Core.
-	a.cleanStaleMapping()
-
 	if err := desktop.EnsureCore(ctx, options); err != nil {
 		a.reportError("ensure Core", err)
 		runtime.LogError(ctx, err.Error())
@@ -90,6 +88,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.logger.Printf("connected to Core at %s", baseURL)
 
 	go a.watchdog()
+
+	// Register EasyShare entries in Windows Explorer "此电脑" (This PC).
+	a.registerNamespace()
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -184,8 +185,6 @@ func (a *App) driveAction(operation, path string) error {
 }
 func (a *App) StartDrive() error { return a.driveAction("start WebDAV", "/api/drive/start") }
 func (a *App) StopDrive() error  { return a.driveAction("stop WebDAV", "/api/drive/stop") }
-func (a *App) MapDrive() error   { return a.driveAction("map drive", "/api/drive/map") }
-func (a *App) UnmapDrive() error { return a.driveAction("unmap drive", "/api/drive/unmap") }
 func (a *App) ShutdownAll() error {
 	client, err := a.coreClient()
 	if err != nil {
@@ -258,19 +257,17 @@ type Settings struct {
 	DeviceName string `json:"deviceName"`
 	ReceiveDir string `json:"receiveDir"`
 	WebDAVRoot string `json:"webdavRoot"`
-	DriveLetter string `json:"driveLetter"`
 }
 
 func (a *App) GetSettings() Settings {
 	return Settings{
-		DeviceName:  a.config.DeviceName,
-		ReceiveDir:  a.config.ReceiveDir,
-		WebDAVRoot:  a.config.WebDAVRoot,
-		DriveLetter: a.config.DriveLetter,
+		DeviceName: a.config.DeviceName,
+		ReceiveDir: a.config.ReceiveDir,
+		WebDAVRoot: a.config.WebDAVRoot,
 	}
 }
 
-func (a *App) SaveSettings(deviceName, receiveDir, webdavRoot, driveLetter string) error {
+func (a *App) SaveSettings(deviceName, receiveDir, webdavRoot string) error {
 	deviceName = strings.TrimSpace(deviceName)
 	if deviceName == "" {
 		return fmt.Errorf("设备名称不能为空")
@@ -281,23 +278,10 @@ func (a *App) SaveSettings(deviceName, receiveDir, webdavRoot, driveLetter strin
 	if webdavRoot == "" {
 		return fmt.Errorf("共享目录不能为空")
 	}
-	driveLetter = strings.TrimSpace(driveLetter)
-	if len(driveLetter) == 1 {
-		driveLetter += ":"
-	}
-	if len(driveLetter) != 2 || driveLetter[1] != ':' {
-		return fmt.Errorf("盘符格式无效，应为单个字母如 Z")
-	}
-	letter := strings.ToUpper(driveLetter[:1])
-	if letter < "D" || letter > "Z" {
-		return fmt.Errorf("盘符须在 D-Z 之间")
-	}
-	driveLetter = letter + ":"
 
 	a.config.DeviceName = deviceName
 	a.config.ReceiveDir = receiveDir
 	a.config.WebDAVRoot = webdavRoot
-	a.config.DriveLetter = driveLetter
 
 	if err := config.Save(a.configPath, a.config); err != nil {
 		a.reportError("save settings", err)
@@ -308,7 +292,7 @@ func (a *App) SaveSettings(deviceName, receiveDir, webdavRoot, driveLetter strin
 	if client, err := a.coreClient(); err == nil {
 		_ = client.Action(a.ctx, "/api/config/reload")
 	}
-	a.logger.Printf("settings saved: device=%s receive=%s webdav=%s drive=%s", deviceName, receiveDir, webdavRoot, driveLetter)
+	a.logger.Printf("settings saved: device=%s receive=%s webdav=%s", deviceName, receiveDir, webdavRoot)
 	return nil
 }
 
@@ -444,8 +428,35 @@ func (a *App) CloudShare(key string, expiryHours int) (string, error) {
 	return url, err
 }
 
+// --- Local file browser (我的电脑) ---
+
+func (a *App) ListDrives() ([]fsutil.DriveInfo, error) {
+	drives, err := fsutil.ListDrives()
+	a.reportError("list drives", err)
+	return drives, err
+}
+
+func (a *App) ListDir(path string) ([]fsutil.FileEntry, error) {
+	entries, err := fsutil.ListDir(path)
+	a.reportError("list dir", err)
+	return entries, err
+}
+
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
+}
+
+// registerNamespace adds EasyShare entries to Windows Explorer "此电脑".
+// 网盘和共享入口直接指向 WebDAV UNC 路径，不暴露盘符。
+func (a *App) registerNamespace() {
+	iconPath := namespace.IconFromBuild()
+	cloudPort := a.config.WebDAVPort + 1
+	entries := namespace.DefaultEntries(iconPath, cloudPort, a.config.WebDAVPort)
+	if err := namespace.Register(entries); err != nil {
+		a.logger.Printf("namespace register: %v", err)
+	} else {
+		a.logger.Printf("namespace registered in Explorer")
+	}
 }
 
 // --- Tray and window lifecycle ---
@@ -495,19 +506,6 @@ func (a *App) updateTrayStatus() {
 }
 
 // --- Core recovery ---
-
-// cleanStaleMapping removes a drive mapping left behind by a previously crashed
-// Core process. This is best-effort: if no mapping exists or the unmap fails,
-// startup proceeds normally.
-func (a *App) cleanStaleMapping() {
-	webdavURL := "http://127.0.0.1:" + strconv.Itoa(a.config.WebDAVPort)
-	mapper := drive.NewMapper()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := mapper.Unmap(ctx, a.config.DriveLetter, webdavURL); err == nil {
-		a.logger.Printf("cleaned stale drive mapping %s", a.config.DriveLetter)
-	}
-}
 
 // watchdog monitors Core health and restarts it if unresponsive.
 func (a *App) watchdog() {

@@ -87,7 +87,7 @@ const handleCloudDelete = async (key: string) => {
           <button
             class="shutdown-btn"
             type="button"
-            :disabled="app.mapping.value || app.shuttingDown.value || app.stopped.value"
+            :disabled="app.shuttingDown.value || app.stopped.value"
             @click="app.shutdown"
           >
             <svg viewBox="0 0 24 24"><path d="M12 3v9M7.2 5.8a8 8 0 1 0 9.6 0"/></svg>
@@ -106,7 +106,7 @@ const handleCloudDelete = async (key: string) => {
             <svg viewBox="0 0 24 24"><path d="M12 3v9M7.2 5.8a8 8 0 1 0 9.6 0"/></svg>
           </div>
           <h1>EasyShare 服务已安全退出</h1>
-          <p>网络驱动器已取消映射，WebDAV 与后台 Core 均已停止。现在可以关闭此窗口。</p>
+          <p>共享空间与网盘已停止访问，后台 Core 均已停止。现在可以关闭此窗口。</p>
           <span>运行日志保存在 {{ app.logDirectory.value }}</span>
         </div>
 
@@ -116,7 +116,7 @@ const handleCloudDelete = async (key: string) => {
             <div>
               <span class="section-label">共享中心</span>
               <h1>你好，欢迎回来</h1>
-              <p>在附近设备间传送文件，或把共享空间挂载到资源管理器。</p>
+              <p>在附近设备间传送文件，共享空间与网盘可在“此电脑”中直接访问。</p>
             </div>
             <div :class="['availability', app.snapshot.value.status.core ? 'online' : '']">
               <span />
@@ -171,14 +171,11 @@ const handleCloudDelete = async (key: string) => {
             </button>
           </div>
 
-          <!-- 网络驱动器留在概览 -->
+          <!-- 共享空间留在概览 -->
           <DrivePanel
             :status="app.snapshot.value.status"
-            :mapping="app.mapping.value"
             @start="app.startDrive"
             @stop="app.stopDrive"
-            @map="app.mapDrive"
-            @unmap="app.unmapDrive"
           />
         </template>
 

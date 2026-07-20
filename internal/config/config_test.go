@@ -28,9 +28,6 @@ func TestLoadMissingFileCreatesSecureDefaults(t *testing.T) {
 	if got.DiscoveryPort != 9527 {
 		t.Errorf("DiscoveryPort = %d, want 9527", got.DiscoveryPort)
 	}
-	if got.DriveLetter != "Z:" {
-		t.Errorf("DriveLetter = %q, want Z:", got.DriveLetter)
-	}
 	if got.DeviceID == "" {
 		t.Error("DeviceID is empty")
 	}
@@ -92,7 +89,6 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		WebDAVPort:     19080,
 		WebDAVUsername: "EasyShare",
 		WebDAVPassword: "webdav-password",
-		DriveLetter:    "Z:",
 	}
 
 	if err := Save(path, want); err != nil {

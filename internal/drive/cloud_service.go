@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -13,29 +12,26 @@ import (
 	"golang.org/x/net/webdav"
 )
 
-// Service 通过 WebDAV 协议将本地目录暴露给 Windows 资源管理器。
+// CloudService 通过 WebDAV 协议将云端文件（S3 后端）暴露给 Windows 资源管理器。
 // 仅监听 127.0.0.1（回环地址），无需认证——只有本机进程可以访问。
-type Service struct {
-	root     string
+type CloudService struct {
+	fs       webdav.FileSystem
 	mutex    sync.RWMutex
 	server   *http.Server
 	listener net.Listener
 }
 
-func NewService(root string) *Service {
-	return &Service{root: root}
+func NewCloudService(fs webdav.FileSystem) *CloudService {
+	return &CloudService{fs: fs}
 }
 
-func (service *Service) Start(port int) error {
-	if err := os.MkdirAll(service.root, 0o755); err != nil {
-		return err
-	}
+func (service *CloudService) Start(port int) error {
 	service.mutex.Lock()
 	defer service.mutex.Unlock()
 	if service.server != nil {
-		return errors.New("WebDAV already running")
+		return errors.New("cloud WebDAV already running")
 	}
-	handler := &webdav.Handler{Prefix: "/", FileSystem: webdav.Dir(service.root), LockSystem: webdav.NewMemLS()}
+	handler := &webdav.Handler{Prefix: "/", FileSystem: service.fs, LockSystem: webdav.NewMemLS()}
 	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
 		return err
@@ -46,7 +42,7 @@ func (service *Service) Start(port int) error {
 	return nil
 }
 
-func (service *Service) Stop(ctx context.Context) error {
+func (service *CloudService) Stop(ctx context.Context) error {
 	service.mutex.Lock()
 	server := service.server
 	service.server = nil
@@ -57,12 +53,14 @@ func (service *Service) Stop(ctx context.Context) error {
 	}
 	return server.Shutdown(ctx)
 }
-func (service *Service) Running() bool {
+
+func (service *CloudService) Running() bool {
 	service.mutex.RLock()
 	defer service.mutex.RUnlock()
 	return service.server != nil
 }
-func (service *Service) Addr() string {
+
+func (service *CloudService) Addr() string {
 	service.mutex.RLock()
 	defer service.mutex.RUnlock()
 	if service.listener == nil {
