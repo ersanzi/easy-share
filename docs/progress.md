@@ -72,9 +72,11 @@
 
 ## 进行中
 
-**知识平台里程碑 0：Python AI 服务最小骨架** — 搭建 `knowledge/` 服务，跑通"读文档 → 解析 → 切块向量化 → 问答"端到端闭环，证明核心命题"文档能否变成可用知识"。账号、WPS、多格式后置。详见 [`knowledge-platform.md`](knowledge-platform.md)。
+**知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线（入库/检索/权限过滤已验证），待配置真实 embedding/LLM 做语义验收。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
 ## 待开始（按优先级）
+
+> 知识平台各里程碑的详细任务、交付物与验收标准见 [`knowledge-platform-roadmap.md`](knowledge-platform-roadmap.md)。
 
 1. **知识平台里程碑 1**：扩展解析能力（docx/pdf/xlsx 多格式）、更好的切块与清洗、真正的向量库
 2. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
