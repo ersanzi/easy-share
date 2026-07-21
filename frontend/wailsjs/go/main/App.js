@@ -34,6 +34,14 @@ export function CloudUpload() {
   return window['go']['main']['App']['CloudUpload']();
 }
 
+export function CloudUploadFolder() {
+  return window['go']['main']['App']['CloudUploadFolder']();
+}
+
+export function CloudUploadPaths(arg1) {
+  return window['go']['main']['App']['CloudUploadPaths'](arg1);
+}
+
 export function DeleteTask(arg1) {
   return window['go']['main']['App']['DeleteTask'](arg1);
 }

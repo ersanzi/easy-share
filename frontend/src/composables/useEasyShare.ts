@@ -36,8 +36,9 @@ export function useEasyShare() {
   const stopped = ref(false)
   const logDirectory = ref('%LOCALAPPDATA%\\EasyShare\\logs')
   const droppedFiles = ref<string[]>([])
-  const skippedDirs = ref(0)
+  const droppedDirs = ref<string[]>([])
   const dropSending = ref(false)
+  const activeView = ref('overview')
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
@@ -148,12 +149,24 @@ export function useEasyShare() {
 
   const handleFilesDropped = async (_x: number, _y: number, paths: string[]) => {
     if (inactive() || !paths || !paths.length) return
+    // 网盘页：拖入直接上传到云端
+    if (activeView.value === 'cloud') {
+      try {
+        await core.cloudUploadPaths(paths)
+        clearError()
+      } catch (value) {
+        reportError('上传到网盘', value)
+        if (!inactive()) setError('operation', value)
+      }
+      return
+    }
+    // 其他页面：弹设备选择浮层走局域网发送
     try {
       const result = await core.processDroppedFiles(paths)
       if (inactive()) return
-      if (!result.files.length && !result.skippedDirs) return
+      if (!result.files.length && !result.dirs.length) return
       droppedFiles.value = result.files
-      skippedDirs.value = result.skippedDirs
+      droppedDirs.value = result.dirs
     } catch (value) {
       reportError('处理拖入文件', value)
     }
@@ -161,17 +174,17 @@ export function useEasyShare() {
 
   const cancelDrop = () => {
     droppedFiles.value = []
-    skippedDirs.value = 0
+    droppedDirs.value = []
     dropSending.value = false
   }
 
   const sendDropped = async (peerId: string) => {
     if (inactive() || dropSending.value) return
-    const files = droppedFiles.value
-    if (!files.length) return
+    const items = [...droppedDirs.value, ...droppedFiles.value]
+    if (!items.length) return
     dropSending.value = true
     try {
-      for (const path of files) {
+      for (const path of items) {
         await core.send(peerId, path)
       }
       clearError()
@@ -218,8 +231,9 @@ export function useEasyShare() {
     stopped,
     logDirectory,
     droppedFiles,
-    skippedDirs,
+    droppedDirs,
     dropSending,
+    activeView,
     clearError,
     refresh,
     sendDropped,
@@ -245,6 +259,16 @@ export function useEasyShare() {
         clearError()
       } catch (value) {
         reportError('上传文件', value)
+        if (!inactive()) setError('operation', value)
+      }
+    },
+    cloudUploadFolder: async () => {
+      if (inactive()) return
+      try {
+        await core.cloudUploadFolder()
+        clearError()
+      } catch (value) {
+        reportError('上传文件夹', value)
         if (!inactive()) setError('operation', value)
       }
     },

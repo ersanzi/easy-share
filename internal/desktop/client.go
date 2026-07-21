@@ -131,6 +131,12 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 // CloudUploadStream uploads a local file via multipart form data, reporting
 // progress through the callback. This enables real-time progress in the UI.
 func (client *Client) CloudUploadStream(ctx context.Context, filePath string, onProgress ProgressFunc) (cloud.UploadResult, error) {
+	return client.CloudUploadStreamWithKey(ctx, filePath, "", onProgress)
+}
+
+// CloudUploadStreamWithKey 与 CloudUploadStream 相同，但可通过 objectKey 指定
+// 含路径的对象键（如 "photos/2024/img.jpg"）。objectKey 为空时退化为文件名。
+func (client *Client) CloudUploadStreamWithKey(ctx context.Context, filePath, objectKey string, onProgress ProgressFunc) (cloud.UploadResult, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return cloud.UploadResult{}, fmt.Errorf("open file: %w", err)
@@ -167,6 +173,9 @@ func (client *Client) CloudUploadStream(ctx context.Context, filePath string, on
 	request.Header.Set("Authorization", "Bearer "+client.token)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	request.Header.Set("X-File-Size", strconv.FormatInt(info.Size(), 10))
+	if objectKey != "" {
+		request.Header.Set("X-Object-Key", objectKey)
+	}
 
 	// Use a dedicated client with no timeout for large file uploads.
 	uploadClient := &http.Client{Timeout: 0}

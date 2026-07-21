@@ -3,7 +3,7 @@ import type { Peer } from '../types/core'
 
 defineProps<{
   files: string[]
-  skippedDirs: number
+  dirs: string[]
   peers: Peer[]
   sending: boolean
 }>()
@@ -24,22 +24,25 @@ const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() ?? 
           </span>
           <div>
             <h2>发送到设备</h2>
-            <p>已选择 {{ files.length }} 个文件，挑选一台在线设备开始传输。</p>
+            <p>已选择 {{ files.length + dirs.length }} 个项目，挑选一台在线设备开始传输。</p>
           </div>
         </div>
         <button class="drop-close" type="button" aria-label="取消" :disabled="sending" @click="$emit('cancel')">×</button>
       </header>
 
       <div class="drop-files">
+        <article v-for="path in dirs" :key="path" class="drop-file-row">
+          <span class="drop-file-icon drop-file-icon--folder" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          </span>
+          <span class="drop-file-name">{{ fileName(path) }}</span>
+        </article>
         <article v-for="path in files" :key="path" class="drop-file-row">
           <span class="drop-file-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
           </span>
           <span class="drop-file-name">{{ fileName(path) }}</span>
         </article>
-        <p v-if="skippedDirs > 0" class="drop-skip-note">
-          已忽略 {{ skippedDirs }} 个文件夹，本次仅发送文件。
-        </p>
       </div>
 
       <div v-if="!peers.length" class="drop-empty">

@@ -93,20 +93,18 @@ func (a *App) Startup(ctx context.Context) {
 	a.registerNamespace()
 }
 
-// FilesDroppedEvent is the result returned to the frontend after it receives
-// dropped file paths from the WebView. Directories are filtered out and only
-// counted, so the UI can show a notice while sending files only.
+// FilesDroppedEvent 是前端拖放文件后 Go 端返回的分类结果。
+// Files 为普通文件路径，Dirs 为文件夹路径（发送时自动打包为 zip）。
 type FilesDroppedEvent struct {
-	Files       []string `json:"files"`
-	SkippedDirs int      `json:"skippedDirs"`
+	Files []string `json:"files"`
+	Dirs  []string `json:"dirs"`
 }
 
-// ProcessDroppedFiles filters the real file paths reported by the frontend's
-// native drag-drop handler, dropping directories (which cannot be sent) and
-// returning the sendable files plus the number of skipped folders.
+// ProcessDroppedFiles 对前端拖入的路径做 os.Stat 分类：文件归 Files，文件夹归 Dirs。
+// 两者均可发送（文件夹由 Core 自动打包为 zip 传输）。
 func (a *App) ProcessDroppedFiles(paths []string) FilesDroppedEvent {
 	files := make([]string, 0, len(paths))
-	skipped := 0
+	dirs := make([]string, 0)
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -114,13 +112,13 @@ func (a *App) ProcessDroppedFiles(paths []string) FilesDroppedEvent {
 			continue
 		}
 		if info.IsDir() {
-			skipped++
+			dirs = append(dirs, path)
 			continue
 		}
 		files = append(files, path)
 	}
-	a.logger.Printf("file drop: %d file(s), %d dir(s) skipped", len(files), skipped)
-	return FilesDroppedEvent{Files: files, SkippedDirs: skipped}
+	a.logger.Printf("file drop: %d file(s), %d dir(s)", len(files), len(dirs))
+	return FilesDroppedEvent{Files: files, Dirs: dirs}
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -422,6 +420,155 @@ func (a *App) CloudUpload() (string, error) {
 	}()
 
 	return fileName, nil
+}
+
+// CloudUploadPaths 将指定路径（文件或文件夹）上传到网盘，供拖拽调用。
+// 文件以文件名为键，文件夹保留目录结构（"文件夹名/相对路径"）。
+func (a *App) CloudUploadPaths(paths []string) error {
+	client, err := a.coreClient()
+	if err != nil {
+		return err
+	}
+	go func() {
+		for _, path := range paths {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				continue
+			}
+			if info.IsDir() {
+				a.uploadDir(client, path)
+			} else {
+				a.uploadSingleFile(client, path, filepath.Base(path))
+			}
+		}
+	}()
+	return nil
+}
+
+// uploadSingleFile 上传单个文件并推送进度事件。
+func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey string) {
+	fileName := filepath.Base(filePath)
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return
+	}
+	fileSize := info.Size()
+	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+		Name: fileName, Size: fileSize, Sent: 0,
+	})
+	start := time.Now()
+	var lastEmit time.Time
+	_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, func(sent, total int64) {
+		now := time.Now()
+		if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
+			return
+		}
+		lastEmit = now
+		elapsed := now.Sub(start).Seconds()
+		speed := 0.0
+		if elapsed > 0 {
+			speed = float64(sent) / elapsed
+		}
+		eta := 0.0
+		if speed > 0 {
+			eta = float64(total-sent) / speed
+		}
+		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+			Name: fileName, Size: total, Sent: sent, Speed: speed, ETA: eta,
+		})
+	})
+	if uploadErr != nil {
+		a.reportError("cloud upload", uploadErr)
+		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+			Name: fileName, Size: fileSize, Sent: 0, Error: uploadErr.Error(), Done: true,
+		})
+		return
+	}
+	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+		Name: fileName, Size: fileSize, Sent: fileSize, Done: true,
+	})
+}
+
+// uploadDir 遍历目录逐文件上传，保留目录结构。
+func (a *App) uploadDir(client *desktop.Client, dir string) {
+	folderName := filepath.Base(dir)
+	var files []string
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if len(files) == 0 {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+		Name: folderName + "/", Size: int64(len(files)), Sent: 0,
+	})
+	for i, filePath := range files {
+		rel, relErr := filepath.Rel(dir, filePath)
+		if relErr != nil {
+			continue
+		}
+		objectKey := folderName + "/" + filepath.ToSlash(rel)
+		displayName := filepath.ToSlash(rel)
+		info, statErr := os.Stat(filePath)
+		if statErr != nil {
+			continue
+		}
+		fileSize := info.Size()
+		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+			Name: folderName + "/", Size: int64(len(files)), Sent: int64(i),
+		})
+		start := time.Now()
+		var lastEmit time.Time
+		_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, func(sent, total int64) {
+			now := time.Now()
+			if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
+				return
+			}
+			lastEmit = now
+			elapsed := now.Sub(start).Seconds()
+			speed := 0.0
+			if elapsed > 0 {
+				speed = float64(sent) / elapsed
+			}
+			eta := 0.0
+			if speed > 0 {
+				eta = float64(total-sent) / speed
+			}
+			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+				Name: displayName, Size: total, Sent: sent, Speed: speed, ETA: eta,
+			})
+		})
+		if uploadErr != nil {
+			a.reportError("cloud folder upload", uploadErr)
+			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+				Name: folderName + "/", Size: int64(len(files)), Sent: int64(i), Error: uploadErr.Error(), Done: true,
+			})
+			return
+		}
+		_ = fileSize
+	}
+	a.logger.Printf("cloud folder upload done: %s (%d files)", folderName, len(files))
+	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
+		Name: folderName + "/", Size: int64(len(files)), Sent: int64(len(files)), Done: true,
+	})
+}
+
+// CloudUploadFolder 选择文件夹并逐文件上传到网盘，保留目录结构。
+// 对象键格式为 "文件夹名/相对路径"（如 "photos/2024/img.jpg"）。
+func (a *App) CloudUploadFolder() (string, error) {
+	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件夹"})
+	if err != nil || dir == "" {
+		return "", err
+	}
+	client, clientErr := a.coreClient()
+	if clientErr != nil {
+		return "", clientErr
+	}
+	go a.uploadDir(client, dir)
+	return filepath.Base(dir), nil
 }
 
 func (a *App) CloudDownload(key string) error {

@@ -222,7 +222,7 @@ export namespace main {
 	
 	export class FilesDroppedEvent {
 	    files: string[];
-	    skippedDirs: number;
+	    dirs: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FilesDroppedEvent(source);
@@ -231,7 +231,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.files = source["files"];
-	        this.skippedDirs = source["skippedDirs"];
+	        this.dirs = source["dirs"];
 	    }
 	}
 	export class Settings {

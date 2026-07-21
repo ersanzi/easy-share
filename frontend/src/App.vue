@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import CloudPanel from './components/CloudPanel.vue'
 import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
@@ -16,8 +16,14 @@ const app = useEasyShare()
 const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 
+// 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
+watch(view, value => { app.activeView.value = value })
+
 const handleCloudUpload = async () => {
   await app.cloudUpload()
+}
+const handleCloudUploadFolder = async () => {
+  await app.cloudUploadFolder()
 }
 const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)
@@ -32,9 +38,9 @@ const handleCloudDelete = async (key: string) => {
   <div class="app-shell">
     <!-- 拖拽发送：设备选择浮层 -->
     <DevicePicker
-      v-if="app.droppedFiles.value.length"
+      v-if="app.droppedFiles.value.length || app.droppedDirs.value.length"
       :files="app.droppedFiles.value"
-      :skipped-dirs="app.skippedDirs.value"
+      :dirs="app.droppedDirs.value"
       :peers="app.snapshot.value.peers"
       :sending="app.dropSending.value"
       @pick="app.sendDropped"
@@ -228,6 +234,7 @@ const handleCloudDelete = async (key: string) => {
             ref="cloudRef"
             :enabled="app.snapshot.value.status.cloudEnabled"
             @upload="handleCloudUpload"
+            @upload-folder="handleCloudUploadFolder"
             @download="handleCloudDownload"
             @delete="handleCloudDelete"
           />

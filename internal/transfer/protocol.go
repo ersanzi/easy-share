@@ -9,12 +9,19 @@ import (
 
 const maxMetadata = 64 * 1024
 
+// 传输类型常量：Kind 为空或 "file" 表示普通文件，"folder" 表示打包的文件夹
+const (
+	KindFile   = "file"
+	KindFolder = "folder"
+)
+
 type Metadata struct {
 	TaskID     string `json:"taskId"`
 	FileName   string `json:"fileName"`
 	FileSize   int64  `json:"fileSize"`
 	DeviceID   string `json:"deviceId"`
 	DeviceName string `json:"deviceName"`
+	Kind       string `json:"kind,omitempty"`
 }
 type response struct {
 	Allowed bool   `json:"allowed"`

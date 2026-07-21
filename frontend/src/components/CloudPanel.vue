@@ -14,7 +14,7 @@ interface UploadProgress {
 }
 
 defineProps<{ enabled: boolean }>()
-defineEmits<{ upload: []; download: [key: string]; delete: [key: string]; share: [key: string] }>()
+defineEmits<{ upload: []; uploadFolder: []; download: [key: string]; delete: [key: string]; share: [key: string] }>()
 
 const files = ref<CloudFile[]>([])
 const loading = ref(false)
@@ -133,6 +133,10 @@ defineExpose({ refresh: loadFiles })
         <button class="primary-button compact" type="button" @click="$emit('upload')">
           <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
           上传文件
+        </button>
+        <button class="secondary-button compact" type="button" @click="$emit('uploadFolder')">
+          <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          上传文件夹
         </button>
       </div>
 

@@ -457,6 +457,10 @@ func (server *Server) cloudUpload(writer http.ResponseWriter, request *http.Requ
 			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "file name required"})
 			return
 		}
+		// 文件夹上传时通过 X-Object-Key 指定含路径的对象键（如 "photos/2024/img.jpg"）
+		if objectKey := request.Header.Get("X-Object-Key"); objectKey != "" {
+			fileName = objectKey
+		}
 		var fileSize int64
 		if sizeHeader := request.Header.Get("X-File-Size"); sizeHeader != "" {
 			fileSize, _ = strconv.ParseInt(sizeHeader, 10, 64)

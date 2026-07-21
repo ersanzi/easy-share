@@ -22,6 +22,10 @@ export function CloudShare(arg1:string,arg2:number):Promise<string>;
 
 export function CloudUpload():Promise<string>;
 
+export function CloudUploadFolder():Promise<string>;
+
+export function CloudUploadPaths(arg1:Array<string>):Promise<void>;
+
 export function DeleteTask(arg1:string):Promise<void>;
 
 export function GetLogDirectory():Promise<string>;

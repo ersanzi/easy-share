@@ -22,16 +22,33 @@ type SendRequest struct {
 }
 
 func Send(ctx context.Context, request SendRequest) error {
-	file, err := os.Open(request.FilePath)
+	// 判断是否为文件夹传输：打包为 zip 后走同一管线
+	sendPath := request.FilePath
+	kind := KindFile
+	displayName := filepath.Base(request.FilePath)
+	info, err := os.Stat(request.FilePath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		kind = KindFolder
+		tempPath, _, zipErr := zipFolder(request.FilePath)
+		if zipErr != nil {
+			return zipErr
+		}
+		defer os.Remove(tempPath)
+		sendPath = tempPath
+	}
+	file, err := os.Open(sendPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	info, err := file.Stat()
+	fileInfo, err := file.Stat()
 	if err != nil {
 		return err
 	}
-	created, err := request.Tasks.Create(task.Task{FileName: filepath.Base(request.FilePath), LocalPath: request.FilePath, Direction: task.DirectionSend, Peer: request.PeerName, TotalBytes: info.Size(), Status: task.StatusPending})
+	created, err := request.Tasks.Create(task.Task{FileName: displayName, LocalPath: request.FilePath, Direction: task.DirectionSend, Peer: request.PeerName, TotalBytes: fileInfo.Size(), Status: task.StatusPending})
 	if err != nil {
 		return err
 	}
@@ -56,7 +73,7 @@ func Send(ctx context.Context, request SendRequest) error {
 		return fail(err)
 	}
 	defer connection.Close()
-	if err := writeMessage(connection, Metadata{TaskID: created.ID, FileName: created.FileName, FileSize: created.TotalBytes, DeviceID: request.DeviceID, DeviceName: request.DeviceName}); err != nil {
+	if err := writeMessage(connection, Metadata{TaskID: created.ID, FileName: displayName, FileSize: fileInfo.Size(), DeviceID: request.DeviceID, DeviceName: request.DeviceName, Kind: kind}); err != nil {
 		return fail(err)
 	}
 	var reply response
@@ -83,7 +100,7 @@ func Send(ctx context.Context, request SendRequest) error {
 			if writeErr != nil {
 				return fail(writeErr)
 			}
-			if time.Since(last) > 100*time.Millisecond || sent == info.Size() {
+			if time.Since(last) > 100*time.Millisecond || sent == fileInfo.Size() {
 				updated, _ = request.Tasks.Update(created.ID, func(value *task.Task) error { value.TransferredBytes = sent; return nil })
 				emit(updated)
 				last = time.Now()

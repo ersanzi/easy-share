@@ -171,7 +171,13 @@ func (receiver *Receiver) receive(value pending, saveDir string) {
 		targetDir = saveDir
 	}
 	_ = os.MkdirAll(targetDir, 0o755)
-	destination, err := availablePath(targetDir, value.metadata.FileName)
+	// 文件夹传输：FileName 是目录名，实际接收的是 zip 流
+	isFolder := value.metadata.Kind == KindFolder
+	wireName := value.metadata.FileName
+	if isFolder {
+		wireName = value.metadata.FileName + ".zip"
+	}
+	destination, err := availablePath(targetDir, wireName)
 	if err != nil {
 		receiver.fail(value.taskID, err)
 		return
@@ -199,6 +205,28 @@ func (receiver *Receiver) receive(value pending, saveDir string) {
 	if err := os.Rename(temporary, destination); err != nil {
 		receiver.fail(value.taskID, err)
 		return
+	}
+	// 文件夹传输：解压 zip 到同名目录，删除 zip 文件
+	if isFolder {
+		folderName := value.metadata.FileName
+		folderDest, dirErr := availablePath(targetDir, folderName)
+		if dirErr != nil {
+			os.Remove(destination)
+			receiver.fail(value.taskID, dirErr)
+			return
+		}
+		if err := os.MkdirAll(folderDest, 0o755); err != nil {
+			os.Remove(destination)
+			receiver.fail(value.taskID, err)
+			return
+		}
+		if err := unzipTo(destination, folderDest); err != nil {
+			os.Remove(destination)
+			os.RemoveAll(folderDest)
+			receiver.fail(value.taskID, err)
+			return
+		}
+		os.Remove(destination)
 	}
 	updated, _ = receiver.options.Tasks.Update(value.taskID, func(value *task.Task) error {
 		value.TransferredBytes = value.TotalBytes
