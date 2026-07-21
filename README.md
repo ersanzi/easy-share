@@ -1,14 +1,14 @@
 ﻿# EasyShare
 
-EasyShare 是一个面向 Windows 10/11 的局域网文件传输桌面应用。它由 Wails/Vue 桌面界面和独立 Go Core 进程组成，并可将本地共享目录映射为 Windows 网络驱动器。
+EasyShare 是一个面向 Windows 10/11 的局域网文件传输与云盘桌面应用，并正在向企业知识管理平台演进。它由 Wails/Vue 桌面界面和独立 Go Core 进程组成，可将本地共享目录映射为「此电脑」入口，并接入 RustFS 云盘。
 
 ## 当前基线
 
 当前代码处于 **阶段 2：产品体验完善（0.1.x 开发基线）**：
 
 - UDP 局域网设备发现 + TCP 流式文件发送/接收
-- 拖拽发送：文件拖入窗口即弹设备选择浮层，点选即发
-- 网盘功能（RustFS）：上传/列表/下载/删除/分享链接，实时进度
+- 拖拽发送：文件/文件夹拖入窗口即弹设备选择浮层，点选即发（文件夹自动打包传输）
+- 网盘功能（RustFS）：文件/文件夹上传、列表、下载、删除、分享链接，实时进度，拖拽上传
 - 「此电脑」品牌入口：Shell NameSpace 委托 WebDAV UNC，类 WPS 云盘体验
 - 系统托盘 + Frameless 无边框窗口 + macOS 简约风格 UI
 - 设置页、传输历史、另存为、多文件发送、速度高亮
@@ -17,7 +17,7 @@ EasyShare 是一个面向 Windows 10/11 的局域网文件传输桌面应用。�
 
 后续版本开始前请先阅读 [`docs/version-iteration.md`](docs/version-iteration.md)。
 
-长期产品方向是演进为带账号、容量、上传下载、同步文件夹和 Windows 原生入口的网络云盘，并保留局域网发现与直传；详见 [`docs/product-vision.md`](docs/product-vision.md)。
+长期产品方向是演进为企业知识管理平台：在文件采集与云盘存储之上，构建解析清洗、知识库（RAG）、AI 写作辅助，并通过 WPS 插件交付；详见 [`docs/knowledge-platform.md`](docs/knowledge-platform.md)。原网络云盘与内网协同方向见 [`docs/product-vision.md`](docs/product-vision.md)。
 
 ## 环境要求
 
