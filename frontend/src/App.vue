@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import CloudPanel from './components/CloudPanel.vue'
+import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
 import PeerList from './components/PeerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
@@ -29,6 +30,17 @@ const handleCloudDelete = async (key: string) => {
 
 <template>
   <div class="app-shell">
+    <!-- 拖拽发送：设备选择浮层 -->
+    <DevicePicker
+      v-if="app.droppedFiles.value.length"
+      :files="app.droppedFiles.value"
+      :skipped-dirs="app.skippedDirs.value"
+      :peers="app.snapshot.value.peers"
+      :sending="app.dropSending.value"
+      @pick="app.sendDropped"
+      @cancel="app.cancelDrop"
+    />
+
     <!-- 窗口控制条：拖拽区域 + 最小化/关闭 -->
     <div class="window-chrome">
       <div class="drag-region" />

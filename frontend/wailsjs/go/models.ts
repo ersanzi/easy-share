@@ -220,6 +220,20 @@ export namespace fsutil {
 
 export namespace main {
 	
+	export class FilesDroppedEvent {
+	    files: string[];
+	    skippedDirs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FilesDroppedEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.files = source["files"];
+	        this.skippedDirs = source["skippedDirs"];
+	    }
+	}
 	export class Settings {
 	    deviceName: string;
 	    receiveDir: string;

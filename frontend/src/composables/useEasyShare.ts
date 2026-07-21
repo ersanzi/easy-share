@@ -1,6 +1,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import type { CoreSnapshot } from '../types/core'
+import { OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
 const emptySnapshot = (): CoreSnapshot => ({
   status: {
@@ -34,6 +35,9 @@ export function useEasyShare() {
   const shuttingDown = ref(false)
   const stopped = ref(false)
   const logDirectory = ref('%LOCALAPPDATA%\\EasyShare\\logs')
+  const droppedFiles = ref<string[]>([])
+  const skippedDirs = ref(0)
+  const dropSending = ref(false)
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
@@ -142,9 +146,52 @@ export function useEasyShare() {
     }
   }
 
+  const handleFilesDropped = async (_x: number, _y: number, paths: string[]) => {
+    if (inactive() || !paths || !paths.length) return
+    try {
+      const result = await core.processDroppedFiles(paths)
+      if (inactive()) return
+      if (!result.files.length && !result.skippedDirs) return
+      droppedFiles.value = result.files
+      skippedDirs.value = result.skippedDirs
+    } catch (value) {
+      reportError('处理拖入文件', value)
+    }
+  }
+
+  const cancelDrop = () => {
+    droppedFiles.value = []
+    skippedDirs.value = 0
+    dropSending.value = false
+  }
+
+  const sendDropped = async (peerId: string) => {
+    if (inactive() || dropSending.value) return
+    const files = droppedFiles.value
+    if (!files.length) return
+    dropSending.value = true
+    try {
+      for (const path of files) {
+        await core.send(peerId, path)
+      }
+      clearError()
+      await refresh()
+    } catch (value) {
+      reportError('发送拖入文件', value)
+      if (!inactive()) setError('operation', value)
+    } finally {
+      if (!inactive()) {
+        dropSending.value = false
+        cancelDrop()
+      }
+    }
+  }
+
   onMounted(() => {
     disposed = false
     document.addEventListener('visibilitychange', handleVisibility)
+    // useDropTarget=false: the whole window accepts drops, no CSS marker needed.
+    OnFileDrop(handleFilesDropped, false)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
@@ -160,6 +207,7 @@ export function useEasyShare() {
     disposed = true
     stopPolling()
     document.removeEventListener('visibilitychange', handleVisibility)
+    OnFileDropOff()
   })
 
   return {
@@ -169,8 +217,13 @@ export function useEasyShare() {
     shuttingDown,
     stopped,
     logDirectory,
+    droppedFiles,
+    skippedDirs,
+    dropSending,
     clearError,
     refresh,
+    sendDropped,
+    cancelDrop,
     send: async (peerId: string) => {
       if (inactive()) return
       const paths = await core.selectFiles()

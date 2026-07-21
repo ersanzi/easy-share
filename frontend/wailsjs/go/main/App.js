@@ -62,6 +62,10 @@ export function ListDrives() {
   return window['go']['main']['App']['ListDrives']();
 }
 
+export function ProcessDroppedFiles(arg1) {
+  return window['go']['main']['App']['ProcessDroppedFiles'](arg1);
+}
+
 export function RejectTransfer(arg1) {
   return window['go']['main']['App']['RejectTransfer'](arg1);
 }

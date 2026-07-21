@@ -93,6 +93,36 @@ func (a *App) Startup(ctx context.Context) {
 	a.registerNamespace()
 }
 
+// FilesDroppedEvent is the result returned to the frontend after it receives
+// dropped file paths from the WebView. Directories are filtered out and only
+// counted, so the UI can show a notice while sending files only.
+type FilesDroppedEvent struct {
+	Files       []string `json:"files"`
+	SkippedDirs int      `json:"skippedDirs"`
+}
+
+// ProcessDroppedFiles filters the real file paths reported by the frontend's
+// native drag-drop handler, dropping directories (which cannot be sent) and
+// returning the sendable files plus the number of skipped folders.
+func (a *App) ProcessDroppedFiles(paths []string) FilesDroppedEvent {
+	files := make([]string, 0, len(paths))
+	skipped := 0
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			a.reportError("file drop stat", err)
+			continue
+		}
+		if info.IsDir() {
+			skipped++
+			continue
+		}
+		files = append(files, path)
+	}
+	a.logger.Printf("file drop: %d file(s), %d dir(s) skipped", len(files), skipped)
+	return FilesDroppedEvent{Files: files, SkippedDirs: skipped}
+}
+
 func (a *App) Shutdown(_ context.Context) {
 	a.logger.Printf("desktop window closing")
 	if a.logFile != nil {

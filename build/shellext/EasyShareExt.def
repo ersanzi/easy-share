@@ -1,0 +1,4 @@
+LIBRARY EasyShareExt.dll
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE

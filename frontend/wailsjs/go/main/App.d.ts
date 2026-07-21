@@ -36,6 +36,8 @@ export function ListDir(arg1:string):Promise<Array<fsutil.FileEntry>>;
 
 export function ListDrives():Promise<Array<fsutil.DriveInfo>>;
 
+export function ProcessDroppedFiles(arg1:Array<string>):Promise<main.FilesDroppedEvent>;
+
 export function RejectTransfer(arg1:string):Promise<void>;
 
 export function ReportFrontendError(arg1:string,arg2:string):Promise<void>;

@@ -11,6 +11,7 @@
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
+  ProcessDroppedFiles,
   RejectTransfer,
   ReportFrontendError,
   SaveSettings,
@@ -23,7 +24,7 @@
   StartDrive,
   StopDrive,
 } from '../../wailsjs/go/main/App'
-import type { CloudFile, CoreSnapshot } from '../types/core'
+import type { CloudFile, CoreSnapshot, DroppedFiles } from '../types/core'
 
 export interface SettingsData {
   deviceName: string
@@ -35,6 +36,7 @@ export const core = {
   snapshot: () => GetSnapshot() as Promise<CoreSnapshot>,
   selectFile: SelectFile,
   selectFiles: SelectFiles,
+  processDroppedFiles: (paths: string[]) => ProcessDroppedFiles(paths) as Promise<DroppedFiles>,
   send: SendFile,
   accept: AcceptTransfer,
   acceptAs: AcceptTransferAs,
