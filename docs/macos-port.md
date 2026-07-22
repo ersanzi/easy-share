@@ -65,6 +65,27 @@ bash scripts/build-mac.sh
 > 无法从 Windows 交叉编译 `.app`：Wails 在 macOS 上用系统 WKWebView + CGO，必须在 macOS 上 `wails build`。
 > 但平台相关的 Go 代码可在任意平台用 `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./internal/... ./cmd/core` 验证编译。
 
+### 3.1 CI 构建（推荐，日常无需 Mac）
+
+仓库带 `.github/workflows/build-mac.yml`，在 GitHub 的 `macos-latest` 构建机上自动出 `.app`/`.dmg`，**本地不需要有 Mac**：
+
+- **触发**：① Actions 页面手动 Run workflow（可随时按需构建，可选 `darwin/universal|arm64|amd64`）；② 推送 `v*` 标签时自动构建并发 GitHub Release。
+- **取产物**：Actions 运行记录的 Artifacts 里下载 `EasyShare-macOS`；tag 构建还在 Releases 附带 DMG。
+- **前提**：工作流只在 GitHub 上运行。主仓库在 Gitee，需镜像到 GitHub（见 §3.2）。Gitee Go 虽也有 macOS 运行器，但免费分钟数消耗快，故选用 GitHub Actions（公开仓库免费）。
+
+### 3.2 Gitee → GitHub 镜像
+
+```bash
+# 1. 在 GitHub 建空仓库（如 <user>/easy-share），不要初始化 README
+# 2. 本地仓库加 GitHub 远程，并让 origin 同时推往两处：
+git remote set-url --add --push origin <gitee-url>
+git remote set-url --add --push origin https://github.com/<user>/easy-share.git
+# 3. 推送（此后 git push origin master --tags 会同时更新 Gitee 与 GitHub）
+git push origin master --tags
+```
+
+推上去后 GitHub Actions 即识别工作流；之后每次推送/打 tag 都会自动出 mac 包。
+
 ## 4. 「此电脑」等价：Finder 挂载 WebDAV
 
 Windows 的「此电脑」品牌入口在 macOS 没有对应物。macOS 版采用 **Finder 挂载 WebDAV 卷**：

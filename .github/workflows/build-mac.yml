@@ -1,0 +1,72 @@
+# EasyShare macOS 构建工作流
+#
+# 在 GitHub 的 macos-latest 构建机上产出 .app 与 .dmg，无需本地有 Mac。
+# 触发方式：
+#   1. 手动触发（Actions 页面 → Run workflow），可随时按需构建；
+#   2. 推送 v* 标签时自动构建并发布 GitHub Release。
+#
+# 产物获取：Actions 运行记录的 Artifacts 里下载 EasyShare-macOS；
+#           tag 构建还会在 Releases 里附带 DMG。
+name: macOS Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Wails 目标平台"
+        type: choice
+        options:
+          - darwin/universal
+          - darwin/arm64
+          - darwin/amd64
+        default: darwin/universal
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装 Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Wails 环境检查
+        run: wails doctor || true
+
+      - name: 构建（Core + .app + DMG）
+        run: bash scripts/build-mac.sh
+        env:
+          WAILS_PLATFORM: ${{ github.event.inputs.platform || 'darwin/universal' }}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyShare-macOS
+          path: |
+            build/bin/EasyShare.dmg
+            build/bin/easyshare.app
+
+      - name: 发布 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/bin/EasyShare.dmg
