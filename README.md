@@ -146,6 +146,7 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 
 - 同步文件夹：双向同步、冲突处理、断点续传
 - Windows CfAPI Sync Root：占位文件、按需下载
+- macOS FileProvider 扩展：Finder 侧边栏品牌入口、占位文件、按需下载（CfAPI 的 macOS 对等）
 - 品牌图标、同步状态、右键菜单
 
 ### 阶段 6：云端与内网融合

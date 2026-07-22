@@ -106,12 +106,13 @@ Shell 扩展必须控制在最小范围，避免拖慢或崩溃 `explorer.exe`�
 - 断点续传、缓存管理、暂停/恢复和传输历史；
 - 双机、断网、重启和大文件验收。
 
-### 阶段 3：WPS 式资源管理器入口
+### 阶段 3：WPS 式系统原生入口（Windows CfAPI / macOS FileProvider）
 
-- CfAPI Sync Root、占位文件和按需下载；
-- 品牌图标、同步状态、右键菜单与选择性离线；
-- 安装器负责注册、升级、回滚和卸载清理；
-- 对 `explorer.exe` 稳定性、性能和兼容性做独立发布门禁。
+同一目标在两个平台的对等实现，可共享同步引擎设计：
+
+- **Windows**：CfAPI Sync Root、占位文件和按需下载；品牌图标、同步状态、右键菜单与选择性离线；安装器负责注册、升级、回滚和卸载清理；对 `explorer.exe` 稳定性、性能和兼容性做独立发布门禁。
+- **macOS**：FileProvider 扩展（App Extension，跑在系统 `fileproviderd`），让 EasyShare 作为带品牌图标的位置出现在 Finder 侧边栏，支持占位文件、按需下载、同步状态角标、Finder 内增删改自动同步。这是 macOS 上「此电脑」的真正对等方案，取代 mac-ready 阶段临时的 WebDAV 挂载。
+- **macOS 投入说明**：FileProvider 须用 Swift/Objective-C 编写独立扩展、Xcode 构建、Apple 开发者账号签名公证，是独立于 Go/Vue 栈的技术投入，工作量与 Windows CfAPI 相当。详见 [`macos-port.md`](macos-port.md)。
 
 ### 阶段 4：云端与内网融合
 

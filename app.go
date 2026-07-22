@@ -623,16 +623,18 @@ func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
 
-// registerNamespace adds EasyShare entries to Windows Explorer "此电脑".
-// 网盘和共享入口直接指向 WebDAV UNC 路径，不暴露盘符。
+// registerNamespace adds EasyShare entries to the system file-space entry.
+// Windows：注册「此电脑」命名空间条目；macOS：Finder 挂载 WebDAV 卷。
+// 网盘和共享入口直接指向 WebDAV，不暴露盘符。
 func (a *App) registerNamespace() {
+	namespace.Log = a.logger.Printf
 	iconPath := namespace.IconFromBuild()
 	cloudPort := a.config.WebDAVPort + 1
 	entries := namespace.DefaultEntries(iconPath, cloudPort, a.config.WebDAVPort)
 	if err := namespace.Register(entries); err != nil {
 		a.logger.Printf("namespace register: %v", err)
 	} else {
-		a.logger.Printf("namespace registered in Explorer")
+		a.logger.Printf("namespace registered")
 	}
 }
 

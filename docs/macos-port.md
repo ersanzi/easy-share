@@ -69,14 +69,19 @@ bash scripts/build-mac.sh
 
 Windows 的「此电脑」品牌入口在 macOS 没有对应物。macOS 版采用 **Finder 挂载 WebDAV 卷**：
 
-- 启动时 `namespace.Register` 通过 AppleScript `mount volume "http://127.0.0.1:PORT/"` 让 Finder 连接本机 WebDAV 服务。
-- 挂载后的卷出现在 **Finder 侧边栏与桌面**，用户双击即可进入 EasyShare 网盘/共享，体验最接近 Windows 的「此电脑」条目。
-- 网盘卷用 `WebDAVPort+1`，共享卷用 `WebDAVPort`（与 Windows 一致）。
+- 启动时 `namespace.Register` 挂载网盘卷（`WebDAVPort+1`）与共享卷（`WebDAVPort`），挂载后出现在 **Finder 侧边栏与桌面**，双击即可进入，体验最接近 Windows 的「此电脑」条目。
+- 挂载是**真机相关行为，无法在 Windows 验证**，因此做了多策略 fallback + 详细日志，便于在 Mac 上快速定位：
+  1. **幂等检测**：先看 `mount` 输出里该 URL 是否已挂载，已挂载则跳过（避免每次启动重复挂）。
+  2. **策略 1**：`osascript -e 'mount volume "http://127.0.0.1:PORT/"'`（Finder 原生，无需管理挂载点，最贴合系统；无认证 WebDAV 可能弹连接/认证框）。
+  3. **策略 2**：`mount_webdav <url> /Volumes/<名称>`（命令行直挂；创建 /Volumes 挂载点与 mount 可能需要管理员权限）。
+  4. 单卷失败不阻断其他卷；每步结果（含命令输出）都经 `namespace.Log` 写入日志。
+- **日志位置（排查首选）**：macOS 上桌面端日志在 `~/Library/Caches/EasyShare/logs/desktop.log`。挂载走了哪条策略、为何失败，都在这里。借 Mac 验证时第一时间看这个文件。
+- 退出时 `Unregister` 卸载：优先按 URL 从 `mount` 找到挂载点 `diskutil unmount force`，找不到再按卷名 eject（best-effort）。
 
 已知限制（待 Mac 上实测调优）：
 - 挂载卷的显示名由 WebDAV 服务端响应决定，不一定能精确显示为「EasyShare 网盘」。
 - 无认证的回环 WebDAV，Finder 可能弹出访客/匿名连接提示。
-- 退出时的卸载（`Unregister`）按卷名 eject，是 best-effort。
+- 若两条策略都因权限失败，日志会明确给出原因（如 Operation not permitted），届时需评估是否改用 FileProvider（见产品规划）。
 
 ## 5. 开机自启（LaunchAgent）
 
