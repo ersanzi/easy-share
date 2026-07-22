@@ -52,11 +52,13 @@
 - [x] 文件夹传输（局域网）：拖入文件夹自动 zip 打包走 TCP 管线（Metadata.Kind=folder），接收端解压到同名目录并删 zip，含 zip slip 防护
 - [x] 网盘文件夹上传：「上传文件夹」按钮 + 拖拽上传，X-Object-Key 头保留目录结构（如 photos/2024/img.jpg）
 - [x] 网盘拖拽上传：拖拽上下文感知，网盘页直接上传云端，其他页面弹设备选择浮层
+- [x] macOS 支持（mac-ready）：平台抽象与构建标签就位（fsutil/process/namespace/tray 按平台拆分），Finder 挂载 WebDAV 作「此电脑」等价入口，build-mac.sh 产出 .app/DMG。详见 docs/macos-port.md（实际 .app 构建需在 Mac 上验证）
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-23 | macOS 支持（平台抽象 + Finder 挂载 + 构建脚本） | 已完成（待 Mac 实测） |
 | 2026-07-19 | 启动即用与双击进入 | 已完成 |
 | 2026-07-19 | RustFS 对象存储基础层 | 已完成（待 Docker 集成验证） |
 | 2026-07-19 | NSIS 安装包 | 已完成 |

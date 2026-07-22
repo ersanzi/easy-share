@@ -1,14 +1,12 @@
 package main
 
 import (
-	_ "embed"
-
 	"github.com/getlantern/systray"
 )
 
-//go:embed build/windows/icon.ico
-var trayIcon []byte
-
+// trayIcon 由平台文件提供：Windows 嵌入 ICO（tray_windows.go），
+// macOS 嵌入 PNG（tray_darwin.go）。
+//
 // startTray launches the system tray icon and menu in a background goroutine.
 // It communicates with the App through channels to show/hide the window or quit.
 func startTray(app *App) {

@@ -22,6 +22,21 @@ const (
 	defaultWebDAVPort    = 19080
 )
 
+// DefaultConfigPath 返回配置文件的默认路径。
+// Windows 沿用 %LOCALAPPDATA%\EasyShare\config.json（保持既有行为不变）；
+// 其他平台（macOS 为 ~/Library/Application Support）回退到 os.UserConfigDir()。
+func DefaultConfigPath() string {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		if dir, err := os.UserConfigDir(); err == nil {
+			base = dir
+		} else {
+			base = "."
+		}
+	}
+	return filepath.Join(base, "EasyShare", "config.json")
+}
+
 // CloudConfig holds RustFS (S3-compatible) connection settings.
 // An empty Endpoint means the cloud drive is disabled.
 type CloudConfig struct {

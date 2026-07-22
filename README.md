@@ -1,6 +1,6 @@
 ﻿# EasyShare
 
-EasyShare 是一个面向 Windows 10/11 的局域网文件传输与云盘桌面应用，并正在向企业知识管理平台演进。它由 Wails/Vue 桌面界面和独立 Go Core 进程组成，可将本地共享目录映射为「此电脑」入口，并接入 RustFS 云盘。
+EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云盘桌面应用，并正在向企业知识管理平台演进。它由 Wails/Vue 桌面界面和独立 Go Core 进程组成，可将本地共享目录映射为「此电脑」入口（macOS 上为 Finder 挂载卷），并接入 RustFS 云盘。macOS 移植说明见 [`docs/macos-port.md`](docs/macos-port.md)。
 
 ## 当前基线
 
@@ -159,10 +159,10 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 
 ## 当前限制
 
-- 仅正式支持 Windows；「此电脑」入口依赖 Windows WebClient 服务。
+- Windows 为主要支持平台；macOS 已 mac-ready（平台抽象与构建脚本就位），但 `.app` 实际构建与运行需在 Mac 上验证。
+- Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
-- 文件传输仅支持单文件，不支持文件夹整体发送。
-- 网盘上传不支持文件夹和断点续传，无在线预览。
+- 网盘上传不支持断点续传与在线预览。
 - 暂无自动升级和 CI 流水线，依赖本地 scripts/build.ps1 全量验证。
 
 

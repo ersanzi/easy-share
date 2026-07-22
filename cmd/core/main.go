@@ -5,7 +5,6 @@ import (
 	"flag"
 	"log"
 	"net"
-	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -40,7 +39,7 @@ func main() {
 	defer stopSignals()
 	ctx, cancelCore := context.WithCancel(signalCtx)
 	defer cancelCore()
-	defaultPath := filepath.Join(os.Getenv("LOCALAPPDATA"), "EasyShare", "config.json")
+	defaultPath := config.DefaultConfigPath()
 	configPath := flag.String("config", defaultPath, "path to the EasyShare configuration")
 	flag.Parse()
 	value, err := config.Load(*configPath)

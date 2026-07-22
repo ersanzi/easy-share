@@ -62,7 +62,7 @@ func (a *App) Startup(ctx context.Context) {
 		runtime.LogError(ctx, "open runtime log: "+err.Error())
 	}
 
-	a.configPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "EasyShare", "config.json")
+	a.configPath = config.DefaultConfigPath()
 	value, err := config.Load(a.configPath)
 	if err != nil {
 		a.reportError("load config", err)
