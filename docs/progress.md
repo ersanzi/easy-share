@@ -79,7 +79,7 @@
 
 ## 进行中
 
-**P0 双平台发布验收** — 准备推送不稳定测试 tag `v0.1.0-test.1`，验证 macOS/Windows Actions 是否能构建并将可下载产物上传到同一个 GitHub Release。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
+**P0 双平台发布验收** — `v0.1.0-test.1` 已验证 Release 可下载，但发现 Windows 安装包缺失；正在修复 NSIS PATH 与强校验，并准备 `v0.1.0-test.2` 复验。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 **知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线。AI 模型选型已确定：Embedding 用阿里云百炼 qwen3.7-text-embedding（1024 维），LLM 用 SenseNova deepseek-v4-flash。真实模型语义验收已通过（入库/检索/生成均正常）。里程碑 0 完成，下一步进入里程碑 1（多格式解析 + 切块优化 + 向量库升级）。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 

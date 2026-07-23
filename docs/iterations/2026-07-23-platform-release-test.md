@@ -1,7 +1,7 @@
 # P0 双平台发布验收：不稳定测试 tag
 
 > 日期：2026-07-23
-> 状态：进行中
+> 状态：进行中（test.1 已发现 Windows 安装包缺失，准备 test.2 复验）
 
 ## 背景
 
@@ -57,6 +57,30 @@ git push github --delete v0.1.0-test.1
 
 删除远程 tag 后，还需要在 GitHub Releases 页面手动删除对应测试 Release。
 
-## 结果
+## test.1 结果
 
-待 tag workflow 完成后补充运行链接、Release 资产清单和真实机器验收结论。
+`v0.1.0-test.1` 已成功推送到 Gitee 和 GitHub。GitHub 上的 macOS Build #10 与 Windows Build #3 均执行成功，两个 workflow 能并发写入同一个 Release，Release 下载功能基本可用。
+
+已实际下载并核对以下资产：
+
+- `EasyShare.dmg`：24,394,491 字节，SHA-256 通过；
+- `EasyShare.app.zip`：22,763,977 字节，SHA-256 通过；
+- `SHA256SUMS.txt`：164 字节；
+- `easyshare.exe`：11,576,832 字节；
+- `easyshare-core.exe`：13,927,936 字节。
+
+发现两个问题：
+
+1. Windows workflow 没有生成 NSIS 安装包。根因是 Chocolatey 安装 NSIS 后，没有把 `${env:ProgramFiles(x86)}\NSIS` 显式写入后续步骤的 `GITHUB_PATH`；原产物校验又只发 warning，导致 workflow 误报成功。
+2. 测试 tag 创建的 Release 默认不是 Prerelease，容易被误认为稳定版本。
+
+修复方案：
+
+- 安装 NSIS 后检查 `makensis.exe` 并写入 `GITHUB_PATH`；
+- Windows 安装包缺失时直接让 workflow 失败；
+- tag 名包含 `-test.` 时给 Release 设置 `prerelease: true`；
+- 创建 `v0.1.0-test.2` 重新验证完整的 macOS + Windows Release 资产。
+
+## 最终结果
+
+待 `v0.1.0-test.2` 完成后补充。

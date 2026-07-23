@@ -43,7 +43,16 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: 安装 NSIS
-        run: choco install nsis --no-progress -y
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          $nsisDir = "${env:ProgramFiles(x86)}\NSIS"
+          $makensis = Join-Path $nsisDir 'makensis.exe'
+          if (-not (Test-Path $makensis)) {
+            throw "NSIS makensis not found: $makensis"
+          }
+          $nsisDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $makensis /VERSION
 
       - name: 前端构建与测试
         run: |
@@ -80,11 +89,10 @@ jobs:
             Write-Host "OK: $f ($('{0:N2} MB' -f ((Get-Item $f).Length / 1MB)))"
           }
           $installer = Get-ChildItem build/bin -Filter '*-installer.exe' | Select-Object -First 1
-          if ($installer) {
-            Write-Host "OK: $($installer.Name) ($('{0:N2} MB' -f ($installer.Length / 1MB)))"
-          } else {
-            Write-Host "::warning::Installer not found"
+          if (-not $installer) {
+            throw "Windows installer not found in build/bin"
           }
+          Write-Host "OK: $($installer.Name) ($('{0:N2} MB' -f ($installer.Length / 1MB)))"
 
       - name: 上传产物
         uses: actions/upload-artifact@v6
@@ -101,6 +109,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-test.') }}
           files: |
             build/bin/easyshare.exe
             build/bin/easyshare-core.exe
