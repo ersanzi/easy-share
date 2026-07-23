@@ -79,6 +79,8 @@
 
 ## 进行中
 
+**P0 双平台发布验收** — 准备推送不稳定测试 tag `v0.1.0-test.1`，验证 macOS/Windows Actions 是否能构建并将可下载产物上传到同一个 GitHub Release。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
+
 **知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线（入库/检索/权限过滤已验证）。AI 模型选型已确定并配置：Embedding 用阿里云百炼 qwen3.7-text-embedding（1024 维），LLM 用 SenseNova deepseek-v4-flash。下一步：接入真实模型做语义检索验收。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
 ## 待开始（按优先级）
