@@ -2,7 +2,7 @@
 
 > 本文记录 EasyShare 从消费级文件工具向企业知识管理平台演进的总体方向与架构决策。
 > 这是长期方向文档，逐版交付情况以 [`progress.md`](progress.md) 和 [`iterations/`](iterations/README.md) 为准。
-> 最后更新：2026-07-22
+> 最后更新：2026-07-23
 
 ## 1. 定位演进
 
@@ -137,5 +137,6 @@ Java 控制面后续置于独立目录（如 `platform/`），现阶段未建。
 
 - 向量库选型：骨架阶段用 Chroma（本地、轻量），规模化后评估 Milvus 等。
 - 消息队列选型（异步解析）：RabbitMQ vs Kafka，里程碑 2 前后确定。
-- Embedding 提供方：需一个支持 embedding 的 OpenAI 兼容端点，或本地 sentence-transformers（架构上可替换）。
+- ~~Embedding 提供方~~（已决策 2026-07-23）：阿里云百炼 DashScope，模型 `qwen3.7-text-embedding`，1024 维，OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
+- ~~LLM 提供方~~（已决策 2026-07-23）：SenseNova 平台，模型 `deepseek-v4-flash`，OpenAI 兼容端点 `https://token.sensenova.cn/v1`。推理模型，响应含 reasoning_content。
 - 文件 ID 体系：Java 文件登记与 Python 向量记录共用的稳定 ID 规则，里程碑 2 接入 Java 时确定。

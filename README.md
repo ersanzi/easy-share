@@ -92,7 +92,20 @@ build/bin/easyshare.app
 build/bin/EasyShare.dmg
 ```
 
-仓库的 `.github/workflows/build-mac.yml` 支持 Actions 页面手动触发，以及推送 `v*` 标签时构建并发布 DMG。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
+仓库的 `.github/workflows/build-mac.yml` 有三种主要使用方式：
+
+1. 推送 `dev`：自动构建，完成后在该次 Actions 运行的 **Artifacts** 下载 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；
+2. `workflow_dispatch`：在 Actions 页面手动运行，并选择 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`；
+3. 推送 `v*` tag：自动构建并创建 GitHub Release，发布同一组安装包与校验文件。
+
+日常开发流程是先同时推送 Gitee 与 GitHub：
+
+```bash
+git push origin dev
+git push github dev
+```
+
+随后等待 GitHub Actions 自动构建，并从 Artifacts 下载 DMG。发布版本时把 tag 同时推送到两个仓库；GitHub 上的 tag 构建成功后会自动创建 Release。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
 
 ## 运行数据
 

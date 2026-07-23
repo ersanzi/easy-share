@@ -1,0 +1,107 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - dev
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - master
+      - dev
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 安装 Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装 NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: 前端构建与测试
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          npm --prefix frontend test
+
+      - name: Go 编译与测试
+        run: |
+          go build ./...
+          go test ./...
+
+      - name: 安装 Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+          echo "$(go env GOPATH)/bin" >> $env:GITHUB_PATH
+
+      - name: 构建 Core
+        run: |
+          New-Item -ItemType Directory -Force -Path build/bin | Out-Null
+          go build -o build/bin/easyshare-core.exe ./cmd/core
+
+      - name: 构建桌面端与安装包
+        run: wails build --nsis
+
+      - name: 校验产物
+        run: |
+          $files = @(
+            'build/bin/easyshare.exe',
+            'build/bin/easyshare-core.exe'
+          )
+          foreach ($f in $files) {
+            if (-not (Test-Path $f)) { throw "Missing: $f" }
+            Write-Host "OK: $f ($('{0:N2} MB' -f ((Get-Item $f).Length / 1MB)))"
+          }
+          $installer = Get-ChildItem build/bin -Filter '*-installer.exe' | Select-Object -First 1
+          if ($installer) {
+            Write-Host "OK: $($installer.Name) ($('{0:N2} MB' -f ($installer.Length / 1MB)))"
+          } else {
+            Write-Host "::warning::Installer not found"
+          }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v6
+        with:
+          name: EasyShare-Windows-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/bin/easyshare.exe
+            build/bin/easyshare-core.exe
+            build/bin/*-installer.exe
+
+      - name: 发布 Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/bin/easyshare.exe
+            build/bin/easyshare-core.exe
+            build/bin/*-installer.exe

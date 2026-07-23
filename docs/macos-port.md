@@ -79,22 +79,32 @@ lipo -info build/bin/easyshare-core
 
 仓库带 `.github/workflows/build-mac.yml`，在 GitHub 的 `macos-latest` 构建机上自动出 `.app`/`.dmg`，**本地不需要有 Mac**：
 
-- **触发**：① Actions 页面手动 Run workflow（可随时按需构建，可选 `darwin/universal|arm64|amd64`）；② 推送 `v*` 标签时自动构建并发 GitHub Release。
-- **取产物**：Actions 运行记录的 Artifacts 里下载 `EasyShare-macOS`；tag 构建还在 Releases 附带 DMG。
-- **前提**：工作流只在 GitHub 上运行。主仓库在 Gitee，需镜像到 GitHub（见 §3.2）。Gitee Go 虽也有 macOS 运行器，但免费分钟数消耗快，故选用 GitHub Actions（公开仓库免费）。
+- **推送 `dev`**：GitHub 收到 `dev` 更新后自动构建；在该次 Actions 运行的 Artifacts 下载 `EasyShare-macOS-<run_number>`，其中包含 DMG、`.app.zip` 与 `SHA256SUMS.txt`。
+- **手动运行**：在 Actions 页面选择 `macOS Build` → Run workflow，通过 `workflow_dispatch` 选择 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`。
+- **推送 `v*` tag**：自动构建，并在成功后创建 GitHub Release，附带 DMG、`.app.zip` 与 SHA-256 校验文件。
+- **补充校验**：当前 workflow 还会对目标分支的 Pull Request 执行构建验证；它不创建 Release。
+- **前提**：工作流只在 GitHub 上运行，因此仅推送 Gitee 不会触发 macOS Actions。
 
-### 3.2 Gitee → GitHub 镜像
+### 3.2 双仓库日常推送
+
+项目使用两个独立 remote：`origin` 指向 Gitee，`github` 指向 GitHub。每次提交后都要分别推送：
 
 ```bash
-# 1. 在 GitHub 建空仓库（如 <user>/easy-share），不要初始化 README
-# 2. 本地仓库加 GitHub 远程，并让 origin 同时推往两处：
-git remote set-url --add --push origin <gitee-url>
-git remote set-url --add --push origin https://github.com/<user>/easy-share.git
-# 3. 推送（此后 git push origin master --tags 会同时更新 Gitee 与 GitHub）
-git push origin master --tags
+git push origin dev
+git push github dev
 ```
 
-推上去后 GitHub Actions 即识别工作流；之后每次推送/打 tag 都会自动出 mac 包。
+日常闭环：`git push github dev` → GitHub Actions 自动构建 → 打开对应运行记录 → 从 Artifacts 下载 DMG。
+
+发布版本时先创建 tag，再同时推送到两个仓库：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+git push github v1.0.0
+```
+
+GitHub 收到 `v*` tag 后会自动运行 macOS 构建，并在成功后创建 Release。若 Gitee 已更新但 Actions 没有新运行，优先检查是否漏执行了 `git push github dev` 或 `git push github <tag>`。
 
 ## 4. 「此电脑」等价：Finder 挂载 WebDAV
 

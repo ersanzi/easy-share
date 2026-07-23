@@ -136,6 +136,20 @@ type 取值：feat / fix / refactor / chore / docs / test
 
 示例：`feat: 拖拽发送 — 原生文件拖放 + 设备选择浮层`
 
+### 双仓库推送
+
+项目同时维护两个远程仓库，提交代码后**两个都要推送**：
+
+- `origin` → Gitee（https://gitee.com/liilaifeng/easy-share.git）
+- `github` → GitHub（ssh://git@ssh.github.com:443/ersanzi/easy-share.git）
+
+```bash
+git push origin dev
+git push github dev
+```
+
+GitHub 仓库承载 macOS CI 构建（GitHub Actions），Gitee 为国内主仓库。tag 推送同理：`git push origin v1.0.0 && git push github v1.0.0`。
+
 ## 环境备忘
 
 - Windows 10/11，bash 环境（Git Bash）

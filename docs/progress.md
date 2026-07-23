@@ -53,11 +53,13 @@
 - [x] 网盘文件夹上传：「上传文件夹」按钮 + 拖拽上传，X-Object-Key 头保留目录结构（如 photos/2024/img.jpg）
 - [x] 网盘拖拽上传：拖拽上下文感知，网盘页直接上传云端，其他页面弹设备选择浮层
 - [x] macOS 支持（待真机复验）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)；GitHub Actions macOS Build 已通过编译、测试、universal 架构校验和产物上传
+- [x] 双仓库推送与 macOS CI 日常流程：提交后分别推送 `origin`（Gitee）和 `github`（GitHub）；`dev` 自动构建、手动触发可选架构、`v*` tag 自动创建 Release
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-23 | 双仓库推送规范与 macOS CI 日常流程 | 已完成 |
 | 2026-07-23 | GitHub Actions macOS 自动打包与产物校验 | 已完成（待 Mac 真机验收） |
 | 2026-07-23 | macOS AppDelegate 链接冲突修复 | 已完成（待 Mac 复验） |
 | 2026-07-23 | macOS 支持（平台抽象 + Finder 挂载 + 构建脚本） | 已完成（待 Mac 实测） |
@@ -73,12 +75,11 @@
 | 2026-07-20 | 拖拽发送（原生文件拖放 + 设备选择浮层） | 已完成 |
 | 2026-07-22 | 文件夹传输 + 网盘文件夹/拖拽上传 | 已完成 |
 | 2026-07-22 | 知识平台里程碑 0（Python AI 服务骨架） | 进行中 |
+| 2026-07-23 | AI 模型选型与凭据配置（百炼 embedding + SenseNova LLM） | 已完成 |
 
 ## 进行中
 
-**GitHub Actions macOS 自动打包** — GitHub 仓库与 SSH 推送链路已打通，正在重新登记并运行 macOS workflow，目标是稳定产出经过架构校验的 `.app.zip`、DMG 与 SHA-256 校验文件。详见 [`iterations/2026-07-23-github-macos-packaging.md`](iterations/2026-07-23-github-macos-packaging.md)。
-
-**知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线（入库/检索/权限过滤已验证），待配置真实 embedding/LLM 做语义验收。详见 [`knowledge-platform.md`](knowledge-platform.md)。
+**知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线（入库/检索/权限过滤已验证）。AI 模型选型已确定并配置：Embedding 用阿里云百炼 qwen3.7-text-embedding（1024 维），LLM 用 SenseNova deepseek-v4-flash。下一步：接入真实模型做语义检索验收。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
 ## 待开始（按优先级）
 
