@@ -79,12 +79,13 @@
 | 2026-07-22 | 文件夹传输 + 网盘文件夹/拖拽上传 | 已完成 |
 | 2026-07-22 | 知识平台里程碑 0（Python AI 服务骨架） | 进行中 |
 | 2026-07-23 | AI 模型选型与凭据配置（百炼 embedding + SenseNova LLM） | 已完成 |
+| 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线。AI 模型选型已确定：Embedding 用阿里云百炼 qwen3.7-text-embedding（1024 维），LLM 用 SenseNova deepseek-v4-flash。真实模型语义验收已通过（入库/检索/生成均正常）。里程碑 0 完成，下一步进入里程碑 1（多格式解析 + 切块优化 + 向量库升级）。详见 [`knowledge-platform.md`](knowledge-platform.md)。
+**知识平台里程碑 1：管线架构落地** — 里程碑 0 已完成（端到端语义验收通过）。管线架构选型已确定：解析用 Unstructured + PaddleOCR（扫描件），切块用 chunk_by_title（结构感知），向量库用 Milvus Standalone（复用 RustFS），RAG 编排自写薄层。下一步：引入 Unstructured 替换现有解析、部署 Milvus、重写切块与向量存储。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6。
 
 ## 待开始（按优先级）
 

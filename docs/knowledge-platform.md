@@ -42,7 +42,7 @@ EasyShare 起步于消费级局域网文件传输与云盘工具（对标百度�
 
 | 层 | 语言 | 职责 | 技术栈 |
 | --- | --- | --- | --- |
-| 控制面 | Java | 账号、认证、数据权限（RBAC）、多租户、文件元数据、业务编排、对客户端的 API 网关、大数据分析 | Spring Boot + MyBatis-Plus + Doris（复用 qn-trusted-connector 经验） |
+| 控制面 | Java | 账号、认证、数据权限（RBAC）、多租户、文件元数据、业务编排、对客户端的 API 网关 | Spring Boot + MyBatis-Plus + PostgreSQL |
 | 计算面 | Python | 文档解析、文本清洗、切块、向量化、向量检索、RAG、LLM 网关 | FastAPI + 解析库 + 向量库 |
 
 **为什么分两层**：控制面是重业务、重事务、重权限的活，Java 生态成熟且团队有经验；计算面是重生态、重算法库的活，Python 在文档解析与 AI 检索上的库明显领先。强行单一栈会在其中一环吃亏。
@@ -133,10 +133,55 @@ knowledge/                  # Python AI 服务（计算面）
 
 Java 控制面后续置于独立目录（如 `platform/`），现阶段未建。
 
+### 3.6 管线技术选型（2026-07-23 确定）
+
+设计原则：**能不造轮子就不造，每环用市面上最成熟的库；自写薄编排串联，不绑定 RAG 框架。**
+
+| 环节 | 选型 | 理由 |
+| --- | --- | --- |
+| 文档解析 | **Unstructured**（主编排）+ **PaddleOCR**（扫描件 fallback） | Unstructured 覆盖 20+ 格式、输出 Element 分类（Title/Table/NarrativeText）对切块友好；PaddleOCR 中文 OCR 精度开源天花板，处理无文本层的扫描件/图片 PDF |
+| 清洗 | 薄规则层，基于 Unstructured Element 类型过滤（去 Header/Footer/PageBreak 等） | 简单，不需要框架 |
+| 切块 | Unstructured `chunk_by_title`（尊重文档结构）+ max_characters 上限 | 按标题/段落/表格边界切，不机械按字数；后续可叠加语义切块 |
+| 向量库 | **Milvus Standalone**（docker-compose：etcd + Milvus，对象存储复用 RustFS，不额外跑 MinIO） | 商业级天花板（亿级向量、混合检索）、国产生态好、Standalone 模式资源可控 |
+| Embedding | 阿里云百炼 `qwen3.7-text-embedding`（1024 维，OpenAI 兼容） | 已验证 |
+| LLM | SenseNova `deepseek-v4-flash`（OpenAI 兼容，推理模型） | 已验证 |
+| Reranking | 待定（bge-reranker 本地 / 百炼 rerank API） | 里程碑 1 后期按需引入 |
+| RAG 编排 | **自写薄层**（~100 行），OpenAI SDK 直调 LLM | 完全可控、好调试、权限过滤自由加；不引入 LlamaIndex/LangChain 避免框架锁定 |
+| 任务队列 | 现阶段 FastAPI BackgroundTasks；里程碑 2 接 Celery + Redis | 不过早引入重基建 |
+| 控制面数据库 | **PostgreSQL**（里程碑 2） | 关系型业务数据（用户/角色/租户/文件元数据/知识库配置）；后续可启用 pgvector 扩展 |
+
+**解析流程细节**：
+
+```
+文件进入 → 判断类型
+  ├── 原生数字文档（docx/xlsx/pptx/可复制 PDF）→ Unstructured 直接提取
+  └── 扫描件 / 图片 PDF（无文本层）→ PaddleOCR 识别 → 再走 Unstructured 标准化
+```
+
+**Milvus 部署**：
+
+```yaml
+# docker-compose（知识平台基建）
+services:
+  etcd:       # Milvus 元数据
+  milvus:     # 向量引擎，minio.address 指向 RustFS 127.0.0.1:9000
+  # RustFS 已有，不重复部署
+```
+
+**不选 RAG 框架（LlamaIndex / LangChain / Dify）的理由**：
+
+- 架构是 Java 控制面 + Python 计算面，中间有 REST 边界和权限过滤逻辑，框架假设自己管全流程，硬塞会别扭
+- 商业级产品要稳定和可控，不要框架版本 breaking change 风险
+- 每一环已经用了最好的库，中间串联只需 50-100 行代码
+- 高级 RAG 技巧（reranking、multi-query）可单点引入，不需要整个框架
+
 ## 7. 待决策
 
-- 向量库选型：骨架阶段用 Chroma（本地、轻量），规模化后评估 Milvus 等。
+- ~~向量库选型~~（已决策）：Milvus Standalone。
+- ~~Embedding 提供方~~（已决策）：百炼 qwen3.7-text-embedding。
+- ~~LLM 提供方~~（已决策）：SenseNova deepseek-v4-flash。
+- ~~控制面数据库~~（已决策）：PostgreSQL。
 - 消息队列选型（异步解析）：RabbitMQ vs Kafka，里程碑 2 前后确定。
-- ~~Embedding 提供方~~（已决策 2026-07-23）：阿里云百炼 DashScope，模型 `qwen3.7-text-embedding`，1024 维，OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
-- ~~LLM 提供方~~（已决策 2026-07-23）：SenseNova 平台，模型 `deepseek-v4-flash`，OpenAI 兼容端点 `https://token.sensenova.cn/v1`。推理模型，响应含 reasoning_content。
-- 文件 ID 体系：Java 文件登记与 Python 向量记录共用的稳定 ID 规则，里程碑 2 接入 Java 时确定。
+- 文件 ID 体系：Java 文件登记与 Python 向量记录共用的稳定 ID 规则，里程碑 2 接入 Java 时确定（现阶段 Python 用 UUID 占位）。
+- Reranking 方案：bge-reranker 本地部署 vs 百炼 rerank API，里程碑 1 后期评估。
+- PaddleOCR 集成方式：作为 Unstructured 的 OCR 后端接入，还是独立服务判断后分流。
