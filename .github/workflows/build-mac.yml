@@ -84,6 +84,12 @@ jobs:
           tail -n 160 build/logs/macos-build.log | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+          log_tail="$(tail -n 80 build/logs/macos-build.log)"
+          log_tail="${log_tail//'%'/'%25'}"
+          log_tail="${log_tail//$'\r'/'%0D'}"
+          log_tail="${log_tail//$'\n'/'%0A'}"
+          echo "::error title=macOS 打包失败::$log_tail"
+
       - name: 上传打包诊断日志
         if: failure()
         uses: actions/upload-artifact@v6
