@@ -23,6 +23,7 @@
 - universal 构建必须使用 `lipo -verify_arch arm64 x86_64` 同时检查桌面端和捆绑 Core。
 - `.app` 使用 macOS `ditto` 打成 zip，避免普通跨平台压缩破坏可执行权限、扩展属性和包结构。
 - Artifact 同时上传 DMG、`.app.zip` 和 `SHA256SUMS.txt`；找不到产物时立即失败。
+- 打包命令通过 `tee` 保存完整日志；失败时把末尾 160 行写入 Job Summary 并上传诊断 Artifact，便于无 Mac 环境下远程定位。
 - 使用 concurrency 取消同一引用的旧构建，避免重复占用 macOS runner。
 
 ## 代码影响

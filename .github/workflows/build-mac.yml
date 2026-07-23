@@ -71,7 +71,27 @@ jobs:
         run: wails doctor || true
 
       - name: 构建 Core、App 与 DMG
-        run: bash scripts/build-mac.sh
+        run: |
+          mkdir -p build/logs
+          set -o pipefail
+          bash scripts/build-mac.sh 2>&1 | tee build/logs/macos-build.log
+
+      - name: 输出打包失败摘要
+        if: failure() && hashFiles('build/logs/macos-build.log') != ''
+        run: |
+          echo "### macOS 打包失败日志" >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 160 build/logs/macos-build.log | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传打包诊断日志
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: EasyShare-macOS-diagnostics-${{ github.run_number }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: build/logs
 
       - name: 校验并整理产物
         run: |
