@@ -54,6 +54,7 @@
 - [x] 网盘拖拽上传：拖拽上下文感知，网盘页直接上传云端，其他页面弹设备选择浮层
 - [x] macOS 支持（待真机复验）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)；GitHub Actions macOS Build 已通过编译、测试、universal 架构校验和产物上传
 - [x] 双仓库推送与 macOS CI 日常流程：提交后分别推送 `origin`（Gitee）和 `github`（GitHub）；`dev` 自动构建、手动触发可选架构、`v*` tag 自动创建 Release
+- [x] P0 双平台测试 Release：`v0.1.0-test.2` 已验证 macOS/Windows Actions、Prerelease 创建和 6 个 Release 资产下载
 
 ### 迭代记录
 
@@ -79,7 +80,7 @@
 
 ## 进行中
 
-**P0 双平台发布验收** — `v0.1.0-test.1` 已验证 Release 可下载，但发现 Windows 安装包缺失；正在修复 NSIS PATH 与强校验，并准备 `v0.1.0-test.2` 复验。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
+**P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 **知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线。AI 模型选型已确定：Embedding 用阿里云百炼 qwen3.7-text-embedding（1024 维），LLM 用 SenseNova deepseek-v4-flash。真实模型语义验收已通过（入库/检索/生成均正常）。里程碑 0 完成，下一步进入里程碑 1（多格式解析 + 切块优化 + 向量库升级）。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 

@@ -1,7 +1,7 @@
 # P0 双平台发布验收：不稳定测试 tag
 
 > 日期：2026-07-23
-> 状态：进行中（test.1 已发现 Windows 安装包缺失，准备 test.2 复验）
+> 状态：已完成（Release 下载闭环通过，真机安装验收待后续执行）
 
 ## 背景
 
@@ -81,6 +81,26 @@ git push github --delete v0.1.0-test.1
 - tag 名包含 `-test.` 时给 Release 设置 `prerelease: true`；
 - 创建 `v0.1.0-test.2` 重新验证完整的 macOS + Windows Release 资产。
 
-## 最终结果
+## test.2 最终结果
 
-待 `v0.1.0-test.2` 完成后补充。
+`v0.1.0-test.2` 已成功推送到 Gitee 和 GitHub。两个 tag workflow 均成功：
+
+- macOS Build #13：成功；
+- Windows Build #6：成功；
+- Release：[`v0.1.0-test.2`](https://github.com/ersanzi/easy-share/releases/tag/v0.1.0-test.2)；
+- Release 已标记为 **Prerelease**。
+
+Release 共包含 6 个资产，均已实际下载并验证文件大小：
+
+| 资产 | 大小 | 验证 |
+| --- | ---: | --- |
+| `EasyShare.dmg` | 24,394,478 bytes | SHA-256 通过 |
+| `EasyShare.app.zip` | 22,763,972 bytes | SHA-256 通过 |
+| `SHA256SUMS.txt` | 164 bytes | 已下载 |
+| `EasyShare-amd64-installer.exe` | 13,698,761 bytes | PE 文件头通过 |
+| `easyshare.exe` | 11,576,832 bytes | 已下载 |
+| `easyshare-core.exe` | 13,927,936 bytes | 已下载 |
+
+结论：**tag → macOS/Windows Actions → 同一 GitHub Prerelease → 资产下载** 的闭环已经跑通。两个 workflow 并发发布时没有发生 Release 冲突，资产也没有互相覆盖。
+
+仍未完成的部分是下载后的真实设备验收：需要在 Apple Silicon Mac、Intel Mac 和 Windows 10/11 上分别安装并启动，确认菜单栏、Finder WebDAV、Windows 安装/卸载和「此电脑」入口。
