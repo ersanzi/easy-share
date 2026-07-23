@@ -35,6 +35,8 @@ Wails v2 没有内置系统托盘支持。选择 `github.com/getlantern/systray`
 - API 简洁：SetIcon、AddMenuItem、ClickedCh channel
 - 社区广泛使用，与 Wails v2 兼容良好
 
+> 2026-07-23 更新：此 systray 决策仅适用于 Windows。其 Darwin 实现会与 Wails 重复定义并争用 `AppDelegate`，macOS 已改为不接管应用生命周期的原生 AppKit `NSStatusItem`；详见 [`2026-07-23-macos-tray-linker-conflict.md`](2026-07-23-macos-tray-linker-conflict.md)。
+
 ### 2. 关闭拦截与退出标志
 
 在 `options.App` 中设置 `OnBeforeClose`：

@@ -12,8 +12,41 @@ cd "$(dirname "$0")/.."
 
 PLATFORM="${WAILS_PLATFORM:-darwin/universal}"
 
-echo "==> 构建 Core 后台服务"
-go build -o build/bin/easyshare-core ./cmd/core
+mkdir -p build/bin
+
+build_core() {
+  local arch="$1"
+  local output="$2"
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -o "$output" ./cmd/core
+}
+
+echo "==> 构建 Core 后台服务（平台: $PLATFORM）"
+case "$PLATFORM" in
+  darwin/universal)
+    if ! command -v lipo >/dev/null 2>&1; then
+      echo "错误: universal 构建需要 Xcode Command Line Tools 提供的 lipo。" >&2
+      exit 1
+    fi
+    CORE_TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$CORE_TMP_DIR"' EXIT
+    build_core arm64 "$CORE_TMP_DIR/easyshare-core-arm64"
+    build_core amd64 "$CORE_TMP_DIR/easyshare-core-amd64"
+    lipo -create \
+      "$CORE_TMP_DIR/easyshare-core-arm64" \
+      "$CORE_TMP_DIR/easyshare-core-amd64" \
+      -output build/bin/easyshare-core
+    ;;
+  darwin/arm64)
+    build_core arm64 build/bin/easyshare-core
+    ;;
+  darwin/amd64)
+    build_core amd64 build/bin/easyshare-core
+    ;;
+  *)
+    echo "错误: 不支持的 WAILS_PLATFORM=$PLATFORM（仅支持 darwin/universal、darwin/arm64、darwin/amd64）。" >&2
+    exit 2
+    ;;
+esac
 
 # 应用图标（.app 需要 iconfile.icns）。若缺失则从 appicon.png 生成完整 iconset。
 if [ ! -f build/darwin/iconfile.icns ]; then

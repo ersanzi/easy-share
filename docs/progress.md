@@ -1,7 +1,7 @@
 # EasyShare 开发进度
 
 > 本文是开发者和 AI 协作的进度快照。每次迭代开始和结束时更新。
-> 最后更新：2026-07-22
+> 最后更新：2026-07-23
 
 ## 当前位置
 
@@ -52,12 +52,13 @@
 - [x] 文件夹传输（局域网）：拖入文件夹自动 zip 打包走 TCP 管线（Metadata.Kind=folder），接收端解压到同名目录并删 zip，含 zip slip 防护
 - [x] 网盘文件夹上传：「上传文件夹」按钮 + 拖拽上传，X-Object-Key 头保留目录结构（如 photos/2024/img.jpg）
 - [x] 网盘拖拽上传：拖拽上下文感知，网盘页直接上传云端，其他页面弹设备选择浮层
-- [x] macOS 支持（mac-ready）：平台抽象与构建标签就位（fsutil/process/namespace/tray 按平台拆分），Finder 挂载 WebDAV 作「此电脑」等价入口，build-mac.sh 产出 .app/DMG。详见 docs/macos-port.md（实际 .app 构建需在 Mac 上验证）
+- [x] macOS 支持（待真机复验）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-23 | macOS AppDelegate 链接冲突修复 | 已完成（待 Mac 复验） |
 | 2026-07-23 | macOS 支持（平台抽象 + Finder 挂载 + 构建脚本） | 已完成（待 Mac 实测） |
 | 2026-07-19 | 启动即用与双击进入 | 已完成 |
 | 2026-07-19 | RustFS 对象存储基础层 | 已完成（待 Docker 集成验证） |
@@ -90,7 +91,8 @@
 ## 已知阻塞
 
 - Docker daemon 不可用，RustFS 集成测试暂时跳过（不影响当前阶段）
-- 暂无 CI 流水线，依赖本地 scripts/build.ps1 全量验证
+- macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
+- macOS 已有手动/tag 触发的 GitHub Actions；Windows 尚无 CI，仍依赖本地 `scripts/build.ps1` 全量验证
 
 ## 版本约定
 

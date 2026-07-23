@@ -1,7 +1,7 @@
 # AGENTS.md — EasyShare 项目开发指导
 
 > 本文件是项目开发的通用指导，适用于任何参与本项目的人类开发者或 AI 助手。
-> 最后更新：2026-07-21
+> 最后更新：2026-07-23
 
 ## 产品定位与设计哲学
 
@@ -15,21 +15,22 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具，对�
 ## 技术栈
 
 - **桌面端**：Wails v2.13.0 + Vue 3 + TypeScript（单窗口，Frameless）
-- **后台服务**：Go 1.25 独立进程（easyshare-core.exe），HTTP API 仅监听 127.0.0.1
+- **后台服务**：Go 1.25 独立进程（Windows `easyshare-core.exe` / macOS `easyshare-core`），HTTP API 仅监听 127.0.0.1
 - **对象存储**：RustFS（S3 兼容），AWS SDK v2
-- **安装包**：NSIS 3.x（project.nsi 需 UTF-8 BOM）
-- **Shell 扩展**：MinGW g++ 编译 COM DLL（build/shellext/）
+- **安装包**：Windows NSIS 3.x（project.nsi 需 UTF-8 BOM）/ macOS DMG
+- **Shell 扩展**：MinGW g++ 编译 COM DLL（build/shellext/，仅 Windows）
 
 ## 双进程架构
 
 ```
-easyshare.exe (Wails 桌面端)
-  ├── 自动探测/启动 easyshare-core.exe
+easyshare(.exe) (Wails 桌面端)
+  ├── 自动探测/启动 easyshare-core(.exe)
   ├── 通过 HTTP 127.0.0.1:19080 与 Core 通信
-  ├── 系统托盘（getlantern/systray，ICO 图标）
-  └── Shell NameSpace 注册（此电脑入口）
+  ├── Windows 托盘（getlantern/systray + ICO）
+  ├── macOS 菜单栏（AppKit NSStatusItem + PNG，不接管 Wails AppDelegate）
+  └── 系统文件入口（Windows Shell NameSpace / macOS Finder WebDAV 挂载）
 
-easyshare-core.exe (后台服务)
+easyshare-core(.exe) (后台服务)
   ├── UDP 设备发现 :9527
   ├── TCP 文件传输 :9528
   ├── WebDAV :19080（仅回环，无认证）
@@ -113,6 +114,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 | 此电脑入口显示名异常 | 删除 CLSID 下 LocalizedString/System.Category/TileInfo 等劫持显示名的旧值 |
 | WebClient 剥离 DavWWWRoot 前缀 | webdav.Handler 用 `Prefix:"/"` 即正确，不要设 `/DavWWWRoot` |
 | Explorer 缓存顽固 | 改注册表后须 Stop-Process explorer 重启，清 iconcache/thumbcache |
+| macOS 链接重复 `AppDelegate` | Wails 与 getlantern/systray 的 Darwin 实现都会定义/接管 AppDelegate；macOS 不得导入 systray，必须使用只创建 `NSStatusItem` 的 `tray_native_darwin.m`，且不可用 linker suppress 掩盖 |
 
 ## 架构边界
 

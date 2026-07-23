@@ -9,11 +9,11 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 - UDP 局域网设备发现 + TCP 流式文件发送/接收
 - 拖拽发送：文件/文件夹拖入窗口即弹设备选择浮层，点选即发（文件夹自动打包传输）
 - 网盘功能（RustFS）：文件/文件夹上传、列表、下载、删除、分享链接，实时进度，拖拽上传
-- 「此电脑」品牌入口：Shell NameSpace 委托 WebDAV UNC，类 WPS 云盘体验
-- 系统托盘 + Frameless 无边框窗口 + macOS 简约风格 UI
+- 系统文件入口：Windows Shell NameSpace 委托 WebDAV UNC；macOS Finder 挂载 WebDAV 卷
+- 系统托盘/菜单栏（Windows systray、macOS 原生 AppKit）+ Frameless 无边框窗口 + macOS 简约风格 UI
 - 设置页、传输历史、另存为、多文件发送、速度高亮
 - Core 异常恢复（watchdog + 配置热加载）
-- NSIS 安装包 + 开机自启动
+- Windows NSIS 安装包 + 开机自启动；macOS `.app`/DMG 构建脚本
 
 后续版本开始前请先阅读 [`docs/version-iteration.md`](docs/version-iteration.md)。
 
@@ -21,13 +21,13 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 
 ## 环境要求
 
-- Windows 10/11
+- Windows 10/11，或 macOS（构建 `.app` 需要 Xcode Command Line Tools）
 - Go 1.25（以 `go.mod` 为准）
 - Node.js 与 npm
 - Wails CLI 2.13.0
-- NSIS 3.x（构建安装包需要，`winget install NSIS.NSIS`）
-- Microsoft WebView2 Runtime
-- Windows `WebClient` 服务（网络驱动器功能需要）
+- NSIS 3.x（仅 Windows 安装包需要，`winget install NSIS.NSIS`）
+- Microsoft WebView2 Runtime（仅 Windows）
+- Windows `WebClient` 服务（仅 Windows「此电脑」入口需要）
 
 安装 Wails CLI：
 
@@ -62,7 +62,7 @@ go run ./cmd/core
 
 ## 测试与生产构建
 
-完整流水线：
+Windows 完整流水线：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
@@ -77,6 +77,22 @@ build/bin/EasyShare-amd64-installer.exe
 ```
 
 构建前应先退出正在运行的 EasyShare，否则 Windows 可能锁定可执行文件。
+
+macOS 在 Mac 或 GitHub Actions macOS runner 上构建：
+
+```bash
+bash scripts/build-mac.sh
+```
+
+默认产出 universal `.app`/DMG，并用 `lipo` 合成同时包含 arm64 与 x86_64 的 Core：
+
+```text
+build/bin/easyshare-core
+build/bin/easyshare.app
+build/bin/EasyShare.dmg
+```
+
+仓库的 `.github/workflows/build-mac.yml` 支持 Actions 页面手动触发，以及推送 `v*` 标签时构建并发布 DMG。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
 
 ## 运行数据
 
@@ -95,6 +111,7 @@ build/bin/EasyShare-amd64-installer.exe
 - [`docs/architecture.md`](docs/architecture.md)：当前架构、端口、API 和关键流程
 - [`docs/product-vision.md`](docs/product-vision.md)：网络云盘、Windows 原生入口与内网协同的长期方向
 - [`docs/development.md`](docs/development.md)：开发环境、改动入口、测试方法
+- [`docs/macos-port.md`](docs/macos-port.md)：macOS 平台差异、构建、Finder 集成与排障
 - [`docs/version-iteration.md`](docs/version-iteration.md)：下一版本规划和交付流程
 - [`docs/iterations/README.md`](docs/iterations/README.md)：逐版本目标、决策和验收记录
 - [`docs/troubleshooting.md`](docs/troubleshooting.md)：日志与常见 Windows 故障
@@ -127,7 +144,9 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - 网盘功能（RustFS）：上传/列表/下载/删除/分享，实时进度
 - 「此电脑」品牌入口（Shell NameSpace，去盘符）
 - 拖拽发送（原生文件拖放 + 设备选择浮层）
-- 下一步：文件夹传输、网盘增强（分片/预览）
+- 文件夹传输：局域网自动打包/安全解压，网盘保留目录结构并支持拖拽上传
+- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（待 Mac 真机复验）
+- 下一步：网盘增强（大文件分片、断点续传、在线预览）
 
 ### 阶段 3：安全加固
 
@@ -160,10 +179,10 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 
 ## 当前限制
 
-- Windows 为主要支持平台；macOS 已 mac-ready（平台抽象与构建脚本就位），但 `.app` 实际构建与运行需在 Mac 上验证。
+- Windows 为主要支持平台；首次 Mac 构建暴露的 Wails/systray `AppDelegate` 链接冲突已从架构上修复，修复后的 `.app`/DMG 与菜单栏行为仍待 Mac 真机复验。
 - Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传不支持断点续传与在线预览。
-- 暂无自动升级和 CI 流水线，依赖本地 scripts/build.ps1 全量验证。
+- 暂无自动升级；macOS 已有手动/tag 触发的 GitHub Actions，Windows 仍依赖本地 `scripts/build.ps1` 全量验证。
 
 

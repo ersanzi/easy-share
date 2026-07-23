@@ -14,9 +14,15 @@ const mocks = vi.hoisted(() => ({
   stopDrive: vi.fn(),
   reportError: vi.fn().mockResolvedValue(undefined),
   logDirectory: vi.fn(),
+  onFileDrop: vi.fn(),
+  onFileDropOff: vi.fn(),
 }))
 
 vi.mock('../../services/core', () => ({ core: mocks }))
+vi.mock('../../../wailsjs/runtime/runtime', () => ({
+  OnFileDrop: mocks.onFileDrop,
+  OnFileDropOff: mocks.onFileDropOff,
+}))
 
 const runningSnapshot = {
   status: { core: true, discovery: true, receiver: true, webdav: true, cloudEnabled: false },

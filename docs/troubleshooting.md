@@ -5,10 +5,11 @@
 日志目录：
 
 ```text
-%LOCALAPPDATA%\EasyShare\logs
+Windows: %LOCALAPPDATA%\EasyShare\logs
+macOS:   ~/Library/Caches/EasyShare/logs
 ```
 
-按 `Win + R` 粘贴上述路径即可打开。复现一次后按时间查看：
+Windows 可按 `Win + R` 粘贴对应路径；macOS 可在 Finder 使用“前往文件夹”。复现一次后按时间查看：
 
 | 文件 | 主要内容 |
 | --- | --- |
@@ -142,3 +143,38 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 `go test -race` 在部分 Windows/MinGW 工具链中可能因运行时 DLL 报 `0xc0000139`；这属于环境限制，不能替代普通测试和真实 Windows 集成验收。
 
+## 9. macOS 构建报重复 `AppDelegate`
+
+典型错误：
+
+```text
+duplicate symbol '_OBJC_METACLASS_$_AppDelegate'
+duplicate symbol '_OBJC_CLASS_$_AppDelegate'
+ld: 2 duplicate symbols
+clang: error: linker command failed with exit code 1
+```
+
+根因不是 Xcode Command Line Tools 未安装，也不是 Go 1.26 本身。Wails v2.13.0 的 macOS 后端和 `getlantern/systray` v1.2.2 的 Darwin 实现都定义全局 Objective-C 类 `AppDelegate`；后者还会设置 `NSApp.delegate` 并启动自己的事件循环。二者进入同一桌面二进制后必然冲突。
+
+当前实现中 systray 只允许进入 Windows 构建，macOS 使用 `tray_native_darwin.m` 创建 `NSStatusItem`。在 Mac 仓库根目录检查：
+
+```bash
+go list -deps . | grep getlantern/systray
+# 预期无输出
+
+bash scripts/build-mac.sh
+lipo -info build/bin/easyshare-core
+# universal 构建应同时包含 x86_64 与 arm64
+```
+
+若第一条命令仍输出 systray，先确认已拉取 2026-07-23 的平台托盘拆分，并检查是否有新的无构建标签 Go 文件再次导入该库。不要使用 `-Wl,-multiply_defined,suppress`、覆盖 `NSApp.delegate` 或让托盘 bridge 调用 `[NSApp run]`：这些绕过方式即使链接成功，也会破坏 Wails 窗口与退出生命周期。
+
+Wails 生成绑定时出现以下消息通常不是失败：
+
+```text
+Not found: time.Time
+```
+
+它在成功的 Windows 构建中也会出现。应继续向下查看最终的 `Done` 或真正的 Go/Vite/clang `ERROR`；本次构建中止点是后面的 `duplicate symbol`。
+
+完整 macOS 构建、Finder 挂载与菜单栏排障见 [`macos-port.md`](macos-port.md)。

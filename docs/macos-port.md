@@ -1,7 +1,7 @@
 # EasyShare macOS 支持指南
 
 > 本文记录 EasyShare 的 macOS 移植：平台差异、构建方式、原生集成与排障。
-> 状态：**代码已 mac-ready**（平台抽象与构建标签就位，internal 包与 Core 可通过 `GOOS=darwin` 交叉编译验证），但 `.app` 实际构建与运行验证必须在 Mac 上完成（Wails 依赖 macOS WebKit/CGO，无法从 Windows 交叉编译）。
+> 状态：**代码已 mac-ready，待真机复验**。首次 Mac universal 构建已进入桌面端链接阶段，并暴露 Wails/systray 重复 `AppDelegate`；现已改为原生 AppKit 托盘并完成 Windows 与交叉验证，但修复后的 `.app` 构建和运行仍须在 Mac 上确认（Wails 依赖 macOS WebKit/CGO，无法从 Windows 完成最终链接）。
 > 最后更新：2026-07-23
 
 ## 1. 支持范围
@@ -13,7 +13,7 @@
 | 能力 | Windows | macOS |
 | --- | --- | --- |
 | 「此电脑」品牌入口 | Shell NameSpace 注册表条目 | **Finder 挂载 WebDAV 卷**（侧边栏可见） |
-| 系统托盘 | systray + ICO 图标 | systray 菜单栏 + PNG 图标 |
+| 系统托盘 | getlantern/systray + ICO 图标 | 自有 AppKit `NSStatusItem` + PNG 图标（不接管 Wails `AppDelegate`） |
 | 后台 Core 启动 | `easyshare-core.exe` + 隐藏窗口 | `easyshare-core` + 独立会话（Setsid） |
 | 磁盘/卷浏览 | 枚举盘符（kernel32） | 枚举 `/Volumes` 挂载卷（statfs） |
 | 配置路径 | `%LOCALAPPDATA%\EasyShare` | `~/Library/Application Support/EasyShare` |
@@ -44,10 +44,13 @@ internal/namespace/
 
 internal/config/config.go  # DefaultConfigPath() 跨平台路径
 
-tray.go                # 跨平台：startTray
-tray_windows.go        # //go:build windows — 嵌入 icon.ico
-tray_darwin.go         # //go:build darwin  — 嵌入 trayicon.png
+tray_windows.go        # //go:build windows — systray 菜单 + icon.ico
+tray_darwin.go         # //go:build darwin  — cgo 回调、状态同步 + trayicon.png
+tray_native_darwin.h   # AppKit bridge 接口
+tray_native_darwin.m   # NSStatusItem/NSMenu；不定义 AppDelegate、不启动事件循环
 ```
+
+托盘必须按平台完整隔离，而不能只拆分图标。`getlantern/systray` 保留为 Windows 依赖；它的 Darwin 实现会自定义 `AppDelegate` 并接管 `NSApp` 事件循环，与 Wails v2.13.0 不兼容。
 
 ## 3. 构建（在 Mac 上）
 
@@ -61,6 +64,13 @@ bash scripts/build-mac.sh
 ```
 
 产物：`build/bin/easyshare-core`、`build/bin/easyshare.app`、`build/bin/EasyShare.dmg`。
+
+默认的 `darwin/universal` 会分别构建 arm64、amd64 Core，并通过 `lipo` 合成为 universal `easyshare-core` 后放入 `.app/Contents/MacOS/`。这一步不能省略，否则 Apple Silicon 主机上生成的 universal 桌面端会捆绑仅 arm64 的 Core，Rosetta/x86_64 模式下无法启动后台服务。可检查：
+
+```bash
+lipo -info build/bin/easyshare-core
+# 预期同时包含 x86_64 和 arm64
+```
 
 > 无法从 Windows 交叉编译 `.app`：Wails 在 macOS 上用系统 WKWebView + CGO，必须在 macOS 上 `wails build`。
 > 但平台相关的 Go 代码可在任意平台用 `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build ./internal/... ./cmd/core` 验证编译。
@@ -130,7 +140,7 @@ macOS 用 LaunchAgent 替代 Windows 注册表 Run 键。在 `~/Library/LaunchAg
 
 ## 6. 待 Mac 侧完成 / 验证
 
-- [ ] 在 Mac 上运行 `scripts/build-mac.sh`，确认 `.app` 与 DMG 产出。
+- [ ] 拉取 2026-07-23 托盘修复后，在 Mac 上重跑 `scripts/build-mac.sh`，确认不再出现重复 `AppDelegate`，并产出 `.app` 与 DMG。
 - [ ] 实测 Finder WebDAV 挂载：能否挂载、显示名、双击进入、退出卸载。
 - [ ] 实测菜单栏图标外观（当前复用应用图标，建议替换为黑白 template 图以适配深浅色）。
 - [ ] 实测局域网发现/传输在 macOS 防火墙下的行为（首次可能弹防火墙授权）。
@@ -143,7 +153,12 @@ macOS 用 LaunchAgent 替代 Windows 注册表 Run 键。在 `~/Library/LaunchAg
 | --- | --- |
 | Windows 上 `wails build -platform darwin` 失败 | 预期行为——macOS 版必须在 Mac 上构建（WebKit/CGO） |
 | Mac 上 `go build` 报 fsutil/namespace/desktop 未定义 | 确认这些包有 `_darwin.go` 文件且带 `//go:build darwin` 标签 |
+| clang/ld 报 `duplicate symbol ... AppDelegate` | Wails 与会接管应用生命周期的 Darwin 托盘库同时进入了二进制。运行 `go list -deps . \| grep getlantern/systray`，当前实现应无输出；macOS 托盘必须使用 `tray_native_darwin.m`，不能再次导入 systray |
+| 绑定生成反复显示 `Not found: time.Time` | Wails v2.13.0 的非致命绑定生成提示；继续看末尾是否出现 `Done` 以及真正的 clang/Go/Vite `ERROR`，不要把它误判为链接失败 |
+| universal `.app` 中 Core 无法启动或报架构不兼容 | 用 `lipo -info build/bin/easyshare-core` 检查是否同时包含 arm64/x86_64；必须通过新版 `scripts/build-mac.sh` 构建，不能手工塞入宿主单架构 Core |
 | Finder 不挂载 WebDAV | 确认 Core 已启动且 WebDAV 端口可达；`curl http://127.0.0.1:19080/` 验证；查看 osascript 报错 |
 | 菜单栏图标过大/颜色不对 | 当前用应用图标占位，替换 `build/darwin/trayicon.png` 为 22px 黑白 template 图 |
 | 配置文件找不到 | macOS 在 `~/Library/Application Support/EasyShare/config.json`（非 LOCALAPPDATA） |
 | `.app` 打不开（Gatekeeper） | 系统设置→隐私与安全性→仍要打开；或签名公证 |
+
+不要用 `-Wl,-multiply_defined,suppress`、覆盖 `NSApp.delegate` 或让托盘库再次调用 `[NSApp run]` 来“修好”重复符号。这些方法最多掩盖链接错误，会让 Wails 窗口、关闭拦截、退出回调在运行期失效。AppKit 菜单的新建和更新也必须继续调度到 main queue。
