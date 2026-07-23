@@ -189,10 +189,3 @@ jobs:
             build/bin/EasyShare.app.zip
             build/bin/SHA256SUMS.txt
 
-      - name: One-time repair preview Release flag
-        if: ${{ github.ref == 'refs/heads/dev' && contains(github.event.head_commit.message, '[repair-preview-release]') }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v0.1.0-preview.1
-          prerelease: true
-          make_latest: false
