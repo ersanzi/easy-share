@@ -76,21 +76,78 @@ jobs:
           set -o pipefail
           bash scripts/build-mac.sh 2>&1 | tee build/logs/macos-build.log
 
-      - name: 输出打包失败摘要
-        if: failure() && hashFiles('build/logs/macos-build.log') != ''
+      - name: 校验并整理产物
         run: |
-          echo "### macOS 打包失败日志" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p build/logs
+          set -o pipefail
+          {
+            set -euo pipefail
+
+            APP_PATH="build/bin/easyshare.app"
+            APP_EXEC="$APP_PATH/Contents/MacOS/easyshare"
+            CORE_EXEC="$APP_PATH/Contents/MacOS/easyshare-core"
+            DMG_PATH="build/bin/EasyShare.dmg"
+            APP_ZIP="build/bin/EasyShare.app.zip"
+
+            test -d "$APP_PATH"
+            test -x "$APP_EXEC"
+            test -x "$CORE_EXEC"
+            test -s "$DMG_PATH"
+
+            verify_arches() {
+              local binary="$1"
+              shift
+              local actual
+              actual="$(lipo -archs "$binary")"
+              echo "$binary architectures: $actual"
+
+              for expected in "$@"; do
+                echo "$actual" | tr ' ' '\n' | grep -Fxq "$expected" || {
+                  echo "missing architecture $expected in $binary"
+                  return 1
+                }
+              done
+            }
+
+            case "$WAILS_PLATFORM" in
+              darwin/universal)
+                verify_arches "$APP_EXEC" arm64 x86_64
+                verify_arches "$CORE_EXEC" arm64 x86_64
+                ;;
+              darwin/arm64)
+                verify_arches "$APP_EXEC" arm64
+                verify_arches "$CORE_EXEC" arm64
+                ;;
+              darwin/amd64)
+                verify_arches "$APP_EXEC" x86_64
+                verify_arches "$CORE_EXEC" x86_64
+                ;;
+              *)
+                echo "unsupported WAILS_PLATFORM=$WAILS_PLATFORM"
+                exit 1
+                ;;
+            esac
+
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"
+            cd build/bin
+            shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
+          } 2>&1 | tee build/logs/artifact-validation.log
+
+      - name: 输出构建失败摘要
+        if: failure() && hashFiles('build/logs/*.log') != ''
+        run: |
+          echo "### macOS 构建失败日志" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 160 build/logs/macos-build.log | tee -a "$GITHUB_STEP_SUMMARY"
+          cat build/logs/*.log | tail -n 200 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
-          log_tail="$(tail -n 80 build/logs/macos-build.log)"
+          log_tail="$(cat build/logs/*.log | tail -n 100)"
           log_tail="${log_tail//'%'/'%25'}"
           log_tail="${log_tail//$'\r'/'%0D'}"
           log_tail="${log_tail//$'\n'/'%0A'}"
-          echo "::error title=macOS 打包失败::$log_tail"
+          echo "::error title=macOS 构建失败::$log_tail"
 
-      - name: 上传打包诊断日志
+      - name: 上传构建诊断日志
         if: failure()
         uses: actions/upload-artifact@v6
         with:
@@ -98,41 +155,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           path: build/logs
-
-      - name: 校验并整理产物
-        run: |
-          set -euo pipefail
-
-          APP_PATH="build/bin/easyshare.app"
-          APP_EXEC="$APP_PATH/Contents/MacOS/easyshare"
-          CORE_EXEC="$APP_PATH/Contents/MacOS/easyshare-core"
-          DMG_PATH="build/bin/EasyShare.dmg"
-          APP_ZIP="build/bin/EasyShare.app.zip"
-
-          test -d "$APP_PATH"
-          test -x "$APP_EXEC"
-          test -x "$CORE_EXEC"
-          test -s "$DMG_PATH"
-
-          case "$WAILS_PLATFORM" in
-            darwin/universal)
-              lipo -verify_arch arm64 x86_64 "$APP_EXEC"
-              lipo -verify_arch arm64 x86_64 "$CORE_EXEC"
-              ;;
-            darwin/arm64)
-              lipo -verify_arch arm64 "$APP_EXEC"
-              lipo -verify_arch arm64 "$CORE_EXEC"
-              ;;
-            darwin/amd64)
-              lipo -verify_arch x86_64 "$APP_EXEC"
-              lipo -verify_arch x86_64 "$CORE_EXEC"
-              ;;
-          esac
-
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"
-          cd build/bin
-          shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
-
       - name: 上传产物
         uses: actions/upload-artifact@v6
         with:

@@ -20,10 +20,10 @@
 - 增加 `master` push 和 Pull Request 触发。对 workflow 文件做一次真实提交，可强制 GitHub 重新扫描默认分支，同时之后每次主分支变更都能发现 macOS 回归。
 - 保留 `workflow_dispatch` 的目标架构选择以及 `v*` tag 发布。
 - runner 先执行 Go、前端编译与测试，再进入 Wails 打包，避免把单元测试失败混入打包日志。
-- universal 构建必须使用 `lipo -verify_arch arm64 x86_64` 同时检查桌面端和捆绑 Core。
+- universal 构建使用 `lipo -archs` 读取实际架构，再逐项检查 `arm64` 与 `x86_64`；避免 `lipo -verify_arch` 在不同 macOS runner 工具链上的参数兼容问题。
 - `.app` 使用 macOS `ditto` 打成 zip，避免普通跨平台压缩破坏可执行权限、扩展属性和包结构。
 - Artifact 同时上传 DMG、`.app.zip` 和 `SHA256SUMS.txt`；找不到产物时立即失败。
-- 打包命令通过 `tee` 保存完整日志；失败时把末尾 160 行写入 Job Summary 并上传诊断 Artifact，便于无 Mac 环境下远程定位。
+- 打包和产物校验都通过 `tee` 保存完整日志；失败时把合并日志末尾 200 行写入 Job Summary 并上传诊断 Artifact，便于无 Mac 环境下远程定位。
 - 使用 concurrency 取消同一引用的旧构建，避免重复占用 macOS runner。
 
 ## 代码影响
@@ -74,6 +74,15 @@ scripts/build-mac.sh: line 23: PLATFORM…: unbound variable
 ```
 
 脚本启用了 `set -u`，`$PLATFORM` 后紧邻中文全角标点时，在 runner 的 Bash/locale 组合下被错误解释为更长的变量名。已把所有同类位置改为 `${PLATFORM}`，变量边界不再依赖后续字符。
+
+## 第三次 runner 结果
+
+Core、桌面端和 DMG 已经成功构建，失败只发生在“校验并整理产物”步骤。原校验直接调用 `lipo -verify_arch`，改为使用 `lipo -archs` 取得实际架构列表，然后用精确匹配逐项验证。
+
+同时调整诊断步骤顺序：产物校验写入 `build/logs/artifact-validation.log`，打包或校验任一阶段失败时，都会输出 Job Summary、Check Annotation 并上传 diagnostics Artifact。
+
+本次修复已在 Windows 开发机完成 YAML 解析、`git diff --check` 和项目全量构建测试，待 GitHub macOS runner 复验。
+
 ## 排障方法（省的下次还有问题）
 
 - 文件存在但 Actions 左侧不显示：先查 `/repos/<owner>/<repo>/actions/workflows`，区分“文件已推送”和“workflow 已登记”。对默认分支上的 workflow 做一次有效提交通常会触发重新扫描。
