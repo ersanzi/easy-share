@@ -188,4 +188,3 @@ jobs:
             build/bin/EasyShare.dmg
             build/bin/EasyShare.app.zip
             build/bin/SHA256SUMS.txt
-

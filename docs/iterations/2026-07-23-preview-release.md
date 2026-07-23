@@ -22,14 +22,20 @@
 
 ## 技术决策
 
-GitHub Actions 不再只识别 `-test.`。凡 tag 名包含连字符，按 SemVer 预发布版本处理：
+GitHub Actions 不再只识别 `-test.`。两个 workflow 分别使用显式的预发布/正式发布步骤：
 
 ```yaml
-prerelease: ${{ contains(github.ref_name, '-') }}
+# 预发布 tag
+if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
+prerelease: true
+make_latest: false
+
+# 正式 tag
+if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+prerelease: false
 ```
 
 这样 `v0.1.0-test.2`、`v0.1.0-preview.1`、`v0.1.0-beta.1`、`v0.1.0-rc.1` 都会创建 Prerelease；`v0.1.0` 才会创建正式 Release。
-
 ## 发布流程
 
 ```bash
@@ -52,7 +58,7 @@ GitHub 收到 tag 后，macOS 与 Windows workflow 会分别构建并把资产�
 
 ## 排障方法
 
-- Release 被错误标成正式版：检查两个 workflow 的 `prerelease` 表达式是否仍只匹配 `-test.`；
+- Release 被错误标成正式版：检查两个 workflow 是否仍按“带 `-` 的 tag → `prerelease: true`、无后缀 tag → `prerelease: false`”拆分发布步骤；
 - 只在 Gitee 有 tag：补执行 `git push github <tag>`，否则不会触发 GitHub Actions；
 - 一个 Release 只有单平台资产：分别检查 macOS Build 和 Windows Build 的 tag run；两个 workflow 会并发更新同一个 Release；
 - 页面没有“Latest”徽标不代表发布失败：GitHub 的正式 Latest 默认只授予非 Prerelease；预览版应显示 Pre-release。
@@ -73,3 +79,9 @@ Release 下载地址：
 `https://github.com/ersanzi/easy-share/releases/tag/v0.1.0-preview.1`
 
 该版本正确显示为 **Pre-release**，不会冒充正式版 **Latest**。旧的 `v0.1.0-test.1` 若仍显示 Latest，是因为它历史上创建时没有设置 Prerelease；这不影响新的 preview 版本构建与下载。
+
+## 发布后修正
+
+`v0.1.0-preview.1` 的两个 tag workflow 并发更新同一个 Release 时，初次 API 检查曾短暂看到 `prerelease: true`，最终状态却被写回 `false`。为避免动态布尔表达式和并发更新造成误判，后续改为显式的 `prerelease: true/false` 两个发布步骤，并设置预发布版本 `make_latest: false`。
+
+通过一次性 GitHub Actions 修正步骤，已将 `v0.1.0-preview.1` 恢复为 Prerelease；确认 API 返回 `prerelease: true` 后，已移除该一次性步骤。最终 workflow 只保留通用的预发布/正式版分流规则。
