@@ -105,11 +105,22 @@ jobs:
             build/bin/easyshare-core.exe
             build/bin/*-installer.exe
 
-      - name: 发布 Release（仅 tag 触发）
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish prerelease Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: true
+          make_latest: false
+          files: |
+            build/bin/easyshare.exe
+            build/bin/easyshare-core.exe
+            build/bin/*-installer.exe
+
+      - name: Publish stable Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: false
           files: |
             build/bin/easyshare.exe
             build/bin/easyshare-core.exe
