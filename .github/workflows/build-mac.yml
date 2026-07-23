@@ -36,31 +36,31 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "go.mod"
           cache: true
 
       - name: 安装 Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
-      - name: Go 编译与测试
-        run: |
-          go build ./...
-          go test ./...
 
       - name: 前端构建与测试
         run: |
           npm --prefix frontend ci
           npm --prefix frontend run build
           npm --prefix frontend test
+
+      - name: Go 编译与测试
+        run: |
+          go build ./...
+          go test ./...
 
       - name: 安装 Wails CLI
         run: |
@@ -108,7 +108,7 @@ jobs:
           shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: EasyShare-macOS-${{ github.run_number }}
           if-no-files-found: error

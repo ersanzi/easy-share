@@ -53,6 +53,17 @@ GitHub 验证：
 4. Artifact 包含 `EasyShare.dmg`、`EasyShare.app.zip`、`SHA256SUMS.txt`；
 5. 下载后校验 SHA-256，并在真实 Mac 上完成菜单栏和 Finder 挂载验收。
 
+## 首次 runner 结果
+
+GitHub 已成功登记 `macOS Build`，提交 `ff6d3bc` 的 push 自动触发了首次运行。运行在“Go 编译与测试”步骤失败：
+
+```text
+pattern all:frontend/dist: no matching files found
+```
+
+根因是 `main.go` 使用 `//go:embed all:frontend/dist`，而 `frontend/dist` 不纳入 Git。干净 runner 必须先执行前端构建生成该目录，随后才能编译 Go 主程序。工作流已调整为“前端构建与测试 → Go 编译与测试 → Wails 打包”。
+
+runner 同时提示 checkout/setup-go/setup-node 的 Node.js 20 action runtime 已弃用，因此升级为当前 Node.js 24 major；上传产物 action 同步升级到 Node.js 24 major。
 ## 排障方法（省的下次还有问题）
 
 - 文件存在但 Actions 左侧不显示：先查 `/repos/<owner>/<repo>/actions/workflows`，区分“文件已推送”和“workflow 已登记”。对默认分支上的 workflow 做一次有效提交通常会触发重新扫描。
