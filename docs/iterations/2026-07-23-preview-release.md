@@ -56,3 +56,20 @@ GitHub 收到 tag 后，macOS 与 Windows workflow 会分别构建并把资产�
 - 只在 Gitee 有 tag：补执行 `git push github <tag>`，否则不会触发 GitHub Actions；
 - 一个 Release 只有单平台资产：分别检查 macOS Build 和 Windows Build 的 tag run；两个 workflow 会并发更新同一个 Release；
 - 页面没有“Latest”徽标不代表发布失败：GitHub 的正式 Latest 默认只授予非 Prerelease；预览版应显示 Pre-release。
+
+## 实际结果
+
+已在提交 `cdbc27c` 上创建并分别推送：
+
+- Gitee tag：`v0.1.0-preview.1`；
+- GitHub tag：`v0.1.0-preview.1`；
+- macOS Build #16：成功；
+- Windows Build #9：成功；
+- GitHub Release：`v0.1.0-preview.1`，`prerelease: true`；
+- Release 资产数：6 个，包含 DMG、app zip、SHA-256 校验文件、Windows 安装包和两个 Windows 可执行文件。
+
+Release 下载地址：
+
+`https://github.com/ersanzi/easy-share/releases/tag/v0.1.0-preview.1`
+
+该版本正确显示为 **Pre-release**，不会冒充正式版 **Latest**。旧的 `v0.1.0-test.1` 若仍显示 Latest，是因为它历史上创建时没有设置 Prerelease；这不影响新的 preview 版本构建与下载。
