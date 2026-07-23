@@ -58,6 +58,7 @@
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-23 | GitHub Actions macOS 自动打包与产物校验 | 进行中 |
 | 2026-07-23 | macOS AppDelegate 链接冲突修复 | 已完成（待 Mac 复验） |
 | 2026-07-23 | macOS 支持（平台抽象 + Finder 挂载 + 构建脚本） | 已完成（待 Mac 实测） |
 | 2026-07-19 | 启动即用与双击进入 | 已完成 |
@@ -74,6 +75,8 @@
 | 2026-07-22 | 知识平台里程碑 0（Python AI 服务骨架） | 进行中 |
 
 ## 进行中
+
+**GitHub Actions macOS 自动打包** — GitHub 仓库与 SSH 推送链路已打通，正在重新登记并运行 macOS workflow，目标是稳定产出经过架构校验的 `.app.zip`、DMG 与 SHA-256 校验文件。详见 [`iterations/2026-07-23-github-macos-packaging.md`](iterations/2026-07-23-github-macos-packaging.md)。
 
 **知识平台里程碑 0：Python AI 服务最小骨架** — 已搭建 `knowledge/` 服务并跑通端到端管线（入库/检索/权限过滤已验证），待配置真实 embedding/LLM 做语义验收。详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
@@ -92,7 +95,7 @@
 
 - Docker daemon 不可用，RustFS 集成测试暂时跳过（不影响当前阶段）
 - macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
-- macOS 已有手动/tag 触发的 GitHub Actions；Windows 尚无 CI，仍依赖本地 `scripts/build.ps1` 全量验证
+- macOS GitHub Actions 正在完成首次真实 runner 构建；Windows 尚无 CI，仍依赖本地 `scripts/build.ps1` 全量验证
 
 ## 版本约定
 

@@ -145,7 +145,7 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - 「此电脑」品牌入口（Shell NameSpace，去盘符）
 - 拖拽发送（原生文件拖放 + 设备选择浮层）
 - 文件夹传输：局域网自动打包/安全解压，网盘保留目录结构并支持拖拽上传
-- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（待 Mac 真机复验）
+- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（GitHub Actions 自动打包进行中，待真机运行验收）
 - 下一步：网盘增强（大文件分片、断点续传、在线预览）
 
 ### 阶段 3：安全加固
@@ -183,6 +183,4 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传不支持断点续传与在线预览。
-- 暂无自动升级；macOS 已有手动/tag 触发的 GitHub Actions，Windows 仍依赖本地 `scripts/build.ps1` 全量验证。
-
-
+- 暂无自动升级；macOS GitHub Actions 支持 master/PR、手动和 tag 构建，产出 DMG、`.app.zip` 与 SHA-256 校验文件；Windows 仍依赖本地 `scripts/build.ps1` 全量验证。

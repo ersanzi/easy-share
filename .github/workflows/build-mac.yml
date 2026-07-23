@@ -1,12 +1,3 @@
-# EasyShare macOS 构建工作流
-#
-# 在 GitHub 的 macos-latest 构建机上产出 .app 与 .dmg，无需本地有 Mac。
-# 触发方式：
-#   1. 手动触发（Actions 页面 → Run workflow），可随时按需构建；
-#   2. 推送 v* 标签时自动构建并发布 GitHub Release。
-#
-# 产物获取：Actions 运行记录的 Artifacts 里下载 EasyShare-macOS；
-#           tag 构建还会在 Releases 里附带 DMG。
 name: macOS Build
 
 on:
@@ -21,15 +12,28 @@ on:
           - darwin/amd64
         default: darwin/universal
   push:
+    branches:
+      - master
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
 
+concurrency:
+  group: macos-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-mac:
     runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      WAILS_PLATFORM: ${{ github.event.inputs.platform || 'darwin/universal' }}
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -38,11 +42,25 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+          cache: true
 
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Go 编译与测试
+        run: |
+          go build ./...
+          go test ./...
+
+      - name: 前端构建与测试
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          npm --prefix frontend test
 
       - name: 安装 Wails CLI
         run: |
@@ -52,21 +70,59 @@ jobs:
       - name: Wails 环境检查
         run: wails doctor || true
 
-      - name: 构建（Core + .app + DMG）
+      - name: 构建 Core、App 与 DMG
         run: bash scripts/build-mac.sh
-        env:
-          WAILS_PLATFORM: ${{ github.event.inputs.platform || 'darwin/universal' }}
+
+      - name: 校验并整理产物
+        run: |
+          set -euo pipefail
+
+          APP_PATH="build/bin/easyshare.app"
+          APP_EXEC="$APP_PATH/Contents/MacOS/easyshare"
+          CORE_EXEC="$APP_PATH/Contents/MacOS/easyshare-core"
+          DMG_PATH="build/bin/EasyShare.dmg"
+          APP_ZIP="build/bin/EasyShare.app.zip"
+
+          test -d "$APP_PATH"
+          test -x "$APP_EXEC"
+          test -x "$CORE_EXEC"
+          test -s "$DMG_PATH"
+
+          case "$WAILS_PLATFORM" in
+            darwin/universal)
+              lipo -verify_arch arm64 x86_64 "$APP_EXEC"
+              lipo -verify_arch arm64 x86_64 "$CORE_EXEC"
+              ;;
+            darwin/arm64)
+              lipo -verify_arch arm64 "$APP_EXEC"
+              lipo -verify_arch arm64 "$CORE_EXEC"
+              ;;
+            darwin/amd64)
+              lipo -verify_arch x86_64 "$APP_EXEC"
+              lipo -verify_arch x86_64 "$CORE_EXEC"
+              ;;
+          esac
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"
+          cd build/bin
+          shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: EasyShare-macOS
+          name: EasyShare-macOS-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 14
           path: |
             build/bin/EasyShare.dmg
-            build/bin/easyshare.app
+            build/bin/EasyShare.app.zip
+            build/bin/SHA256SUMS.txt
 
       - name: 发布 Release（仅 tag 触发）
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/bin/EasyShare.dmg
+          files: |
+            build/bin/EasyShare.dmg
+            build/bin/EasyShare.app.zip
+            build/bin/SHA256SUMS.txt
