@@ -20,7 +20,7 @@ build_core() {
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -o "$output" ./cmd/core
 }
 
-echo "==> 构建 Core 后台服务（平台: $PLATFORM）"
+echo "==> 构建 Core 后台服务（平台: ${PLATFORM}）"
 case "$PLATFORM" in
   darwin/universal)
     if ! command -v lipo >/dev/null 2>&1; then
@@ -43,7 +43,7 @@ case "$PLATFORM" in
     build_core amd64 build/bin/easyshare-core
     ;;
   *)
-    echo "错误: 不支持的 WAILS_PLATFORM=$PLATFORM（仅支持 darwin/universal、darwin/arm64、darwin/amd64）。" >&2
+    echo "错误: 不支持的 WAILS_PLATFORM=${PLATFORM}（仅支持 darwin/universal、darwin/arm64、darwin/amd64）。" >&2
     exit 2
     ;;
 esac
@@ -73,7 +73,7 @@ if [ ! -f build/darwin/iconfile.icns ]; then
 fi
 
 # wails build 会自动执行 frontend:install + frontend:build（含 vue-tsc 类型检查）。
-echo "==> 构建桌面端（.app，平台: $PLATFORM）"
+echo "==> 构建桌面端（.app，平台: ${PLATFORM}）"
 wails build -platform "$PLATFORM"
 
 APP_PATH="build/bin/easyshare.app"

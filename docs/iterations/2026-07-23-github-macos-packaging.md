@@ -65,6 +65,15 @@ pattern all:frontend/dist: no matching files found
 根因是 `main.go` 使用 `//go:embed all:frontend/dist`，而 `frontend/dist` 不纳入 Git。干净 runner 必须先执行前端构建生成该目录，随后才能编译 Go 主程序。工作流已调整为“前端构建与测试 → Go 编译与测试 → Wails 打包”。
 
 runner 同时提示 checkout/setup-go/setup-node 的 Node.js 20 action runtime 已弃用，因此升级为当前 Node.js 24 major；上传产物 action 同步升级到 Node.js 24 major。
+## 第二次 runner 结果
+
+前端、Go 编译测试和 Wails 安装均通过，打包脚本随后报告：
+
+```text
+scripts/build-mac.sh: line 23: PLATFORM…: unbound variable
+```
+
+脚本启用了 `set -u`，`$PLATFORM` 后紧邻中文全角标点时，在 runner 的 Bash/locale 组合下被错误解释为更长的变量名。已把所有同类位置改为 `${PLATFORM}`，变量边界不再依赖后续字符。
 ## 排障方法（省的下次还有问题）
 
 - 文件存在但 Actions 左侧不显示：先查 `/repos/<owner>/<repo>/actions/workflows`，区分“文件已推送”和“workflow 已登记”。对默认分支上的 workflow 做一次有效提交通常会触发重新扫描。
