@@ -145,7 +145,7 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - 「此电脑」品牌入口（Shell NameSpace，去盘符）
 - 拖拽发送（原生文件拖放 + 设备选择浮层）
 - 文件夹传输：局域网自动打包/安全解压，网盘保留目录结构并支持拖拽上传
-- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（GitHub Actions 自动打包进行中，待真机运行验收）
+- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（GitHub Actions 自动打包已通过，待真机运行验收）
 - 下一步：网盘增强（大文件分片、断点续传、在线预览）
 
 ### 阶段 3：安全加固

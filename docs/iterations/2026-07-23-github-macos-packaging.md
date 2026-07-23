@@ -1,7 +1,7 @@
 # GitHub Actions macOS 自动打包与产物校验
 
 > 日期：2026-07-23
-> 状态：进行中
+> 状态：已完成（待 Mac 真机验收）
 
 ## 用户问题
 
@@ -82,6 +82,19 @@ Core、桌面端和 DMG 已经成功构建，失败只发生在“校验并整�
 同时调整诊断步骤顺序：产物校验写入 `build/logs/artifact-validation.log`，打包或校验任一阶段失败时，都会输出 Job Summary、Check Annotation 并上传 diagnostics Artifact。
 
 本次修复已在 Windows 开发机完成 YAML 解析、`git diff --check` 和项目全量构建测试，待 GitHub macOS runner 复验。
+
+## 第四次 runner 结果
+
+GitHub Actions Run #6（提交 `9335899`）已完整通过：
+
+- 前端构建与测试：通过
+- Go 编译与测试：通过
+- Wails 环境检查：通过
+- Core、App 与 DMG 构建：通过
+- universal 架构校验：通过
+- 产物上传：通过
+
+Run 产出 Artifact `EasyShare-macOS-6`，包含 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`。至此，GitHub 自动打包闭环已完成，后续工作是下载 Artifact 后在真实 Mac 上验收菜单栏、Finder WebDAV 挂载与两种 CPU 架构启动。
 
 ## 排障方法（省的下次还有问题）
 
