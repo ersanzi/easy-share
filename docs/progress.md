@@ -55,11 +55,13 @@
 - [x] macOS 支持（待真机复验）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)；GitHub Actions macOS Build 已通过编译、测试、universal 架构校验和产物上传
 - [x] 双仓库推送与 macOS CI 日常流程：提交后分别推送 `origin`（Gitee）和 `github`（GitHub）；`dev` 自动构建、手动触发可选架构、`v*` tag 自动创建 Release
 - [x] P0 双平台测试 Release：`v0.1.0-test.2` 已验证 macOS/Windows Actions、Prerelease 创建和 6 个 Release 资产下载
+- [x] 首个对外预览版：采用 `v0.1.0-preview.1`；所有带连字符的 SemVer 预发布 tag（preview/beta/rc/test）自动标记为 GitHub Prerelease
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-23 | v0.1.0-preview.1 对外预览版发布 | 已完成（待真机验收） |
 | 2026-07-23 | 双仓库推送规范与 macOS CI 日常流程 | 已完成 |
 | 2026-07-23 | GitHub Actions macOS 自动打包与产物校验 | 已完成（待 Mac 真机验收） |
 | 2026-07-23 | macOS AppDelegate 链接冲突修复 | 已完成（待 Mac 复验） |

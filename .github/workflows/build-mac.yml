@@ -172,7 +172,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-test.') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             build/bin/EasyShare.dmg
             build/bin/EasyShare.app.zip

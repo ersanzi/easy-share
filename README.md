@@ -107,6 +107,8 @@ git push github dev
 
 随后等待 GitHub Actions 自动构建，并从 Artifacts 下载 DMG。发布版本时把 tag 同时推送到两个仓库；GitHub 上的 tag 构建成功后会自动创建 Release。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
 
+版本阶段约定：`test` 仅用于流水线冒烟，`preview` 用于功能仍在完善且尚未完成全部真机验收的公开预览，`beta` 用于主要功能稳定后的扩大测试，`rc` 用于正式版候选。所有带 `-` 的 SemVer 预发布 tag（如 `v0.1.0-preview.1`）都会自动标记为 GitHub Prerelease；当前阶段使用 `preview`。
+
 ## 运行数据
 
 | 内容 | 默认位置 |
