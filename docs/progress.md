@@ -48,6 +48,7 @@
 - [x] 传输速度实时高亮：传输中速度蓝色加粗显示
 - [x] 网盘功能（RustFS）：文件上传/列表/下载/删除/分享链接，设置页 RustFS 连接配置
 - [x] 网盘在线预览：后端声明图片/PDF/文本能力，图片/PDF 使用五分钟 HMAC 内容票据，文本限量 1 MiB 并仅按 UTF-8 纯文本渲染。详见 [`cloudreve-benchmark.md`](cloudreve-benchmark.md) 与 [`iterations/2026-07-25-cloudreve-benchmark-and-preview.md`](iterations/2026-07-25-cloudreve-benchmark-and-preview.md)
+- [x] Cloudreve 深度对标：明确稳定 `fileId`、轻量目录层、Upload Session、统一任务、文件事件流与 Windows CfAPI 原型路线。详见 [`iterations/2026-07-25-cloudreve-deep-benchmark.md`](iterations/2026-07-25-cloudreve-deep-benchmark.md)
 - [x] 此电脑品牌入口：去盘符，命名空间入口直接委托 WebDAV UNC（类 WPS），去 Digest 认证（仅回环），修复入口显示名（清 LocalizedString 等旧值）
 - [x] 拖拽发送：Wails v2.13.0 原生 EnableFileDrop + OnFileDrop 接收真实文件路径，过滤文件夹后弹设备选择浮层，点选设备即发
 - [x] 文件夹传输（局域网）：拖入文件夹自动 zip 打包走 TCP 管线（Metadata.Kind=folder），接收端解压到同名目录并删 zip，含 zip slip 防护
@@ -62,6 +63,7 @@
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-25 | Cloudreve 深度对标：文件身份、同步根与任务架构 | 已完成 |
 | 2026-07-25 | Cloudreve 对标研究与网盘在线预览 | 已完成 |
 | 2026-07-23 | v0.1.0-preview.1 对外预览版发布 | 已完成（待真机验收） |
 | 2026-07-23 | 双仓库推送规范与 macOS CI 日常流程 | 已完成 |
@@ -96,7 +98,7 @@
 1. **知识平台里程碑 1**：扩展解析能力（docx/pdf/xlsx 多格式）、更好的切块与清洗、真正的向量库
 2. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
 3. **知识平台里程碑 3**：WPS 插件（登录、侧边栏、调用 AI 接口）
-4. **网盘增强**：大文件分片、断点续传、回收站与缩略图缓存
+4. **网盘增强**：稳定 `fileId` 与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows Cloud Files API 独立原型
 5. **设备配对与传输加密**
 6. **统一版本号**：健康 API、前端 package.json 使用同一版本源
 

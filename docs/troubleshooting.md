@@ -207,3 +207,26 @@ npm --prefix frontend run build
 ```
 
 并确认 `frontend/src/types/core.ts`、`frontend/src/services/core.ts` 与 `frontend/wailsjs/go/` 同步更新。
+
+## 11. Cloudreve 对标研究与上游源码核验
+
+研究上游项目时，`git clone --depth 1` 可能因网络代理、TLS 连接或 GitHub 链路重置而反复失败。不要因此改用来源不明的转载文章，也不要只记录会变化的 `master`。
+
+推荐流程：
+
+1. 通过 GitHub API 确认默认分支和当前 commit SHA。
+2. 使用 `/git/trees/{sha}?recursive=1` 获取该固定提交的源码树。
+3. 通过 raw 内容地址按固定 SHA 下载关键源码文件。
+4. 在迭代文档中记录 commit SHA、提交标题和研究日期。
+5. 用官方产品文档确认用户行为，再用源码确认内部边界。
+
+对标记录必须区分四种状态：
+
+- 上游已经实现；
+- EasyShare 已经实现；
+- EasyShare 建议做独立原型；
+- EasyShare 后续路线。
+
+例如 Cloudreve 桌面客户端支持 Windows Cloud Files API，并不代表 EasyShare 当前已具备占位文件和按需下载。EasyShare 当前入口仍是 Shell NameSpace + WebDAV；CfAPI 只作为经过验收后才可能迁移的独立原型。
+
+若官方概念文档与源码命名不同，以固定 commit 源码确认数据关系，以文档解释用户语义。涉及 File/Entity、Upload Session、事件续传和任务状态时，不能只凭 README 功能列表推断架构。
