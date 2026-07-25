@@ -1,0 +1,64 @@
+[
+  {
+    "filename": "word-policy.docx",
+    "builder": "docx_policy",
+    "expected": {
+      "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "metadata": {"paragraphs": 4, "tables": 1},
+      "warnings": [],
+      "blocks": [
+        {"type": "heading", "text": "EasyShare 文档处理规范", "level": 1, "source": {"paragraph": 1}},
+        {"type": "paragraph", "text": "Office 文件必须保留结构和来源位置。", "source": {"paragraph": 2}},
+        {"type": "table", "rows": [["字段", "含义"], ["file_id", "稳定文件身份"], ["version_id", "内容版本"]], "source": {"table": 1}},
+        {"type": "heading", "text": "验收标准", "level": 2, "source": {"paragraph": 3}},
+        {"type": "paragraph", "text": "解析结果必须可追溯。", "source": {"paragraph": 4}}
+      ],
+      "markdown_contains": ["# EasyShare 文档处理规范", "| file_id | 稳定文件身份 |", "## 验收标准"]
+    }
+  },
+  {
+    "filename": "project-register.xlsx",
+    "builder": "xlsx_project_register",
+    "expected": {
+      "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "metadata": {"sheets": 2},
+      "warnings": [],
+      "blocks": [
+        {"type": "heading", "text": "项目清单", "level": 1, "source": {"sheet": "项目清单"}},
+        {"type": "table", "rows": [["项目", "负责人", "状态"], ["文档清洗", "Alice", "完成"], ["扫描件 OCR", "Bob", "待开始"]], "source": {"sheet": "项目清单", "row": 1}},
+        {"type": "heading", "text": "风险", "level": 1, "source": {"sheet": "风险"}},
+        {"type": "table", "rows": [["风险", "等级"], ["表格跨页", "中"]], "source": {"sheet": "风险", "row": 1}}
+      ],
+      "markdown_contains": ["# 项目清单", "| 文档清洗 | Alice | 完成 |", "# 风险"]
+    }
+  },
+  {
+    "filename": "quality-review.pptx",
+    "builder": "pptx_quality_review",
+    "expected": {
+      "media_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "metadata": {"slides": 2},
+      "warnings": [],
+      "blocks": [
+        {"type": "heading", "text": "季度知识库验收", "level": 1, "source": {"slide": 1, "paragraph": 1}},
+        {"type": "paragraph", "text": "Office 文档结构解析完成", "source": {"slide": 1, "paragraph": 1}},
+        {"type": "heading", "text": "质量指标", "level": 1, "source": {"slide": 2, "paragraph": 1}},
+        {"type": "table", "rows": [["指标", "目标"], ["来源定位", "100%"], ["派生产物", "3 类"]], "source": {"slide": 2}}
+      ],
+      "markdown_contains": ["# 季度知识库验收", "Office 文档结构解析完成", "| 来源定位 | 100% |"]
+    }
+  },
+  {
+    "filename": "text-and-blank.pdf",
+    "builder": "pdf_text_with_blank_page",
+    "expected": {
+      "media_type": "application/pdf",
+      "metadata": {"pages": 2, "empty_pages": 1},
+      "warnings": ["有 1 页未提取到文本，可能包含扫描页或纯图片"],
+      "blocks": [
+        {"type": "paragraph", "text": "EasyShare PDF Golden Page One", "source": {"page": 1}}
+      ],
+      "markdown_contains": ["EasyShare PDF Golden Page One"]
+    }
+  }
+]

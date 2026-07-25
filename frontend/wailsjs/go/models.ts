@@ -75,11 +75,11 @@ export namespace cloud {
 	    contentUrl?: string;
 	    text?: string;
 	    truncated?: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Preview(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.key = source["key"];

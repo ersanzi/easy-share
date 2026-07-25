@@ -22,11 +22,13 @@ class RustFSStorage:
         access_key: str | None = None,
         secret_key: str | None = None,
         bucket: str | None = None,
+        client_config: Config | None = None,
     ) -> None:
         self.endpoint = endpoint or settings.rustfs_endpoint
         self.access_key = access_key if access_key is not None else settings.rustfs_access_key
         self.secret_key = secret_key if secret_key is not None else settings.rustfs_secret_key
         self.bucket = bucket or settings.rustfs_bucket
+        self.client_config = client_config or Config(signature_version="s3v4")
         self._client_instance: Any | None = None
         self._client_lock = threading.Lock()
 
@@ -41,7 +43,7 @@ class RustFSStorage:
                         endpoint_url=self.endpoint,
                         aws_access_key_id=self.access_key or None,
                         aws_secret_access_key=self.secret_key or None,
-                        config=Config(signature_version="s3v4"),
+                        config=self.client_config,
                         region_name="us-east-1",
                     )
         return self._client_instance

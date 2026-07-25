@@ -307,6 +307,7 @@ def _parse_pptx(filename: str, content: bytes) -> ParsedDocument:
     blocks: list[DocumentBlock] = []
     for slide_number, slide in enumerate(presentation.slides, start=1):
         title_shape = slide.shapes.title
+        title_shape_id = title_shape.shape_id if title_shape is not None else None
         for shape in slide.shapes:
             if getattr(shape, "has_table", False):
                 rows = [[cell.text.strip() for cell in row.cells] for row in shape.table.rows]
@@ -325,7 +326,7 @@ def _parse_pptx(filename: str, content: bytes) -> ParsedDocument:
                 text = paragraph.text.strip()
                 if not text:
                     continue
-                is_title = shape is title_shape
+                is_title = title_shape_id is not None and shape.shape_id == title_shape_id
                 blocks.append(
                     DocumentBlock(
                         id=f"b{len(blocks) + 1}",

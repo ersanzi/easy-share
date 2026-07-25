@@ -63,6 +63,8 @@
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-25 | RustFS 真实集成测试与 Office 黄金语料 | 进行中 |
+| 2026-07-25 | Python 文档入库与结构化清洗闭环 | 已完成 |
 | 2026-07-25 | Cloudreve 深度对标：文件身份、同步根与任务架构 | 已完成 |
 | 2026-07-25 | Cloudreve 对标研究与网盘在线预览 | 已完成 |
 | 2026-07-23 | v0.1.0-preview.1 对外预览版发布 | 已完成（待真机验收） |
@@ -81,21 +83,23 @@
 | 2026-07-20 | 此电脑品牌入口（去盘符 + 显示名修复） | 已完成 |
 | 2026-07-20 | 拖拽发送（原生文件拖放 + 设备选择浮层） | 已完成 |
 | 2026-07-22 | 文件夹传输 + 网盘文件夹/拖拽上传 | 已完成 |
-| 2026-07-22 | 知识平台里程碑 0（Python AI 服务骨架） | 进行中 |
+| 2026-07-22 | 知识平台里程碑 0（Python AI 服务骨架） | 已完成 |
 | 2026-07-23 | AI 模型选型与凭据配置（百炼 embedding + SenseNova LLM） | 已完成 |
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
 
+**RustFS 真实集成测试与 Office 黄金语料** — 进行中。新增仅在显式环境开关下运行的 RustFS 端到端测试，并建立可重复生成、可审查预期结构的 DOCX/XLSX/PPTX/PDF 黄金样本，优先固定解析质量基线。详见 [`iterations/2026-07-25-rustfs-golden-corpus.md`](iterations/2026-07-25-rustfs-golden-corpus.md)。
+
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**Python 文档入库与结构化清洗闭环** — 进行中。文件继续由 Go 上传 RustFS，Python 以 `fileId + versionId + objectKey` 创建异步任务，首批处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，输出可追溯的清洗产物；本轮不接桌面 UI。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md)。`r`n`r`n**知识平台里程碑 1：管线架构落地** — 里程碑 0 已完成（端到端语义验收通过）。管线架构选型已确定：解析用 Unstructured + PaddleOCR（扫描件），切块用 chunk_by_title（结构感知），向量库用 Milvus Standalone（复用 RustFS），RAG 编排自写薄层。下一步：引入 Unstructured 替换现有解析、部署 Milvus、重写切块与向量存储。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6。
+**知识平台里程碑 1：管线架构落地** — 第一段已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、清洗产物、版本化索引替换和失败恢复。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6 和 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md)。
 
 ## 待开始（按优先级）
 
 > 知识平台各里程碑的详细任务、交付物与验收标准见 [`knowledge-platform-roadmap.md`](knowledge-platform-roadmap.md)。
 
-1. **知识平台里程碑 1**：扩展解析能力（docx/pdf/xlsx 多格式）、更好的切块与清洗、真正的向量库
+1. **知识平台里程碑 1**：接入扫描件 OCR、增强复杂版面与结构感知切块、把当前 JSON 向量存储迁移到 Milvus
 2. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
 3. **知识平台里程碑 3**：WPS 插件（登录、侧边栏、调用 AI 接口）
 4. **网盘增强**：稳定 `fileId` 与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows Cloud Files API 独立原型

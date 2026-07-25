@@ -230,3 +230,31 @@ npm --prefix frontend run build
 例如 Cloudreve 桌面客户端支持 Windows Cloud Files API，并不代表 EasyShare 当前已具备占位文件和按需下载。EasyShare 当前入口仍是 Shell NameSpace + WebDAV；CfAPI 只作为经过验收后才可能迁移的独立原型。
 
 若官方概念文档与源码命名不同，以固定 commit 源码确认数据关系，以文档解释用户语义。涉及 File/Entity、Upload Session、事件续传和任务状态时，不能只凭 README 功能列表推断架构。
+
+## 12. Python 文档处理任务异常
+
+### 12.1 任务一直停在 `queued`
+
+1. 必须在 `knowledge/` 目录以单个 Uvicorn worker 启动：`uvicorn app.main:app --workers 1`。
+2. 检查 FastAPI lifespan 是否执行、`JOB_WORKERS` 是否大于 0。
+3. 查看 `GET /health` 的 `jobs` 计数和 `GET /jobs/{jobId}` 的 `stage/error_message`。
+4. 当前 SQLite + 线程池只支持单进程；不要启动多个 Uvicorn worker 共享 `jobs.db` 和 JSON 向量库。
+
+### 12.2 Office 文件失败或 PDF 提示 OCR
+
+- 确认文件扩展名与真实格式一致，并安装 `python-docx`、`openpyxl`、`python-pptx`、`pypdf`。
+- 损坏 Office 文件会显式失败，不会把 ZIP/XML 二进制内容当文本。
+- 当前 PDF 只支持文本层；扫描 PDF/图片需等待 PaddleOCR 阶段，出现 OCR 提示属于预期保护。
+
+### 12.3 任务失败但查询命中了新版本
+
+`manifest.json` 是完成标志。当前实现会在 manifest 写入失败时恢复该 `file_id` 的旧索引，并对同一文件加进程内锁，避免并发版本互相覆盖。若仍出现不一致：
+
+1. 查询任务是否确实为 `completed`；
+2. 检查 `derived/{fileId}/{versionId}/manifest.json` 是否存在；
+3. 检查 `VECTOR_STORE_PATH` 是否被多个进程共享；
+4. 对失败任务使用 `/jobs/{jobId}/retry`，不要直接修改 SQLite。
+
+### 12.4 测试时出现 `__pycache__` 或 SQLite 文件冲突
+
+并发测试时设置 `PYTHONDONTWRITEBYTECODE=1`，并为每个进程使用独立的 `JOB_STORE_PATH`、`VECTOR_STORE_PATH`。语法检查使用 `compile(source, filename, "exec")`，不要并发运行 `compileall` 写同一个 `__pycache__`。

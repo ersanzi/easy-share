@@ -2,7 +2,7 @@
 
 > 本文记录 EasyShare 从消费级文件工具向企业知识管理平台演进的总体方向与架构决策。
 > 这是长期方向文档，逐版交付情况以 [`progress.md`](progress.md) 和 [`iterations/`](iterations/README.md) 为准。
-> 最后更新：2026-07-23
+> 最后更新：2026-07-25
 
 ## 1. 定位演进
 
@@ -53,9 +53,11 @@ EasyShare 起步于消费级局域网文件传输与云盘工具（对标百度�
 
 共享存储 + 干净服务接口，两条线：
 
-- **同步线（REST）**：Python 暴露 `POST /ingest`（解析并向量化一份文档）、`POST /query`（带权限范围的检索+生成）等接口，Java 鉴权与权限裁决后调用。
+- **同步线（REST）**：Python 暴露 `POST /documents/process`（按对象引用创建异步处理任务）、任务/产物查询和 `POST /query`（带权限范围的检索+生成）等接口，Java 鉴权与权限裁决后调用。`POST /ingest` 仅保留为当前兼容验证入口。
 - **异步线（消息队列）**：解析大文档慢，Java 往队列（RabbitMQ/Kafka）丢"解析这份文件"任务，Python 消费处理完回写状态，避免阻塞。
 - **共享**：两边共用 RustFS 里的同一份文件，靠统一文件 ID 对应。Java 管"这个文件谁能看"，Python 管"这个文件的内容向量"。
+
+当前 Java 尚未落地时，Python 使用 SQLite 保存单进程执行任务，仅用于重启恢复、进度和失败重试。它不是租户、权限、文件元数据或业务任务的真相源；这些职责仍保留给后续 Java + PostgreSQL 控制面。
 
 ```
    EasyShare 桌面端 / WPS 插件
@@ -104,7 +106,7 @@ EasyShare 起步于消费级局域网文件传输与云盘工具（对标百度�
 策略：先让整条管线从头到尾流起来，每一环都做最薄版本，验证端到端闭环后再逐环加厚。不先把单环做深。
 
 - **里程碑 0（已完成）**：Python AI 服务最小骨架——读一份文档 → 解析 → 切块向量化 → 提供问答接口。证明核心命题"文档能否变成可用知识"。账号、WPS、多文件格式均后置。
-- **里程碑 1**：扩展解析能力（docx/pdf/xlsx 等多格式）、更好的切块与清洗、真正的向量库。
+- **里程碑 1（进行中）**：第一段已完成 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 的统一解析、清洗产物、异步任务和版本化索引；下一段接入扫描件 OCR、Unstructured 结构增强与 Milvus。
 - **里程碑 2**：Java 控制面接入——账号、权限、文件登记、权限感知检索。走向多用户企业级。
 - **里程碑 3**：WPS 插件——登录、侧边栏、调用 AI 接口，完成最后一公里交付。
 
@@ -119,8 +121,10 @@ knowledge/                  # Python AI 服务（计算面）
   app/
     main.py                 # FastAPI 入口
     config.py               # 配置（RustFS / LLM / embedding / 向量库）
-    api/routes.py           # /ingest /query /health 接口
-    parsing/extractor.py    # 文档 → 文本
+    api/routes.py           # 异步处理、任务、产物、兼容入库与查询接口
+    jobs/                   # SQLite 执行状态与进程内任务执行器（过渡实现）
+    parsing/                # 多格式解析、清洗、统一块模型与 Markdown 渲染
+    pipeline/service.py     # RustFS → 产物 → 切块 → 索引编排
     kb/chunker.py           # 文本 → 切块
     kb/embedder.py          # 切块 → 向量（可替换网关）
     kb/store.py             # 向量库
@@ -147,7 +151,7 @@ Java 控制面后续置于独立目录（如 `platform/`），现阶段未建。
 | LLM | SenseNova `deepseek-v4-flash`（OpenAI 兼容，推理模型） | 已验证 |
 | Reranking | 待定（bge-reranker 本地 / 百炼 rerank API） | 里程碑 1 后期按需引入 |
 | RAG 编排 | **自写薄层**（~100 行），OpenAI SDK 直调 LLM | 完全可控、好调试、权限过滤自由加；不引入 LlamaIndex/LangChain 避免框架锁定 |
-| 任务队列 | 现阶段 FastAPI BackgroundTasks；里程碑 2 接 Celery + Redis | 不过早引入重基建 |
+| 任务队列 | 现阶段 SQLite + `ThreadPoolExecutor` 单进程执行器；里程碑 2 由 Java + 消息队列接管 | 当前先验证幂等、重试和重启恢复，不把过渡执行库当业务真相源 |
 | 控制面数据库 | **PostgreSQL**（里程碑 2） | 关系型业务数据（用户/角色/租户/文件元数据/知识库配置）；后续可启用 pgvector 扩展 |
 
 **解析流程细节**：
@@ -182,6 +186,6 @@ services:
 - ~~LLM 提供方~~（已决策）：SenseNova deepseek-v4-flash。
 - ~~控制面数据库~~（已决策）：PostgreSQL。
 - 消息队列选型（异步解析）：RabbitMQ vs Kafka，里程碑 2 前后确定。
-- 文件 ID 体系：Java 文件登记与 Python 向量记录共用的稳定 ID 规则，里程碑 2 接入 Java 时确定（现阶段 Python 用 UUID 占位）。
+- 文件 ID 体系：当前 Python API 已要求调用方传入稳定 `file_id + version_id`；里程碑 2 接入 Java 时由 Java 文件登记正式生成并治理这两个身份。
 - Reranking 方案：bge-reranker 本地部署 vs 百炼 rerank API，里程碑 1 后期评估。
 - PaddleOCR 集成方式：作为 Unstructured 的 OCR 后端接入，还是独立服务判断后分流。

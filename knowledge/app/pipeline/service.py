@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import UTC, datetime
 from typing import Callable
 
@@ -44,8 +45,18 @@ class DocumentPipeline:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.max_source_bytes = max_source_bytes
+        self._document_locks_guard = threading.Lock()
+        self._document_locks: dict[str, threading.Lock] = {}
 
     def process(self, job: ProcessingJob, report: ProgressReporter) -> dict:
+        with self._document_lock(job.file_id):
+            return self._process_locked(job, report)
+
+    def _document_lock(self, file_id: str) -> threading.Lock:
+        with self._document_locks_guard:
+            return self._document_locks.setdefault(file_id, threading.Lock())
+
+    def _process_locked(self, job: ProcessingJob, report: ProgressReporter) -> dict:
         report("downloading", 10)
         content = self.storage.read(job.object_key, max_bytes=self.max_source_bytes)
         source_sha256 = hashlib.sha256(content).hexdigest()
@@ -108,6 +119,7 @@ class DocumentPipeline:
         ]
 
         report("indexing", 90)
+        previous_items = self.vector_store.get_doc(job.file_id)
         self.vector_store.replace_doc(job.file_id, items)
 
         manifest = {
@@ -129,11 +141,15 @@ class DocumentPipeline:
             "processed_at": datetime.now(UTC).isoformat(),
         }
         report("finalizing", 97)
-        self.storage.write(
-            keys["manifest"],
-            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
-            content_type="application/json; charset=utf-8",
-        )
+        try:
+            self.storage.write(
+                keys["manifest"],
+                json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+                content_type="application/json; charset=utf-8",
+            )
+        except Exception:
+            self.vector_store.replace_doc(job.file_id, previous_items)
+            raise
         return manifest
 
     def read_artifact(self, file_id: str, version_id: str, name: str) -> tuple[bytes, str]:

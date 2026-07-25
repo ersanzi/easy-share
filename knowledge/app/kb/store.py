@@ -2,6 +2,7 @@
 里程碑 1 可替换为 Chroma/Milvus，对外接口保持不变。"""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import threading
@@ -46,6 +47,13 @@ class VectorStore:
             retained = [record for record in self.records if record.get("doc_id") != doc_id]
             self.records = retained + items
             self._save()
+
+    def get_doc(self, doc_id: str) -> list[dict]:
+        """Return a document index snapshot for cross-storage rollback."""
+        with self.lock:
+            return copy.deepcopy(
+                [record for record in self.records if record.get("doc_id") == doc_id]
+            )
 
     def query(self, embedding: list[float], top_k: int = 5, doc_ids: list[str] | None = None) -> list[dict]:
         with self.lock:

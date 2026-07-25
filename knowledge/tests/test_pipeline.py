@@ -57,10 +57,21 @@ def test_pipeline_writes_artifacts_and_replaces_current_version(tmp_path) -> Non
 
 
 def test_pipeline_does_not_succeed_when_artifact_write_fails(tmp_path) -> None:
-    storage = FakeStorage({"source/v1/note.txt": b"content"}, fail_on_write="manifest.json")
+    storage = FakeStorage(
+        {
+            "source/v0/note.txt": b"previous content",
+            "source/v1/note.txt": b"new content",
+        }
+    )
     services = make_services(tmp_path, storage)
     try:
+        services.pipeline.process(_job("v0"), lambda *_: None)
+        storage.fail_on_write = "manifest.json"
+
         with pytest.raises(OSError, match="simulated"):
-            services.pipeline.process(_job(), lambda *_: None)
+            services.pipeline.process(_job("v1"), lambda *_: None)
+
+        assert {record["version_id"] for record in services.vector_store.records} == {"v0"}
+        assert artifact_keys("file-1", "v1")["manifest"] not in storage.objects
     finally:
         services.job_store.close()
