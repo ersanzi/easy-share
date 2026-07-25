@@ -92,6 +92,7 @@ func Send(ctx context.Context, request SendRequest) error {
 	buffer := make([]byte, 256*1024)
 	var sent int64
 	last := time.Now()
+	var lastBytes int64
 	for {
 		count, readErr := file.Read(buffer)
 		if count > 0 {
@@ -101,9 +102,20 @@ func Send(ctx context.Context, request SendRequest) error {
 				return fail(writeErr)
 			}
 			if time.Since(last) > 100*time.Millisecond || sent == fileInfo.Size() {
-				updated, _ = request.Tasks.Update(created.ID, func(value *task.Task) error { value.TransferredBytes = sent; return nil })
+				now := time.Now()
+				elapsed := now.Sub(last).Seconds()
+				speed := 0.0
+				if elapsed > 0 {
+					speed = float64(sent-lastBytes) / elapsed
+				}
+				updated, _ = request.Tasks.Update(created.ID, func(value *task.Task) error {
+					value.TransferredBytes = sent
+					value.Speed = speed
+					return nil
+				})
 				emit(updated)
-				last = time.Now()
+				lastBytes = sent
+				last = now
 			}
 		}
 		if readErr == io.EOF {

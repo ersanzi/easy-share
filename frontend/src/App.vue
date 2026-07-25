@@ -15,6 +15,7 @@ type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
 const app = useEasyShare()
 const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 // 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
 watch(view, value => { app.activeView.value = value })
@@ -35,7 +36,7 @@ const handleCloudDelete = async (key: string) => {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div :class="['app-shell', isMac ? 'is-mac' : '']">
     <!-- 拖拽发送：设备选择浮层 -->
     <DevicePicker
       v-if="app.droppedFiles.value.length || app.droppedDirs.value.length"
@@ -47,10 +48,10 @@ const handleCloudDelete = async (key: string) => {
       @cancel="app.cancelDrop"
     />
 
-    <!-- 窗口控制条：拖拽区域 + 最小化/关闭 -->
+    <!-- 窗口控制条：拖拽区域 + 最小化/关闭（macOS 使用原生红绿灯，隐藏自定义按钮） -->
     <div class="window-chrome">
       <div class="drag-region" />
-      <div class="window-controls">
+      <div v-if="!isMac" class="window-controls">
         <button class="win-btn" type="button" aria-label="最小化" @click="WindowMinimise()">
           <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
         </button>

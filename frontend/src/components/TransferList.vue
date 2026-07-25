@@ -1,5 +1,6 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import type { TransferTask } from '../types/core'
+import { core } from '../services/core'
 
 defineProps<{ tasks: TransferTask[] }>()
 defineEmits<{ accept: [id: string]; acceptAs: [id: string]; reject: [id: string]; clear: []; delete: [id: string] }>()
@@ -15,9 +16,10 @@ const progress = (task: TransferTask) => task.totalBytes
   ? Math.min(100, Math.round(task.transferredBytes / task.totalBytes * 100))
   : 0
 const statusLabel = (status: string) => ({
-  pending: '等待确认', transferring: '传输中', completed: '已完成', failed: '失败', rejected: '已拒绝',
+  pending: '等待确认', running: '传输中', accepted: '已接受', completed: '已完成', failed: '失败', rejected: '已拒绝',
 }[status] ?? status)
 const isTerminal = (status: string) => ['completed', 'failed', 'rejected'].includes(status)
+const isActive = (status: string) => ['running', 'accepted'].includes(status)
 const duration = (task: TransferTask) => {
   if (!isTerminal(task.status) || !task.createdAt || !task.updatedAt) return ''
   const ms = new Date(task.updatedAt).getTime() - new Date(task.createdAt).getTime()
@@ -26,6 +28,12 @@ const duration = (task: TransferTask) => {
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
   return `${m}m${s % 60}s`
+}
+const openFile = (task: TransferTask) => {
+  if (task.localPath) void core.openFile(task.localPath)
+}
+const openFolder = () => {
+  void core.openReceiveFolder()
 }
 </script>
 
@@ -37,6 +45,7 @@ const duration = (task: TransferTask) => {
         <h2>文件传输</h2>
       </div>
       <div class="header-actions">
+        <button class="text-button" type="button" @click="openFolder">打开接收文件夹</button>
         <button v-if="tasks.length" class="text-button" type="button" @click="$emit('clear')">清除记录</button>
         <span class="count-badge">{{ tasks.length }} 项</span>
       </div>
@@ -66,13 +75,16 @@ const duration = (task: TransferTask) => {
           </div>
           <div class="transfer-meta">
             <span>{{ progress(item) }}%</span>
-            <span v-if="item.speed" :class="{ 'speed-active': item.status === 'transferring' }">{{ size(item.speed) }}/s</span>
+            <span v-if="item.speed > 0 && isActive(item.status)" class="speed-active">{{ size(item.speed) }}/s</span>
             <span v-if="duration(item)" class="duration-text">用时 {{ duration(item) }}</span>
             <span v-if="item.error" class="inline-error">{{ item.error }}</span>
             <div v-if="item.status === 'pending' && item.direction === 'receive'" class="row-actions">
               <button class="secondary-button compact" type="button" @click="$emit('reject', item.id)">拒绝</button>
               <button class="secondary-button compact" type="button" @click="$emit('acceptAs', item.id)">另存</button>
               <button class="primary-button compact" type="button" @click="$emit('accept', item.id)">接收</button>
+            </div>
+            <div v-if="item.status === 'completed' && item.localPath" class="row-actions">
+              <button class="secondary-button compact" type="button" @click="openFile(item)">打开文件</button>
             </div>
             <button v-if="isTerminal(item.status)" class="delete-btn" type="button" aria-label="删除记录" @click="$emit('delete', item.id)">×</button>
           </div>

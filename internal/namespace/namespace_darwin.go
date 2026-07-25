@@ -85,26 +85,26 @@ func mountVolume(entry Entry) error {
 		return nil
 	}
 
-	// 策略 1：Finder 原生挂载。无需管理挂载点、最贴合系统体验，
-	// 但无认证 WebDAV 可能弹出连接/认证对话框。
-	if out, err := run("osascript", "-e", fmt.Sprintf("mount volume %q", entry.TargetPath)); err == nil {
-		Log("策略1 osascript mount volume 成功: %s", strings.TrimSpace(out))
-		return nil
-	} else {
-		Log("策略1 osascript mount volume 失败: %v | 输出: %s", err, strings.TrimSpace(out))
-	}
-
-	// 策略 2：mount_webdav 命令行，挂载到 /Volumes 下。
-	// 更直接，但创建 /Volumes 挂载点与 mount 调用可能需要管理员权限。
+	// 策略 1：mount_webdav 命令行。不经过 Finder GUI，不会弹出"不安全连接"
+	// 认证对话框，用户体验最安静。挂载到 /Volumes 下。
 	mountPoint := "/Volumes/" + entry.Name
 	if mkdirErr := os.MkdirAll(mountPoint, 0o755); mkdirErr != nil {
-		Log("策略2 创建挂载点 %s 失败: %v", mountPoint, mkdirErr)
+		Log("策略1 创建挂载点 %s 失败: %v", mountPoint, mkdirErr)
 	}
 	if out, err := run("mount_webdav", entry.TargetPath, mountPoint); err == nil {
-		Log("策略2 mount_webdav 成功: %s -> %s", entry.TargetPath, mountPoint)
+		Log("策略1 mount_webdav 成功: %s -> %s", entry.TargetPath, mountPoint)
 		return nil
 	} else {
-		Log("策略2 mount_webdav 失败: %v | 输出: %s", err, strings.TrimSpace(out))
+		Log("策略1 mount_webdav 失败: %v | 输出: %s", err, strings.TrimSpace(out))
+	}
+
+	// 策略 2：Finder 原生挂载（osascript）。无需管理挂载点、最贴合系统体验，
+	// 但 HTTP WebDAV 会弹出"不安全连接"认证对话框，仅作兜底。
+	if out, err := run("osascript", "-e", fmt.Sprintf("mount volume %q", entry.TargetPath)); err == nil {
+		Log("策略2 osascript mount volume 成功: %s", strings.TrimSpace(out))
+		return nil
+	} else {
+		Log("策略2 osascript mount volume 失败: %v | 输出: %s", err, strings.TrimSpace(out))
 	}
 
 	return fmt.Errorf("所有挂载策略均失败（详见日志）")

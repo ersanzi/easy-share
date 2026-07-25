@@ -182,7 +182,7 @@ func (server *Server) ConfigureDrive(service driveService) {
 	server.driveService = service
 }
 func (server *Server) ConfigureShutdown(cancel context.CancelFunc) { server.cancelCore = cancel }
-func (server *Server) ConfigureConfigPath(path string)            { server.configPath = path }
+func (server *Server) ConfigureConfigPath(path string)             { server.configPath = path }
 func (server *Server) ConfigureDiscovery(service *discovery.Service) {
 	server.discovery = service
 	server.peers = service.Peers

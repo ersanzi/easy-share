@@ -74,6 +74,14 @@ export function ListDrives() {
   return window['go']['main']['App']['ListDrives']();
 }
 
+export function OpenFile(arg1) {
+  return window['go']['main']['App']['OpenFile'](arg1);
+}
+
+export function OpenReceiveFolder() {
+  return window['go']['main']['App']['OpenReceiveFolder']();
+}
+
 export function ProcessDroppedFiles(arg1) {
   return window['go']['main']['App']['ProcessDroppedFiles'](arg1);
 }

@@ -250,6 +250,27 @@ func (a *App) ReportFrontendError(message, stack string) {
 
 func (a *App) GetLogDirectory() string { return logging.Directory() }
 
+// OpenFile 用系统默认应用打开指定文件（Finder 双击 / 资源管理器选中）。
+func (a *App) OpenFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := fsutil.OpenFile(path)
+	a.reportError("open file", err)
+	return err
+}
+
+// OpenReceiveFolder 在文件管理器中打开文件接收目录。
+func (a *App) OpenReceiveFolder() error {
+	dir := a.config.ReceiveDir
+	if dir == "" {
+		return nil
+	}
+	err := fsutil.OpenFolder(dir)
+	a.reportError("open receive folder", err)
+	return err
+}
+
 func (a *App) ClearHistory() error {
 	client, err := a.coreClient()
 	if err == nil {
@@ -361,13 +382,13 @@ func (a *App) CloudPreview(key string) (cloud.Preview, error) {
 
 // CloudUploadEvent is the payload emitted to the frontend during cloud uploads.
 type CloudUploadEvent struct {
-	Name    string  `json:"name"`
-	Size    int64   `json:"size"`
-	Sent    int64   `json:"sent"`
-	Speed   float64 `json:"speed"`   // bytes per second
-	ETA     float64 `json:"eta"`     // seconds remaining
-	Done    bool    `json:"done"`
-	Error   string  `json:"error,omitempty"`
+	Name  string  `json:"name"`
+	Size  int64   `json:"size"`
+	Sent  int64   `json:"sent"`
+	Speed float64 `json:"speed"` // bytes per second
+	ETA   float64 `json:"eta"`   // seconds remaining
+	Done  bool    `json:"done"`
+	Error string  `json:"error,omitempty"`
 }
 
 func (a *App) CloudUpload() (string, error) {
@@ -663,14 +684,29 @@ func (a *App) showWindow() {
 
 func (a *App) quitFromTray() {
 	a.quitLock.Lock()
+	if a.quitting {
+		a.quitLock.Unlock()
+		return
+	}
 	a.quitting = true
 	a.quitLock.Unlock()
 	a.logger.Printf("quit requested from tray")
 
-	// Attempt graceful Core shutdown before exiting the desktop process.
+	// 给 Core shutdown 加超时，避免 Core 无响应时阻塞退出流程（macOS 上常见）
 	if client, err := a.coreClient(); err == nil {
-		_ = client.Action(a.ctx, "/api/shutdown")
-		a.logger.Printf("Core shutdown requested from tray")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		done := make(chan struct{})
+		go func() {
+			_ = client.Action(shutdownCtx, "/api/shutdown")
+			close(done)
+		}()
+		select {
+		case <-done:
+			a.logger.Printf("Core shutdown completed")
+		case <-shutdownCtx.Done():
+			a.logger.Printf("Core shutdown timed out, forcing quit")
+		}
+		cancel()
 	}
 	runtime.Quit(a.ctx)
 }

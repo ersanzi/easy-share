@@ -190,9 +190,28 @@ func (receiver *Receiver) receive(value pending, saveDir string) {
 	temporary := file.Name()
 	updated, _ := receiver.options.Tasks.Update(value.taskID, func(value *task.Task) error { value.Status = task.StatusRunning; return nil })
 	receiver.emit(updated)
+
+	// 带节流和速度计算的进度写入器
+	var lastTime = time.Now()
+	var lastBytes int64
 	writer := &progressWriter{writer: file, total: value.metadata.FileSize, update: func(count int64) {
-		current, _ := receiver.options.Tasks.Update(value.taskID, func(value *task.Task) error { value.TransferredBytes = count; return nil })
+		now := time.Now()
+		if now.Sub(lastTime) < 100*time.Millisecond && count != value.metadata.FileSize {
+			return
+		}
+		elapsed := now.Sub(lastTime).Seconds()
+		speed := 0.0
+		if elapsed > 0 {
+			speed = float64(count-lastBytes) / elapsed
+		}
+		current, _ := receiver.options.Tasks.Update(value.taskID, func(value *task.Task) error {
+			value.TransferredBytes = count
+			value.Speed = speed
+			return nil
+		})
 		receiver.emit(current)
+		lastBytes = count
+		lastTime = now
 	}}
 	_, copyErr := io.CopyN(writer, value.connection, value.metadata.FileSize)
 	syncErr := file.Sync()
@@ -207,6 +226,7 @@ func (receiver *Receiver) receive(value pending, saveDir string) {
 		return
 	}
 	// 文件夹传输：解压 zip 到同名目录，删除 zip 文件
+	finalPath := destination
 	if isFolder {
 		folderName := value.metadata.FileName
 		folderDest, dirErr := availablePath(targetDir, folderName)
@@ -227,10 +247,13 @@ func (receiver *Receiver) receive(value pending, saveDir string) {
 			return
 		}
 		os.Remove(destination)
+		finalPath = folderDest
 	}
 	updated, _ = receiver.options.Tasks.Update(value.taskID, func(value *task.Task) error {
 		value.TransferredBytes = value.TotalBytes
+		value.Speed = 0
 		value.Status = task.StatusCompleted
+		value.LocalPath = finalPath
 		return nil
 	})
 	receiver.emit(updated)

@@ -550,3 +550,16 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .preview-spinner { width: 24px; height: 24px; margin-bottom: 13px; border: 2px solid rgba(0,122,255,.18); border-top-color: var(--blue); border-radius: 50%; animation: drop-spin .7s linear infinite; }
 .preview-footer { padding: 9px 18px; color: #8a6500; background: rgba(255,204,0,.13); border-top: 1px solid rgba(178,128,0,.12); font-size: 10px; text-align: center; }
 @media (max-width: 720px) { .preview-overlay { padding: 12px; } .preview-dialog { width: 100%; height: 92vh; border-radius: 17px; } .preview-text { padding: 18px; } }
+
+/* ─── macOS 平台适配 ─── */
+.is-mac .window-chrome { height: 52px; }
+.is-mac .drag-region { --wails-draggable: drag; }
+.is-mac .sidebar { padding-top: 8px; }
+.is-mac .app-identity { padding-bottom: 18px; }
+.is-mac .app-body { border-top: none; }
+.is-mac .workspace { padding-top: 20px; }
+.is-mac .card { border-radius: 14px; }
+.is-mac .transfer-row { border-radius: 12px; }
+.is-mac .nav-item { border-radius: 9px; }
+.is-mac .summary-card { border-radius: 14px; }
+.is-mac .shutdown-btn { border-radius: 9px; }

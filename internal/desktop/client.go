@@ -129,9 +129,9 @@ func (client *Client) CloudUpload(ctx context.Context, filePath string) (cloud.U
 type ProgressFunc func(sent, total int64)
 
 type progressReader struct {
-	reader io.Reader
-	sent   int64
-	total  int64
+	reader     io.Reader
+	sent       int64
+	total      int64
 	onProgress ProgressFunc
 }
 
