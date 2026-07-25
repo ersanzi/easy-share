@@ -110,6 +110,8 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/transfers/{id}/reject", server.auth(http.HandlerFunc(server.rejectTransfer)))
 	mux.Handle("POST /api/config/reload", server.auth(http.HandlerFunc(server.reloadConfig)))
 	mux.Handle("GET /api/cloud/files", server.auth(http.HandlerFunc(server.cloudList)))
+	mux.Handle("GET /api/cloud/preview", server.auth(http.HandlerFunc(server.cloudPreview)))
+	mux.HandleFunc("GET /api/cloud/preview/content", server.cloudPreviewContent)
 	mux.Handle("POST /api/cloud/upload", server.auth(http.HandlerFunc(server.cloudUpload)))
 	mux.Handle("POST /api/cloud/download", server.auth(http.HandlerFunc(server.cloudDownload)))
 	mux.Handle("DELETE /api/cloud/files", server.auth(http.HandlerFunc(server.cloudDelete)))

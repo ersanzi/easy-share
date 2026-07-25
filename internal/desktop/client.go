@@ -8,9 +8,11 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"easyshare/internal/api"
@@ -103,6 +105,20 @@ func (client *Client) CloudList(ctx context.Context) ([]cloud.File, error) {
 	err := client.request(ctx, http.MethodGet, "/api/cloud/files", nil, &result)
 	return result, err
 }
+
+// CloudPreview 获取后端声明的预览能力，并将相对内容地址补全为 Core 地址。
+func (client *Client) CloudPreview(ctx context.Context, key string) (cloud.Preview, error) {
+	var result cloud.Preview
+	err := client.request(ctx, http.MethodGet, "/api/cloud/preview?key="+url.QueryEscape(key), nil, &result)
+	if err != nil {
+		return cloud.Preview{}, err
+	}
+	if strings.HasPrefix(result.ContentURL, "/") {
+		result.ContentURL = client.baseURL + result.ContentURL
+	}
+	return result, nil
+}
+
 func (client *Client) CloudUpload(ctx context.Context, filePath string) (cloud.UploadResult, error) {
 	var result cloud.UploadResult
 	err := client.request(ctx, http.MethodPost, "/api/cloud/upload", map[string]string{"filePath": filePath}, &result)

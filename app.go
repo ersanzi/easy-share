@@ -348,6 +348,17 @@ func (a *App) CloudList() ([]cloud.File, error) {
 	return result, err
 }
 
+// CloudPreview 返回文件的安全预览能力。
+func (a *App) CloudPreview(key string) (cloud.Preview, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return cloud.Preview{}, err
+	}
+	result, err := client.CloudPreview(a.ctx, key)
+	a.reportError("cloud preview", err)
+	return result, err
+}
+
 // CloudUploadEvent is the payload emitted to the frontend during cloud uploads.
 type CloudUploadEvent struct {
 	Name    string  `json:"name"`

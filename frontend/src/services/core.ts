@@ -5,6 +5,7 @@
   CloudDelete,
   CloudDownload,
   CloudList,
+  CloudPreview,
   CloudShare,
   CloudUpload,
   CloudUploadFolder,
@@ -26,7 +27,7 @@
   StartDrive,
   StopDrive,
 } from '../../wailsjs/go/main/App'
-import type { CloudFile, CoreSnapshot, DroppedFiles } from '../types/core'
+import type { CloudFile, CloudPreview as CloudPreviewData, CoreSnapshot, DroppedFiles } from '../types/core'
 
 export interface SettingsData {
   deviceName: string
@@ -55,6 +56,7 @@ export const core = {
   clearHistory: ClearHistory,
   deleteTask: DeleteTask,
   cloudList: () => CloudList() as Promise<CloudFile[]>,
+  cloudPreview: (key: string) => CloudPreview(key) as Promise<CloudPreviewData>,
   cloudUpload: CloudUpload,
   cloudUploadFolder: CloudUploadFolder,
   cloudUploadPaths: CloudUploadPaths,

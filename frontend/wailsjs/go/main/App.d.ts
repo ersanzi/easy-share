@@ -18,6 +18,8 @@ export function CloudDownload(arg1:string):Promise<void>;
 
 export function CloudList():Promise<Array<cloud.File>>;
 
+export function CloudPreview(arg1:string):Promise<cloud.Preview>;
+
 export function CloudShare(arg1:string,arg2:number):Promise<string>;
 
 export function CloudUpload():Promise<string>;

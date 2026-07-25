@@ -32,6 +32,7 @@ export namespace cloud {
 	    contentType: string;
 	    // Go type: time
 	    lastModified: any;
+	    previewKind: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new File(source);
@@ -44,6 +45,7 @@ export namespace cloud {
 	        this.size = source["size"];
 	        this.contentType = source["contentType"];
 	        this.lastModified = this.convertValues(source["lastModified"], null);
+	        this.previewKind = source["previewKind"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -63,6 +65,32 @@ export namespace cloud {
 		    }
 		    return a;
 		}
+	}
+	export class Preview {
+	    key: string;
+	    name: string;
+	    kind: string;
+	    contentType: string;
+	    size: number;
+	    contentUrl?: string;
+	    text?: string;
+	    truncated?: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new Preview(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.contentType = source["contentType"];
+	        this.size = source["size"];
+	        this.contentUrl = source["contentUrl"];
+	        this.text = source["text"];
+	        this.truncated = source["truncated"];
+	    }
 	}
 
 }

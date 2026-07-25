@@ -18,11 +18,12 @@ const defaultShareExpiry = 24 * time.Hour
 
 // File represents a cloud file entry for the frontend.
 type File struct {
-	Key          string    `json:"key"`
-	Name         string    `json:"name"`
-	Size         int64     `json:"size"`
-	ContentType  string    `json:"contentType"`
-	LastModified time.Time `json:"lastModified"`
+	Key          string      `json:"key"`
+	Name         string      `json:"name"`
+	Size         int64       `json:"size"`
+	ContentType  string      `json:"contentType"`
+	LastModified time.Time   `json:"lastModified"`
+	PreviewKind  PreviewKind `json:"previewKind"`
 }
 
 // UploadResult is returned after a successful upload.
@@ -109,6 +110,7 @@ func (s *Service) List(ctx context.Context, prefix string) ([]File, error) {
 				Size:         entry.Size,
 				ContentType:  entry.ContentType,
 				LastModified: entry.LastModified,
+				PreviewKind:  DetectPreviewKind(entry.ContentType, entry.Key),
 			})
 		}
 		if !result.IsTruncated {

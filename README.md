@@ -8,7 +8,7 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 
 - UDP 局域网设备发现 + TCP 流式文件发送/接收
 - 拖拽发送：文件/文件夹拖入窗口即弹设备选择浮层，点选即发（文件夹自动打包传输）
-- 网盘功能（RustFS）：文件/文件夹上传、列表、下载、删除、分享链接，实时进度，拖拽上传
+- 网盘功能（RustFS）：文件/文件夹上传、列表、下载、删除、分享链接，实时进度，拖拽上传，以及图片/PDF/限量 UTF-8 文本在线预览
 - 系统文件入口：Windows Shell NameSpace 委托 WebDAV UNC；macOS Finder 挂载 WebDAV 卷
 - 系统托盘/菜单栏（Windows systray、macOS 原生 AppKit）+ Frameless 无边框窗口 + macOS 简约风格 UI
 - 设置页、传输历史、另存为、多文件发送、速度高亮
@@ -125,6 +125,7 @@ git push github dev
 - [`docs/README.md`](docs/README.md)：文档导航和资料状态
 - [`docs/architecture.md`](docs/architecture.md)：当前架构、端口、API 和关键流程
 - [`docs/product-vision.md`](docs/product-vision.md)：网络云盘、Windows 原生入口与内网协同的长期方向
+- [docs/cloudreve-benchmark.md](docs/cloudreve-benchmark.md)：Cloudreve 能力对标、EasyShare 差距与迁移优先级
 - [`docs/development.md`](docs/development.md)：开发环境、改动入口、测试方法
 - [`docs/macos-port.md`](docs/macos-port.md)：macOS 平台差异、构建、Finder 集成与排障
 - [`docs/version-iteration.md`](docs/version-iteration.md)：下一版本规划和交付流程
@@ -157,11 +158,12 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - 设置页、传输历史、另存为、多文件发送、速度高亮
 - Core 异常恢复（watchdog + 配置热加载）
 - 网盘功能（RustFS）：上传/列表/下载/删除/分享，实时进度
+- 网盘在线预览：图片、PDF、限量 UTF-8 文本，内容访问使用短期 HMAC 票据
 - 「此电脑」品牌入口（Shell NameSpace，去盘符）
 - 拖拽发送（原生文件拖放 + 设备选择浮层）
 - 文件夹传输：局域网自动打包/安全解压，网盘保留目录结构并支持拖拽上传
 - macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（GitHub Actions 自动打包已通过，待真机运行验收）
-- 下一步：网盘增强（大文件分片、断点续传、在线预览）
+- 下一步：网盘增强（大文件分片、断点续传、回收站、缩略图缓存与统一任务模型）
 
 ### 阶段 3：安全加固
 
@@ -197,5 +199,5 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - Windows 为主要支持平台；首次 Mac 构建暴露的 Wails/systray `AppDelegate` 链接冲突已从架构上修复，修复后的 `.app`/DMG 与菜单栏行为仍待 Mac 真机复验。
 - Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
-- 网盘上传不支持断点续传与在线预览。
+- 网盘上传暂不支持断点续传；在线预览当前支持图片、PDF 和最多 1 MiB 的 UTF-8 文本，暂不支持 Office、音视频、SVG 等高级或主动内容格式。
 - 暂无自动升级；macOS GitHub Actions 支持 master/PR、手动和 tag 构建，产出 DMG、`.app.zip` 与 SHA-256 校验文件；Windows 仍依赖本地 `scripts/build.ps1` 全量验证。

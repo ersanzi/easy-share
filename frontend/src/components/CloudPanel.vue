@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
-import type { CloudFile } from '../types/core'
+import type { CloudFile, CloudPreview as CloudPreviewData } from '../types/core'
+import CloudPreviewView from './CloudPreview.vue'
 import { core } from '../services/core'
 import { EventsOn, EventsOff } from '../../wailsjs/runtime/runtime'
 
@@ -21,6 +22,10 @@ const loading = ref(false)
 const shareUrl = ref('')
 const shareKey = ref('')
 const uploads = ref<UploadProgress[]>([])
+const previewOpen = ref(false)
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewData = ref<CloudPreviewData | null>(null)
 
 const loadFiles = async () => {
   loading.value = true
@@ -86,6 +91,30 @@ const requestShare = async (key: string) => {
     shareKey.value = key
   } catch {
     shareUrl.value = ''
+  }
+}
+const closePreview = () => {
+  previewOpen.value = false
+  previewLoading.value = false
+  previewError.value = ''
+  previewData.value = null
+}
+
+const openPreview = async (file: CloudFile) => {
+  previewOpen.value = true
+  previewLoading.value = true
+  previewError.value = ''
+  previewData.value = null
+  try {
+    const result = await core.cloudPreview(file.key)
+    previewData.value = result
+    if (result.kind === 'unsupported') {
+      previewError.value = '此格式暂不支持在线预览，请下载后打开。'
+    }
+  } catch (error) {
+    previewError.value = error instanceof Error ? error.message : '预览服务暂不可用，请稍后重试。'
+  } finally {
+    previewLoading.value = false
   }
 }
 
@@ -189,6 +218,7 @@ defineExpose({ refresh: loadFiles })
             <span>{{ formatSize(file.size) }} · {{ formatDate(file.lastModified) }}</span>
           </div>
           <div class="cloud-actions">
+            <button v-if="file.previewKind !== 'unsupported'" class="secondary-button compact preview-action" type="button" title="预览" @click="openPreview(file)">预览</button>
             <button class="secondary-button compact" type="button" title="下载" @click="$emit('download', file.key)">下载</button>
             <button class="secondary-button compact" type="button" title="分享链接" @click="requestShare(file.key)">分享</button>
             <button class="secondary-button compact destructive-text" type="button" title="删除" @click="$emit('delete', file.key)">删除</button>
@@ -203,4 +233,5 @@ defineExpose({ refresh: loadFiles })
       </div>
     </template>
   </section>
+  <CloudPreviewView v-if="previewOpen" :preview="previewData" :loading="previewLoading" :error="previewError" @close="closePreview" />
 </template>

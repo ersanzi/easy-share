@@ -9,6 +9,7 @@
 | [`../README.md`](../README.md) | 项目入口、快速运行、产物位置 | 环境或入口变化时 |
 | [`architecture.md`](architecture.md) | 进程、模块、端口、API、生命周期 | 架构或协议变化时 |
 | [`product-vision.md`](product-vision.md) | WPS 式网络云盘与内网协同的长期方向 | 产品边界或路线变化时 |
+| [cloudreve-benchmark.md](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计 | 对标基线或优先级变化时 |
 | [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线、阶段门禁与推荐组合 | 技术路线或首选方案变化时 |
 | [`technology-evaluation.md`](technology-evaluation.md) | “成熟但先进”的评估门禁、产品雷达和对象存储候选 | 依赖状态变化或生产选型复审时 |
 | [`adr/`](adr/README.md) | 跨版本架构决策、备选方案和验证要求 | 重要决策提出、接受或被取代时 |

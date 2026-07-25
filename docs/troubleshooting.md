@@ -1,4 +1,4 @@
-﻿# EasyShare 故障排查
+# EasyShare 故障排查
 
 ## 1. 先收集日志
 
@@ -178,3 +178,32 @@ Not found: time.Time
 它在成功的 Windows 构建中也会出现。应继续向下查看最终的 `Done` 或真正的 Go/Vite/clang `ERROR`；本次构建中止点是后面的 `duplicate symbol`。
 
 完整 macOS 构建、Finder 挂载与菜单栏排障见 [`macos-port.md`](macos-port.md)。
+
+## 10. 网盘在线预览失败
+
+先区分“列表能力提示”和“实际预览元数据”：S3 `ListObjects` 不一定返回可靠的 `Content-Type`，列表只用于低成本显示入口；打开预览时 Core 会通过 `HeadObject` 校正。如果列表显示“预览”但打开失败，检查 `core.log` 中的 `cloud preview`/`preview head` 错误，并核对对象实际 `Content-Type` 与大小。
+
+图片/PDF 内容 URL 返回 `401 preview_ticket_invalid` 时，表示五分钟票据已过期、参数被篡改或 Core API Token 已轮换。关闭预览后重新打开以获取新票据，不要缓存旧 URL，也**不能把长期 API Token 拼入 URL**。WebView 的 `<img>`/`<iframe>` 请求无法像 Wails API 调用一样附加 Bearer Header，这正是使用短期 HMAC 票据的原因。
+
+常见格式行为：
+
+- SVG 被拒绝是安全设计。SVG 可包含脚本、外链和其他主动内容，应下载后由系统应用打开。
+- 文本只预览前 1 MiB 且必须为 UTF-8；其他编码降级为“不支持”，不会猜测编码或通过 HTML 渲染。
+- Windows 的 `mime.TypeByExtension` 可能受注册表和第三方软件影响，代码必须保留内置扩展名回退，并以 `HeadObject` 结果作为实际预览校正。
+
+PDF 空白时按以下顺序排查：
+
+1. 从预览描述中复制临时内容 URL，立即请求并确认不是 401/415。
+2. 检查响应是否为 `Content-Type: application/pdf`、`Content-Disposition: inline`，且 `Content-Length` 与对象大小一致。
+3. 确认 URL 指向 `127.0.0.1` 的 Core 端口，而不是 Wails 页面相对地址或 RustFS 管理地址。
+4. 检查当前 WebView2/PDF 查看器是否可用；先用小型标准 PDF 排除文件损坏。
+5. 不要通过关闭认证、延长长期 Token 或把对象存储凭据暴露给前端来绕过问题。
+
+Go 导出方法或结构体字段变化后若前端报 `TS2305`/`TS2339`，执行：
+
+```powershell
+wails generate module
+npm --prefix frontend run build
+```
+
+并确认 `frontend/src/types/core.ts`、`frontend/src/services/core.ts` 与 `frontend/wailsjs/go/` 同步更新。

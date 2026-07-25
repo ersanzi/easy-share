@@ -26,6 +26,10 @@ export function CloudList() {
   return window['go']['main']['App']['CloudList']();
 }
 
+export function CloudPreview(arg1) {
+  return window['go']['main']['App']['CloudPreview'](arg1);
+}
+
 export function CloudShare(arg1, arg2) {
   return window['go']['main']['App']['CloudShare'](arg1, arg2);
 }
