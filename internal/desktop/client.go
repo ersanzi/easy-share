@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"easyshare/internal/api"
 	"easyshare/internal/cloud"
 	"easyshare/internal/discovery"
@@ -229,4 +231,29 @@ func (client *Client) CloudShare(ctx context.Context, key string, expiryHours in
 	}
 	err := client.request(ctx, http.MethodPost, "/api/cloud/share", map[string]any{"key": key, "expiryHours": expiryHours}, &result)
 	return result.URL, err
+}
+
+// SubscribeEvents 通过 WebSocket 订阅 Core 的实时事件流。
+// 每收到一条 JSON 消息就调用 onEvent(rawJSON)。连接断开或 ctx 取消时返回。
+// 调用方负责重连逻辑。
+func (client *Client) SubscribeEvents(ctx context.Context, onEvent func(raw []byte)) error {
+	// http://127.0.0.1:19080 → ws://127.0.0.1:19080/api/events
+	wsURL := strings.Replace(client.baseURL, "http://", "ws://", 1) + "/api/events"
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+client.token)
+
+	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
+	if err != nil {
+		return fmt.Errorf("websocket dial: %w", err)
+	}
+	defer connection.CloseNow()
+	connection.SetReadLimit(1 << 20) // 1MB 足够
+
+	for {
+		_, data, err := connection.Read(ctx)
+		if err != nil {
+			return err
+		}
+		onEvent(data)
+	}
 }

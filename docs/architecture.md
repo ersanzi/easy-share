@@ -1,66 +1,85 @@
-﻿# EasyShare 当前架构
+# EasyShare 当前架构
 
-> 更新基线：2026-07-19，Windows MVP。
+> 更新基线：2026-07-26。
 
 ## 1. 进程模型
 
-EasyShare 由两个 Windows 进程组成：
+EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制）：
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│ easyshare.exe                                               │
-│ Wails 宿主 + Vue 3 UI                                      │
-│ app.go：Core 进程管理、HTTP 客户端、文件选择、桌面日志       │
-└───────────────────────┬─────────────────────────────────────┘
-                        │ 127.0.0.1:19079 / Bearer Token
-┌───────────────────────▼─────────────────────────────────────┐
-│ easyshare-core.exe                                          │
-│ Core API、UDP 发现、TCP 传输、WebDAV、网络驱动器映射         │
-└───────┬────────────────────┬───────────────────────┬────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ easyshare(.exe)  — Wails 桌面端                                 │
+│ main.go + app.go：窗口、托盘、Core 进程管理、WebSocket 事件流    │
+│ tray_windows.go / tray_darwin.go：平台托盘                      │
+│ frontend/：Vue 3 + TypeScript UI                                │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ HTTP 127.0.0.1:19080 / Bearer Token
+                            │ WebSocket ws://127.0.0.1:19080/api/events
+┌───────────────────────────▼─────────────────────────────────────┐
+│ easyshare-core(.exe)  — 后台服务                                │
+│ cmd/core/main.go：组装、信号、优雅退出                           │
+│ internal/api：HTTP API + WebSocket 事件Hub                      │
+│ internal/discovery：UDP 设备发现                                │
+│ internal/transfer：TCP 文件传输（含文件夹 zip 管线）            │
+│ internal/drive：WebDAV 共享服务                                 │
+│ internal/cloud：网盘 API（S3 对象存储）                         │
+│ internal/namespace：系统文件入口（此电脑 / Finder 挂载）         │
+└───────┬────────────────────┬───────────────────────┬────────────┘
         │ UDP 9527           │ TCP 9528              │ 127.0.0.1:19080
-        │ 设备发现           │ 文件传输              │ WebDAV Digest
+        │ 设备发现           │ 文件传输              │ WebDAV 共享（无认证）
         ▼                    ▼                       ▼
-   局域网设备             对端 EasyShare       Windows WebClient / Z:
+   局域网设备             对端 EasyShare       资源管理器 / Finder
+                                                   │ 127.0.0.1:19081
+                                                   │ WebDAV 云盘驱动器
+                                                   ▼
+                                              「此电脑」品牌入口
 ```
 
-关闭桌面窗口默认只结束 `easyshare.exe`，Core 可以继续运行。界面中的“退出全部服务”才会关闭整个系统。
+关闭桌面窗口默认隐藏到托盘（OnBeforeClose 拦截），Core 继续运行。托盘菜单"退出"或界面"退出服务"才执行全量关闭。
 
 ## 2. 主要代码入口
 
 | 路径 | 职责 |
 | --- | --- |
-| `main.go` | 创建 Wails 窗口，注册 Startup/Shutdown 和 Go 绑定 |
-| `app.go` | 前端桥接、Core 探测/启动、Core API 调用、桌面日志 |
-| `cmd/core/main.go` | Core 组装、后台服务启动、信号和退出管理 |
-| `internal/api` | Core HTTP API、状态、事件流和资源清理 |
-| `internal/config` | 配置默认值、验证、原子保存 |
-| `internal/desktop` | Core HTTP 客户端、健康校验和子进程启动 |
+| `main.go` | Wails 窗口创建、Frameless、DragAndDrop、OnBeforeClose 隐藏/退出 |
+| `app.go` | 前端桥接、Core 探测/启动、事件流订阅、系统通知、watchdog |
+| `tray_windows.go` | Windows 托盘（getlantern/systray + ICO） |
+| `tray_darwin.go` + `tray_native_darwin.m` | macOS 菜单栏（NSStatusItem，不接管 AppDelegate） |
+| `cmd/core/main.go` | Core 组装、信号监听、优雅退出 |
+| `internal/api` | HTTP 路由、WebSocket eventHub、状态、资源清理 |
+| `internal/config` | 配置默认值、验证、原子保存、热加载 |
+| `internal/desktop` | Core HTTP 客户端（含 WebSocket 订阅）、健康校验、子进程启动 |
 | `internal/discovery` | UDP 设备广播与在线列表 |
-| `internal/transfer` | TCP 流式发送、接收和安全落盘 |
-| `internal/drive` | WebDAV Digest 认证、服务和 Windows `net use` 映射 |
+| `internal/transfer` | TCP 流式发送/接收、文件夹 zip 管线、速度计算 |
+| `internal/drive` | WebDAV 服务（本地目录 + S3 云盘两种 FileSystem） |
+| `internal/cloud` | 网盘业务层：上传/下载/列表/删除/分享/预览 |
+| `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake） |
+| `internal/cloud/webdavfs` | S3-backed WebDAV FileSystem |
+| `internal/namespace` | 系统文件入口：Windows Shell NameSpace / macOS Finder 挂载 |
+| `internal/fsutil` | 跨平台磁盘/卷枚举、目录列举、打开文件/文件夹 |
 | `internal/logging` | 日志目录、追加写入和 5 MiB 轮转 |
-| `internal/task` | 内存中的传输任务状态 |
-| internal/cloud/objectstore | 尚未接入 Core 的对象存储边界、内存 fake 与 RustFS S3 adapter |
+| `internal/task` | 传输任务状态机、持久化（终态 JSON 文件） |
 | `frontend/src/services/core.ts` | Wails 绑定的前端适配层 |
-| `frontend/src/composables/useEasyShare.ts` | 前端状态、轮询、操作和退出状态机 |
-| `frontend/src/components` | 状态、设备、传输、驱动器 UI |
+| `frontend/src/composables/useEasyShare.ts` | 前端状态、实时事件订阅、轮询 fallback |
+| `frontend/src/components/` | 概览、设备、传输、网盘、设置 UI |
+| `knowledge/` | Python 知识平台服务（FastAPI，独立进程） |
 
-`frontend/wailsjs` 是 Wails 自动生成代码，不应手工修改。
+`frontend/wailsjs` 是 Wails 自动生成代码，`wails build` 时自动重生成。
 
 ## 3. 默认端口和地址
 
 | 功能 | 默认地址/端口 | 暴露范围 |
 | --- | --- | --- |
-| Core API | `127.0.0.1:19079` | 仅本机 |
-| WebDAV | `127.0.0.1:19080` | 仅本机 |
+| Core API + WebDAV 共享 | `127.0.0.1:19080` | 仅本机 |
+| 云盘驱动器 WebDAV | `127.0.0.1:19081` | 仅本机 |
 | 设备发现 | UDP `9527` | 局域网 |
 | 文件传输 | TCP `9528` | 局域网 |
 
-端口由 `%LOCALAPPDATA%\EasyShare\config.json` 配置。Core API Host 必须是 loopback 地址。
+端口由 `%LOCALAPPDATA%\EasyShare\config.json`（macOS: `~/Library/Application Support/EasyShare/config.json`）配置。Core API Host 必须是 loopback 地址。
 
 ## 4. Core API
 
-`/health` 使用随机 nonce、Device ID 和 HMAC proof 来确认端口上的进程确实是当前配置对应的 EasyShare Core。其余 API 需要：
+`/health` 使用随机 nonce、Device ID 和 HMAC proof 确认端口上的进程确实是当前配置对应的 EasyShare Core。其余 API 需要：
 
 ```http
 Authorization: Bearer <apiToken>
@@ -69,79 +88,126 @@ Authorization: Bearer <apiToken>
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/health?nonce=...` | Core 身份和健康检查 |
-| `GET` | `/api/status` | Core、发现、接收、WebDAV、映射状态 |
+| `GET` | `/api/status` | Core、发现、接收、WebDAV、云盘状态 |
 | `GET` | `/api/peers` | 附近设备 |
-| `GET` | `/api/tasks` | 传输任务 |
-| `GET` | `/api/events` | WebSocket 事件流 |
+| `GET` | `/api/tasks` | 传输任务列表 |
+| `GET` | `/api/events` | WebSocket 实时事件流 |
 | `POST` | `/api/transfers` | 发起文件发送 |
-| `POST` | `/api/transfers/{id}/accept` | 接受接收任务 |
-| `POST` | `/api/transfers/{id}/reject` | 拒绝接收任务 |
-| `POST` | `/api/drive/start` | 启动 WebDAV |
-| `POST` | `/api/drive/stop` | 停止 WebDAV 和相关映射 |
-| `POST` | `/api/drive/map` | 启动 WebDAV 后映射驱动器 |
-| `POST` | `/api/drive/unmap` | 取消 EasyShare 自己的映射 |
-| `POST` | `/api/shutdown` | 按顺序退出全部 Core 服务 |
+| `POST` | `/api/transfers/{id}/accept` | 接受接收（可指定 saveDir） |
+| `POST` | `/api/transfers/{id}/reject` | 拒绝接收 |
+| `POST` | `/api/tasks/clear` | 清除全部任务记录 |
+| `DELETE` | `/api/tasks/{id}` | 删除单条任务 |
+| `POST` | `/api/drive/start` | 启动 WebDAV 共享 |
+| `POST` | `/api/drive/stop` | 停止 WebDAV 共享 |
+| `POST` | `/api/config/reload` | 热加载配置 |
+| `GET` | `/api/cloud/files` | 网盘文件列表 |
+| `GET` | `/api/cloud/preview?key=` | 网盘文件预览 |
+| `POST` | `/api/cloud/upload` | 网盘上传（multipart 流式） |
+| `POST` | `/api/cloud/download` | 网盘下载（返回预签名 URL） |
+| `DELETE` | `/api/cloud/files` | 网盘删除 |
+| `POST` | `/api/cloud/share` | 网盘分享链接 |
+| `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
+
+### WebSocket 事件类型
+
+| type | data | 触发时机 |
+| --- | --- | --- |
+| `transfer.updated` | Task 对象 | 传输进度/状态变化（100ms 节流） |
+| `status.changed` | Status 对象 | 服务启停 |
+| `drive.status.changed` | 驱动器状态 | WebDAV 启停 |
+| `error` | ErrorResponse | 传输失败等异步错误 |
 
 ## 5. 关键生命周期
 
 ### 启动
 
-1. 桌面端打开 `desktop.log`。
-2. 加载或首次生成 `config.json`。
-3. 调用带 HMAC proof 的 `/health` 检查现有 Core。
-4. 如果身份匹配则复用；否则启动同目录下的 `easyshare-core.exe`。
-5. Core 再次检查兼容实例，避免手动或并发启动产生端口冲突。
-6. 桌面端建立 Core API Client，前端读取首次快照；若尚未连接网络盘，则自动发起一次映射。自动尝试失败后只展示错误，不随状态轮询重复映射。
+1. 桌面端打开 `desktop.log`，加载或首次生成 `config.json`。
+2. 调用带 HMAC proof 的 `/health` 检查现有 Core。
+3. 身份匹配则复用；否则启动同目录下的 `easyshare-core(.exe)`（macOS 用 Setsid 独立会话）。
+4. 建立 Core API Client，启动 watchdog（5s 心跳，连续 3 次失败重启 Core）。
+5. 启动 eventStream：WebSocket 订阅 Core 事件，转发为 Wails `core-event`，断线指数退避重连。
+6. 注册系统文件入口（Windows: Shell NameSpace 注册表；macOS: mount_webdav 挂载）。
+7. 前端初始化：首次快照 → 订阅 `core-event` 实时事件 → 5s 轮询 fallback。
 
-### 网络驱动器映射
+### 系统文件入口（此电脑 / Finder）
 
-1. Core 确保 WebDAV 已监听 `127.0.0.1:19080`。
-2. WebDAV 使用 Digest Authentication。这样可以兼容 Windows 默认 `BasicAuthLevel=1`，无需修改机器级注册表。
-3. HTTP URL 转换为 Windows WebClient UNC：
+**Windows**：通过注册表在 Shell NameSpace 注册 CLSID，委托文件夹指向 WebDAV UNC（`\\127.0.0.1@19080\DavWWWRoot`），无需盘符映射。云盘驱动器使用独立端口 19081 的 S3-backed WebDAV。
 
-   ```text
-   http://127.0.0.1:19080
-   -> \\127.0.0.1@19080\DavWWWRoot
-   ```
-
-4. 查询目标盘符；若已指向当前 EasyShare WebDAV，则幂等复用并校准 Core 状态。
-5. 已有非 EasyShare 映射时拒绝覆盖；空闲时执行 `net use <盘符> <UNC> <密码> /user:<用户名> /persistent:no`。
-6. 取消映射前再次校验远端地址，只删除 EasyShare 拥有的映射。
+**macOS**：优先使用 `mount_webdav` 命令行挂载到 `/Volumes/EasyShare 网盘`（不弹 GUI 对话框），osascript `mount volume` 仅作兜底。
 
 ### 退出全部服务
 
-前端先停止轮询，然后调用 `ShutdownAll`。Core 资源清理顺序不可随意改变：
+前端先停止轮询和事件订阅，然后调用 `ShutdownAll`。Core 资源清理顺序：
 
-1. 取消网络驱动器映射
-2. 停止 WebDAV
+1. 停止云盘驱动器 WebDAV（:19081）
+2. 停止共享 WebDAV（:19080）
 3. 取消 Core 后台 context（发现、接收等）
 4. 关闭 Core HTTP Server 并退出进程
-5. 前端进入“服务已安全退出”状态，不再请求 Core
+5. 桌面端设置 quitting=true，调用 runtime.Quit
+6. 前端进入"服务已安全退出"状态
 
-直接关闭桌面窗口不会执行上述 Core 全退出流程。
+托盘退出额外加 3s 超时：Core 无响应时强制退出桌面进程，避免卡死。
 
-## 6. 状态和持久化
+## 6. 实时通信架构
 
-- 配置持久化在 `%LOCALAPPDATA%\EasyShare\config.json`，使用临时文件加原子替换写入。
-- peers 和 tasks 当前是内存状态，Core 退出后丢失。
-- WebDAV 共享文件和已接收文件直接存储在配置指定的本地目录。
-- DriveMapped 是 Core 的运行状态；桌面端下一次自动映射时可以认领远端地址完全匹配的 EasyShare 残留映射，但不会认领或清理无法确认归属的盘符。
+```text
+Core eventHub (内部广播)
+    │
+    ▼ WebSocket /api/events
+desktop eventStream (Go 协程，指数退避重连)
+    │
+    ▼ runtime.EventsEmit("core-event", rawJSON)
+前端 EventsOn("core-event", handler)
+    │
+    ├── transfer.updated → 原地更新 tasks 数组
+    ├── status.changed / drive.status.changed → 全量 refresh
+    └── error → 显示错误提示
+    
+5s 轮询 GetSnapshot() 作为 fallback（断线/遗漏兜底）
+```
 
-## 7. 对象存储基础层（尚未接入运行路径）
+## 7. 状态和持久化
 
-- `internal/cloud/objectstore` 定义 Multipart、预签名上传/下载、Head 和删除所需的 provider-neutral 接口。
-- `internal/cloud/objectstore/s3store` 使用 AWS SDK for Go v2，固定 path-style addressing，可连接 RustFS；默认拒绝 HTTP endpoint，只有显式开发配置允许明文 HTTP。
-- `internal/cloud/objectstore/memory` 是状态机单元测试 fake，不是生产存储实现。
-- 本层当前没有被 `cmd/core`、桌面端或 WebDAV 调用，也没有改变现有文件落盘路径。
-- 固定版本的本地 RustFS 环境和 opt-in 一致性测试见 [`../deploy/rustfs/README.md`](../deploy/rustfs/README.md)。生产启用仍受 [ADR-0006](adr/0006-rustfs-self-hosted-object-storage.md) 门禁约束。
+- 配置持久化在 `config.json`，使用临时文件加原子替换写入，支持热加载（`/api/config/reload`）。
+- 传输任务：运行中为内存状态；终态（completed/rejected/failed）持久化为 JSON 文件。
+- 网盘文件存储在 RustFS（S3 兼容），凭据编译期常量（`internal/cloud/defaults.go`），不暴露给前端。
+- peers 是内存状态，Core 退出后丢失。
 
-## 8. 安全边界
+## 8. 云盘与对象存储
 
-- Core API 和 WebDAV 只监听 loopback。
+- `internal/cloud` 是网盘业务层，提供上传/下载/列表/删除/分享/预览 API。
+- `internal/cloud/objectstore` 定义 provider-neutral 存储接口；`s3store` 使用 AWS SDK v2 连接 RustFS。
+- `internal/cloud/webdavfs` 将 S3 对象存储映射为 WebDAV FileSystem，供云盘驱动器使用。
+- 上传采用 multipart 流式（真实进度），AWS SDK 非 seekable 流需 `SwapComputePayloadSHA256ForUnsignedPayloadMiddleware`。
+- 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束。
+
+## 9. 跨平台抽象
+
+| 能力 | Windows | macOS |
+| --- | --- | --- |
+| 托盘 | getlantern/systray（ICO） | NSStatusItem（tray_native_darwin.m） |
+| 文件入口 | Shell NameSpace 注册表 | mount_webdav / osascript |
+| 打开文件 | `explorer /select,` | `open` |
+| 磁盘枚举 | kernel32 GetLogicalDrives | syscall.Statfs /Volumes |
+| Core 进程 | 同目录子进程 | Setsid 独立会话 |
+| 构建 | `wails build` + NSIS | GitHub Actions macos-latest |
+
+平台拆分通过 build tags 实现：`*_windows.go` / `*_darwin.go`。Wails macOS 版不可从 Windows 交叉编译（WebKit/CGO）。
+
+## 10. 安全边界
+
+- Core API 和 WebDAV 只监听 loopback，无外部网络暴露。
 - Core API 使用随机 Token；健康检查同时验证 Device ID 和 HMAC proof。
-- WebDAV 使用 Digest 而不是 HTTP Basic，避免修改 Windows 的 `BasicAuthLevel`。
-- 映射命令的密码不会写入日志，但配置文件本身包含密钥。
-- UDP 发现和 TCP 文件传输当前面向可信局域网，没有端到端加密或设备配对。
+- WebDAV 无认证（仅回环，无需认证）。
+- 云端凭据编译期固定（`internal/cloud/defaults.go`），不暴露给前端或 Shell 扩展。
+- UDP 发现和 TCP 文件传输面向可信局域网，无端到端加密或设备配对。
 
+## 11. 知识平台（独立服务）
 
+`knowledge/` 是 Python FastAPI 服务，独立于 Go 双进程运行：
 
+- 文档解析管线：PDF/DOCX/PPTX/XLSX/HTML/Markdown 统一提取 → 结构化清洗 → Markdown 渲染
+- 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维）
+- LLM 生成：SenseNova deepseek-v4-flash（推理模型）
+- 对象存储：复用 RustFS
+- 凭据存 `knowledge/.env`（.gitignore 已排除）

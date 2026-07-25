@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -88,6 +89,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.logger.Printf("connected to Core at %s", baseURL)
 
 	go a.watchdog()
+	go a.eventStream()
 
 	// Register EasyShare entries in Windows Explorer "此电脑" (This PC).
 	a.registerNamespace()
@@ -728,6 +730,73 @@ func (a *App) updateTrayStatus() {
 	select {
 	case a.trayStatusCh <- status:
 	default:
+	}
+}
+
+// --- Real-time event stream ---
+
+// eventStream 订阅 Core 的 WebSocket 事件流，将每条事件转发为 Wails 前端事件。
+// 断线后指数退避重连（1s → 2s → 4s → 最大 8s），退出时自动停止。
+func (a *App) eventStream() {
+	backoff := time.Second
+	const maxBackoff = 8 * time.Second
+
+	for {
+		if a.isQuitting() {
+			return
+		}
+		client, err := a.coreClient()
+		if err != nil {
+			time.Sleep(backoff)
+			backoff = min(backoff*2, maxBackoff)
+			continue
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		err = client.SubscribeEvents(ctx, func(raw []byte) {
+			// 转发原始 JSON 给前端，前端按 type 字段分发
+			runtime.EventsEmit(a.ctx, "core-event", string(raw))
+			// 传输完成/失败时弹系统通知
+			a.notifyTransfer(raw)
+		})
+		cancel()
+
+		if a.isQuitting() {
+			return
+		}
+		a.logger.Printf("event stream disconnected: %v, reconnecting in %v", err, backoff)
+		time.Sleep(backoff)
+		backoff = min(backoff*2, maxBackoff)
+	}
+}
+
+// notifyTransfer 解析事件 JSON，传输完成或失败时弹系统通知。
+func (a *App) notifyTransfer(raw []byte) {
+	var event struct {
+		Type string `json:"type"`
+		Data struct {
+			FileName string `json:"fileName"`
+			Status   string `json:"status"`
+			Peer     string `json:"peer"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return
+	}
+	if event.Type != "transfer.updated" {
+		return
+	}
+	switch event.Data.Status {
+	case "completed":
+		_ = runtime.SendNotification(a.ctx, runtime.NotificationOptions{
+			Title: "传输完成",
+			Body:  event.Data.FileName + " — " + event.Data.Peer,
+		})
+	case "failed":
+		_ = runtime.SendNotification(a.ctx, runtime.NotificationOptions{
+			Title: "传输失败",
+			Body:  event.Data.FileName + " — " + event.Data.Peer,
+		})
 	}
 }
 

@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
-import type { CoreSnapshot } from '../types/core'
-import { OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
+import type { CoreSnapshot, TransferTask } from '../types/core'
+import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
 const emptySnapshot = (): CoreSnapshot => ({
   status: {
@@ -137,13 +137,9 @@ export function useEasyShare() {
 
   const handleVisibility = () => {
     if (inactive()) return
-    if (document.hidden) {
-      // Window hidden to tray: reduce polling to save resources
-      startPolling(5000)
-    } else {
-      // Window restored: immediate refresh then fast polling
+    if (!document.hidden) {
+      // 窗口恢复：立即刷新一次补齐隐藏期间可能遗漏的状态
       void refresh()
-      startPolling(1000)
     }
   }
 
@@ -200,11 +196,50 @@ export function useEasyShare() {
     }
   }
 
+  // --- 实时事件处理 ---
+  // Go 桌面端通过 WebSocket 订阅 Core 事件流，转发为 Wails "core-event"。
+  // 前端按 type 分发：transfer.updated 原地更新任务，其余触发全量刷新。
+  const handleCoreEvent = (raw: string) => {
+    if (inactive()) return
+    try {
+      const event = JSON.parse(raw) as { type: string; data: unknown }
+      switch (event.type) {
+        case 'transfer.updated': {
+          const task = event.data as TransferTask
+          const index = snapshot.value.tasks.findIndex(t => t.id === task.id)
+          if (index >= 0) {
+            snapshot.value.tasks[index] = task
+          } else {
+            snapshot.value.tasks = [task, ...snapshot.value.tasks]
+          }
+          break
+        }
+        case 'status.changed':
+        case 'drive.status.changed':
+          void refresh()
+          break
+        case 'error': {
+          const errData = event.data as { message?: string }
+          if (errData?.message) setError('operation', errData.message)
+          break
+        }
+        default:
+          // peer.changed 等未知事件：全量刷新保证一致性
+          void refresh()
+          break
+      }
+    } catch {
+      // 解析失败忽略，等下次轮询兜底
+    }
+  }
+
   onMounted(() => {
     disposed = false
     document.addEventListener('visibilitychange', handleVisibility)
     // useDropTarget=false: the whole window accepts drops, no CSS marker needed.
     OnFileDrop(handleFilesDropped, false)
+    // 订阅 Go 端转发的 Core 实时事件
+    EventsOn('core-event', handleCoreEvent)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
@@ -212,13 +247,15 @@ export function useEasyShare() {
 
     void initialize().finally(() => {
       if (!inactive() && timer === undefined) {
-        startPolling(1000)
+        // 轮询降为 5s fallback：实时事件覆盖快速路径
+        startPolling(5000)
       }
     })
   })
   onBeforeUnmount(() => {
     disposed = true
     stopPolling()
+    EventsOff('core-event')
     document.removeEventListener('visibilitychange', handleVisibility)
     OnFileDropOff()
   })
