@@ -16,12 +16,16 @@ const mocks = vi.hoisted(() => ({
   logDirectory: vi.fn(),
   onFileDrop: vi.fn(),
   onFileDropOff: vi.fn(),
+  eventsOn: vi.fn(),
+  eventsOff: vi.fn(),
 }))
 
 vi.mock('../../services/core', () => ({ core: mocks }))
 vi.mock('../../../wailsjs/runtime/runtime', () => ({
   OnFileDrop: mocks.onFileDrop,
   OnFileDropOff: mocks.onFileDropOff,
+  EventsOn: mocks.eventsOn,
+  EventsOff: mocks.eventsOff,
 }))
 
 const runningSnapshot = {
