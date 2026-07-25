@@ -180,8 +180,10 @@ export function useEasyShare() {
     if (!items.length) return
     dropSending.value = true
     try {
-      for (const path of items) {
-        await core.send(peerId, path)
+      if (items.length === 1) {
+        await core.send(peerId, items[0])
+      } else {
+        await core.sendBatch(peerId, items)
       }
       clearError()
       await refresh()
@@ -279,8 +281,10 @@ export function useEasyShare() {
       if (inactive()) return
       const paths = await core.selectFiles()
       if (paths && paths.length) {
-        for (const path of paths) {
-          await act('发送文件', () => core.send(peerId, path))
+        if (paths.length === 1) {
+          await act('发送文件', () => core.send(peerId, paths[0]))
+        } else {
+          await act('发送文件', () => core.sendBatch(peerId, paths))
         }
       }
     },

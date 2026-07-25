@@ -17,6 +17,7 @@ type SendRequest struct {
 	DeviceID   string
 	DeviceName string
 	PeerName   string
+	BatchID    string
 	Tasks      *task.Store
 	OnUpdate   func(task.Task)
 }
@@ -48,7 +49,7 @@ func Send(ctx context.Context, request SendRequest) error {
 	if err != nil {
 		return err
 	}
-	created, err := request.Tasks.Create(task.Task{FileName: displayName, LocalPath: request.FilePath, Direction: task.DirectionSend, Peer: request.PeerName, TotalBytes: fileInfo.Size(), Status: task.StatusPending})
+	created, err := request.Tasks.Create(task.Task{FileName: displayName, LocalPath: request.FilePath, Direction: task.DirectionSend, Peer: request.PeerName, BatchID: request.BatchID, TotalBytes: fileInfo.Size(), Status: task.StatusPending})
 	if err != nil {
 		return err
 	}

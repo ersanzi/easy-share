@@ -253,6 +253,7 @@ func (server *Server) sendTransfer(writer http.ResponseWriter, request *http.Req
 	var input struct {
 		PeerID   string `json:"peerId"`
 		FilePath string `json:"filePath"`
+		BatchID  string `json:"batchId"`
 	}
 	if json.NewDecoder(request.Body).Decode(&input) != nil {
 		writeJSON(writer, 400, ErrorResponse{Code: "invalid_request", Message: "invalid JSON"})
@@ -268,7 +269,7 @@ func (server *Server) sendTransfer(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	go func() {
-		err := transfer.Send(context.Background(), transfer.SendRequest{Address: net.JoinHostPort(peer.IP, strconv.Itoa(peer.TransferPort)), FilePath: input.FilePath, DeviceID: server.config.DeviceID, DeviceName: server.config.DeviceName, PeerName: peer.DeviceName, Tasks: server.tasks, OnUpdate: func(value task.Task) { server.Publish(Event{Type: "transfer.updated", Data: value}) }})
+		err := transfer.Send(context.Background(), transfer.SendRequest{Address: net.JoinHostPort(peer.IP, strconv.Itoa(peer.TransferPort)), FilePath: input.FilePath, DeviceID: server.config.DeviceID, DeviceName: server.config.DeviceName, PeerName: peer.DeviceName, BatchID: input.BatchID, Tasks: server.tasks, OnUpdate: func(value task.Task) { server.Publish(Event{Type: "transfer.updated", Data: value}) }})
 		if err != nil {
 			server.Publish(Event{Type: "error", Data: ErrorResponse{Code: "transfer_failed", Message: err.Error()}})
 		}

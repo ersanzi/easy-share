@@ -170,10 +170,27 @@ func (a *App) GetSnapshot() (desktop.Snapshot, error) {
 func (a *App) SendFile(peerID, path string) error {
 	client, err := a.coreClient()
 	if err == nil {
-		err = client.Send(a.ctx, peerID, path)
+		err = client.Send(a.ctx, peerID, path, "")
 	}
 	a.reportError("send file", err)
 	return err
+}
+
+// SendBatch 批量发送多个文件到同一设备，共享一个 batchID 用于前端分组展示。
+func (a *App) SendBatch(peerID string, paths []string) error {
+	client, err := a.coreClient()
+	if err != nil {
+		a.reportError("send batch", err)
+		return err
+	}
+	batchID := fmt.Sprintf("batch-%d", time.Now().UnixMilli())
+	for _, path := range paths {
+		if sendErr := client.Send(a.ctx, peerID, path, batchID); sendErr != nil {
+			a.reportError("send batch file", sendErr)
+			return sendErr
+		}
+	}
+	return nil
 }
 func (a *App) AcceptTransfer(id string) error {
 	client, err := a.coreClient()

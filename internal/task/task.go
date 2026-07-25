@@ -39,6 +39,7 @@ type Task struct {
 	LocalPath        string    `json:"localPath,omitempty"`
 	Direction        Direction `json:"direction"`
 	Peer             string    `json:"peer"`
+	BatchID          string    `json:"batchId,omitempty"`
 	TotalBytes       int64     `json:"totalBytes"`
 	TransferredBytes int64     `json:"transferredBytes"`
 	Speed            float64   `json:"speed"`

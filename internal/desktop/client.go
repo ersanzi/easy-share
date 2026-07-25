@@ -81,8 +81,8 @@ func (client *Client) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	return result, nil
 }
-func (client *Client) Send(ctx context.Context, peerID, path string) error {
-	return client.request(ctx, http.MethodPost, "/api/transfers", map[string]string{"peerId": peerID, "filePath": path}, nil)
+func (client *Client) Send(ctx context.Context, peerID, path, batchID string) error {
+	return client.request(ctx, http.MethodPost, "/api/transfers", map[string]string{"peerId": peerID, "filePath": path, "batchId": batchID}, nil)
 }
 func (client *Client) Accept(ctx context.Context, id string) error {
 	return client.request(ctx, http.MethodPost, "/api/transfers/"+id+"/accept", nil, nil)

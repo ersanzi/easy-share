@@ -308,6 +308,22 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .speed-active { color: #076bc9; font-weight: 600; }
 .delete-btn { margin-left: auto; padding: 0 4px; color: #aeaeb2; background: none; border: 0; font-size: 14px; line-height: 1; cursor: pointer; border-radius: 4px; transition: color .12s, background .12s; }
 .delete-btn:hover { color: var(--red); background: rgba(255,59,48,.08); }
+
+/* ─── 批次分组 ─── */
+.batch-group { margin: 6px 10px 10px; padding: 12px 14px 8px; background: rgba(118,118,128,.04); border: 1px solid rgba(60,60,67,.08); border-radius: 12px; }
+.batch-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.batch-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.batch-icon { width: 18px; height: 18px; flex: 0 0 auto; color: var(--blue); }
+.batch-info strong { font-size: 11px; white-space: nowrap; }
+.batch-summary { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.batch-percent { flex: 0 0 auto; color: var(--blue); font-size: 10px; font-weight: 700; }
+.batch-track { height: 4px; margin: 9px 0 6px; overflow: hidden; background: #e9e9ed; border-radius: 2px; }
+.batch-track i { display: block; height: 100%; background: linear-gradient(90deg, #178cfb, #4aa5f8); border-radius: inherit; transition: width .25s ease; }
+.batch-items { margin: 0 -6px; }
+.transfer-row.compact { padding: 9px 12px; border-bottom: 1px solid rgba(60,60,67,.05); }
+.transfer-row.compact:last-child { border-bottom: none; }
+.transfer-row.compact .file-icon { width: 30px; height: 34px; }
+.transfer-row.compact .file-icon > svg { width: 17px; height: 21px; }
 .row-actions { display: flex; gap: 6px; margin-left: auto; }
 
 .drive-panel { padding-bottom: 14px; }
