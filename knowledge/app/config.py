@@ -27,15 +27,16 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     embedding_dim: int = 1024
 
-    # 切块
+    # 切块与检索
     chunk_size: int = 800
     chunk_overlap: int = 120
-
-    # 检索
     retrieval_top_k: int = 5
 
-    # 向量库持久化
+    # 本地持久化与任务执行
     vector_store_path: str = "./data/vector_store.json"
+    job_store_path: str = "./data/jobs.db"
+    job_workers: int = 2
+    max_source_bytes: int = 100 * 1024 * 1024
 
 
 settings = Settings()

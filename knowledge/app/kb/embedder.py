@@ -5,7 +5,7 @@ import logging
 import math
 from abc import ABC, abstractmethod
 
-from app.config import settings
+from app.config import Settings, settings
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +53,14 @@ class HashEmbedder(Embedder):
         return [v / norm for v in vec]
 
 
-def build_embedder() -> Embedder:
-    if settings.embedding_api_key and settings.embedding_base_url and settings.embedding_model:
+def build_embedder(config: Settings = settings) -> Embedder:
+    if config.embedding_api_key and config.embedding_base_url and config.embedding_model:
         logger.info("使用 OpenAI 兼容 embedding: %s", settings.embedding_model)
         return OpenAIEmbedder(
-            settings.embedding_base_url,
-            settings.embedding_api_key,
-            settings.embedding_model,
-            settings.embedding_dim,
+            config.embedding_base_url,
+            config.embedding_api_key,
+            config.embedding_model,
+            config.embedding_dim,
         )
     logger.warning("未配置 embedding 服务，退回 HashEmbedder（仅跑通管线，无语义能力）")
-    return HashEmbedder(settings.embedding_dim)
+    return HashEmbedder(config.embedding_dim)

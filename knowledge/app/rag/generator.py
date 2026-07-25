@@ -1,7 +1,7 @@
 """生成：把检索到的片段拼进 prompt，调云端 LLM（OpenAI 兼容）生成可溯源的回答。"""
 import logging
 
-from app.config import settings
+from app.config import Settings, settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,11 @@ SYSTEM_PROMPT = (
 
 
 class Generator:
-    def __init__(self) -> None:
+    def __init__(self, config: Settings = settings) -> None:
         from openai import OpenAI
 
-        self.model = settings.llm_model
-        self.client = OpenAI(base_url=settings.llm_base_url, api_key=settings.llm_api_key)
+        self.model = config.llm_model
+        self.client = OpenAI(base_url=config.llm_base_url, api_key=config.llm_api_key)
 
     def generate(self, question: str, contexts: list[dict]) -> dict:
         ref_block = "\n\n".join(
@@ -33,8 +33,8 @@ class Generator:
         return {"answer": answer, "sources": sources}
 
 
-def build_generator() -> Generator | None:
-    if settings.llm_api_key and settings.llm_base_url and settings.llm_model:
+def build_generator(config: Settings = settings) -> Generator | None:
+    if config.llm_api_key and config.llm_base_url and config.llm_model:
         logger.info("使用 LLM: %s", settings.llm_model)
         return Generator()
     logger.warning("未配置 LLM，/query 将只返回检索片段不做生成")

@@ -89,7 +89,7 @@
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**知识平台里程碑 1：管线架构落地** — 里程碑 0 已完成（端到端语义验收通过）。管线架构选型已确定：解析用 Unstructured + PaddleOCR（扫描件），切块用 chunk_by_title（结构感知），向量库用 Milvus Standalone（复用 RustFS），RAG 编排自写薄层。下一步：引入 Unstructured 替换现有解析、部署 Milvus、重写切块与向量存储。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6。
+**Python 文档入库与结构化清洗闭环** — 进行中。文件继续由 Go 上传 RustFS，Python 以 `fileId + versionId + objectKey` 创建异步任务，首批处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，输出可追溯的清洗产物；本轮不接桌面 UI。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md)。`r`n`r`n**知识平台里程碑 1：管线架构落地** — 里程碑 0 已完成（端到端语义验收通过）。管线架构选型已确定：解析用 Unstructured + PaddleOCR（扫描件），切块用 chunk_by_title（结构感知），向量库用 Milvus Standalone（复用 RustFS），RAG 编排自写薄层。下一步：引入 Unstructured 替换现有解析、部署 Milvus、重写切块与向量存储。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6。
 
 ## 待开始（按优先级）
 

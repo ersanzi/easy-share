@@ -1,107 +1,193 @@
 # Knowledge Service（知识平台计算面）
 
-EasyShare 知识平台的 **Python 计算面服务**，负责文档解析、知识库构建（RAG）与问答生成。
-Java 控制面（账号/权限/编排）后续接入，本服务先跑通"文档 → 知识 → 问答"核心闭环。
+EasyShare 的 Python 计算面服务。当前职责是从 RustFS 读取原始文件，完成解析、清洗、切块、Embedding、索引和 RAG 查询；它不负责桌面上传、多租户、权限或业务元数据。
 
-总体方向见 [`../docs/knowledge-platform.md`](../docs/knowledge-platform.md)。
+总体设计见 [`../docs/knowledge-platform.md`](../docs/knowledge-platform.md)。
 
-## 管线
+## 架构边界
 
+```text
+Go / Wails
+  └─ 文件采集与上传 RustFS
+          ↓ object_key
+Python Knowledge Service
+  ├─ 异步任务状态（当前 SQLite 过渡实现）
+  ├─ 文档解析与结构化清洗
+  ├─ clean.md / document.json / manifest.json
+  ├─ 切块、Embedding、索引
+  └─ 检索与生成
+          ↑
+Java Control Plane（后续）
+  └─ 租户、账号、权限、文件元数据、业务编排与任务真相源
 ```
-RustFS/文本 → 解析(extractor) → 切块(chunker) → 向量化(embedder) → 向量库(store)
-                                                                        ↓
-                              问答 ← 生成(generator/LLM) ← 检索(retriever)
+
+- **Go** 继续负责文件采集和上传，不把 Office 解析塞进 Core。
+- **Python** 只做计算密集、AI 相关的文档处理能力。
+- **Java 后置**；引入 Java 后，租户、权限、文件版本和业务任务由 Java 持有，Python SQLite 不升级为业务数据库。
+- 当前版本只适合 **单个 Uvicorn worker**。进程内线程池和本地 SQLite/JSON 存储不是多实例调度方案。
+
+## 当前处理闭环
+
+```text
+RustFS 原始对象
+  → 下载与大小限制
+  → 结构化解析
+  → Unicode / 控制字符 / 空白清洗与相邻重复块去重
+  → clean.md + document.json
+  → 切块
+  → Embedding
+  → 按 file_id 原子替换当前向量索引
+  → manifest.json
 ```
+
+首批格式：
+
+| 格式 | 当前能力 |
+| --- | --- |
+| TXT | UTF-8/GB18030 解码、段落清洗 |
+| Markdown | 标题与段落结构保留 |
+| DOCX | 尽量保持标题、段落、表格的文档顺序 |
+| PDF | 提取文本层并保留页码 |
+| XLSX | 保留工作表、行号和表格内容 |
+| PPTX | 保留幻灯片、段落和表格内容 |
+
+扫描 PDF 和图片 OCR 暂不处理；没有文本层的 PDF 会明确失败并提示需要 OCR，而不是静默生成空知识。
+
+## 派生产物
+
+每个文件版本写入固定前缀：
+
+```text
+derived/{fileId}/{versionId}/clean.md
+derived/{fileId}/{versionId}/document.json
+derived/{fileId}/{versionId}/manifest.json
+```
+
+- `clean.md`：便于人读、调试和后续切块的规范化文本。
+- `document.json`：统一块结构，包含页码、工作表、幻灯片、段落、表格等来源定位。
+- `manifest.json`：处理版本、源文件 SHA-256、字节数、块数、字符数、切块数、警告和产物键。
+
+`file_id` 是稳定文档身份，`version_id` 标识内容版本。新版本索引成功后，以 `file_id` 替换旧版本向量记录，避免默认检索同时命中多个历史版本。
+
+## 异步任务 API
+
+### 提交处理
+
+```http
+POST /documents/process
+Content-Type: application/json
+```
+
+```json
+{
+  "file_id": "file-001",
+  "version_id": "v1",
+  "object_key": "uploads/file-001/v1/制度.docx",
+  "filename": "制度.docx",
+  "force": false
+}
+```
+
+返回 `202` 和任务对象。相同 `file_id + version_id` 默认返回已有任务；`force=true` 才创建新任务。
+
+任务状态：
+
+```text
+queued → processing → completed
+                    ↘ failed → queued（retry）
+```
+
+### 查询与重试
+
+```http
+GET  /jobs/{jobId}
+POST /jobs/{jobId}/retry
+```
+
+只有 `failed` 任务可以重试。服务重启时，遗留的 `processing` 任务会恢复为 `queued` 并重新执行。
+
+### 读取派生产物
+
+```http
+GET /documents/{fileId}/versions/{versionId}/artifacts
+GET /documents/{fileId}/versions/{versionId}/artifacts/clean.md
+GET /documents/{fileId}/versions/{versionId}/artifacts/document.json
+GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
+```
+
+### 兼容接口
+
+- `GET /health`：服务、Embedding、LLM、索引记录和任务计数。
+- `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
+- `POST /query`：检索与生成；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
 
 ## 快速开始
 
-```bash
+```powershell
 cd knowledge
-
-# 1. 建虚拟环境并装依赖
 python -m venv .venv
-.venv\Scripts\activate          # Windows
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# 2. 配置环境变量
-cp .env.example .env            # 然后按需填写
-
-# 3. 启动
-uvicorn app.main:app --reload
-# 交互式文档: http://127.0.0.1:8000/docs
+Copy-Item .env.example .env
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 
-## 配置说明（.env）
+Swagger：`http://127.0.0.1:8000/docs`
 
-所有连接参数走环境变量，**凭证不写死在代码里**。
+> 开发时可以使用 `--reload`，但不要同时添加多个 worker。
 
-| 变量 | 说明 | 必填 |
+## 配置
+
+所有凭证来自环境变量或 `.env`，不要写入代码或提交真实密钥。
+
+| 变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `RUSTFS_ENDPOINT` / `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` / `RUSTFS_BUCKET` | RustFS（S3 兼容）连接，凭证取自 `deploy/rustfs/.env` | 从 RustFS 入库时必填 |
-| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | LLM（OpenAI 兼容）。留空则 `/query` 只返回检索片段不生成 | 否（留空可跑通检索） |
-| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | Embedding（OpenAI 兼容）。留空退回 HashEmbedder | 否（留空可跑通管线） |
-| `EMBEDDING_DIM` | 向量维度，需与所选 embedding 模型一致 | 否（默认 1024） |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切块大小与重叠 | 否 |
-| `VECTOR_STORE_PATH` | 向量库 JSON 持久化路径 | 否 |
+| `RUSTFS_ENDPOINT` / `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` / `RUSTFS_BUCKET` | RustFS（S3 兼容）连接 | 本地 9000 / `easyshare` |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI 兼容生成模型；留空不生成 | 空 |
+| `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | OpenAI 兼容 Embedding；留空使用流程占位实现 | 空 |
+| `EMBEDDING_DIM` | 向量维度，必须与模型一致 | `1024` |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切块长度与重叠 | `800` / `120` |
+| `VECTOR_STORE_PATH` | 当前 JSON 向量存储 | `./data/vector_store.json` |
+| `JOB_STORE_PATH` | 当前 SQLite 执行任务库 | `./data/jobs.db` |
+| `JOB_WORKERS` | 进程内任务线程数 | `2` |
+| `MAX_SOURCE_BYTES` | 单个源对象读取上限 | `104857600` |
 
-> **关于 embedding**：真实语义检索需要一个支持 embedding 的 OpenAI 兼容端点。
-> 未配置时服务用 HashEmbedder 占位，可跑通整条管线但**无语义能力**——仅用于验证流程，
-> 接入真实 embedding 后自动切换，代码无需改动。
+未配置真实 Embedding 时使用 `HashEmbedder`，只能验证端到端流程，**不代表语义检索质量**。
 
-## 接口
+## 测试
 
-### `GET /health`
-返回服务状态、所用 embedder、LLM 是否配置、向量库记录数。
-
-### `POST /ingest` — 入库一份文档
-```json
-{ "source": "text", "filename": "公司制度.md", "content": "……全文……" }
-```
-或从 RustFS 读取：
-```json
-{ "source": "rustfs", "key": "公司制度.docx" }
-```
-返回 `{ doc_id, filename, chunks, chars }`。
-
-### `POST /query` — 提问
-```json
-{ "question": "请假流程是怎样的？", "top_k": 5, "doc_ids": null }
-```
-- `doc_ids`：权限范围过滤，由 Java 控制面算出"该用户可访问的文档 ID"后传入（权限感知检索）。
-- 返回 `{ answer, sources, contexts }`，`contexts` 是检索到的原始片段（便于核对溯源）。
-
-## 端到端验证（不依赖任何外部服务）
-
-即使不配置 LLM 和 embedding，也能用 HashEmbedder 跑通管线、验证检索：
-
-```bash
-# 入库一段文本
-curl -X POST http://127.0.0.1:8000/ingest -H "Content-Type: application/json" \
-  -d "{\"source\":\"text\",\"filename\":\"note.txt\",\"doc_id\":\"doc1\",\"content\":\"EasyShare 是一个文件传输工具。它支持局域网传输和云盘上传。\"}"
-
-# 提问（未配 LLM 时返回检索片段）
-curl -X POST http://127.0.0.1:8000/query -H "Content-Type: application/json" \
-  -d "{\"question\":\"EasyShare 支持什么功能？\",\"doc_ids\":[\"doc1\"]}"
+```powershell
+cd knowledge
+pip install -r requirements-dev.txt
+$env:PYTHONDONTWRITEBYTECODE='1'
+.\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-配置真实 embedding + LLM 后，同样的请求即返回基于文档的语义回答。
+测试覆盖多格式解析、清洗、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换和 API 行为。
 
 ## 目录结构
 
-```
-app/
-  main.py            # FastAPI 入口
-  config.py          # 环境变量配置
-  api/               # /ingest /query /health
-  parsing/           # 文档 → 文本（txt/md/docx/pdf）
-  kb/                # 切块 / 向量化(可替换) / 向量库
-  rag/               # 检索 / 生成
-  storage/           # 从 RustFS 读文件
+```text
+knowledge/
+├─ app/
+│  ├─ api/          # FastAPI 路由与模型
+│  ├─ jobs/         # SQLite 任务状态与线程执行器
+│  ├─ parsing/      # 多格式解析、清洗、统一结构、Markdown 渲染
+│  ├─ pipeline/     # 下载 → 解析 → 产物 → 切块 → 索引编排
+│  ├─ storage/      # RustFS / 可替换对象存储接口
+│  ├─ kb/           # 切块、Embedding、向量存储与检索
+│  ├─ rag/          # LLM 生成
+│  ├─ services.py   # 依赖组装与生命周期
+│  └─ main.py       # FastAPI 入口
+├─ tests/
+├─ requirements.txt
+└─ requirements-dev.txt
 ```
 
-## 设计取舍（骨架阶段）
+## 当前限制与下一步
 
-- **向量库**用内存 + numpy + JSON 持久化，最薄实现；里程碑 1 换 Chroma/Milvus，接口不变。
-- **embedding/LLM** 抽象为可替换网关，现在接云端，以后可换本地模型。
-- **权限**目前靠 `doc_ids` 过滤参数预留，真正的权限裁决在 Java 控制面（里程碑 2）。
-- 解析仅支持 txt/md/docx/pdf，更多格式在里程碑 1 扩展。
+1. 真实生产任务编排需迁移到 Java + 消息队列/任务系统，Python 任务必须继续保持幂等。
+2. JSON 向量存储是当前验证实现，后续按路线图迁移 Milvus。
+3. 增加 PaddleOCR，覆盖扫描 PDF 和图片。
+4. 引入更强的结构感知解析/切块，同时保留当前统一 `DocumentBlock` 和派生产物契约。
+5. Go/Java 接入时只传对象身份和业务上下文，不通过 HTTP 重传整个 Office 文件。
