@@ -62,9 +62,9 @@ export function SelectReceiveDirectory():Promise<string>;
 
 export function SelectShareDirectory():Promise<string>;
 
-export function SendFile(arg1:string,arg2:string):Promise<void>;
-
 export function SendBatch(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SendFile(arg1:string,arg2:string):Promise<void>;
 
 export function ShutdownAll():Promise<void>;
 

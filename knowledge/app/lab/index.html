@@ -1,0 +1,138 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2718%27 fill=%27%23356AE6%27/%3E%3Cpath d=%27M18 20h28v7H25v7h18v7H25v10h-7z%27 fill=%27white%27/%3E%3C/svg%3E">
+  <title>EasyShare Local Lab · 文档处理实验台</title>
+  <link rel="stylesheet" href="/lab/assets/lab.css">
+  <script src="/lab/assets/lab.js" defer></script>
+</head>
+<body>
+  <div class="boundary-banner" role="note">
+    <span class="boundary-dot" aria-hidden="true"></span>
+    <strong>Local Lab · 仅供本地测试</strong>
+    <span>此页面用于验证上传、清洗和索引链路，不是 EasyShare 客户端功能，也不代表最终产品界面。</span>
+  </div>
+
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">EASYSHARE / KNOWLEDGE PIPELINE</p>
+        <h1>让文档穿过一条<br><span>可观察的处理流水线</span></h1>
+        <p class="hero-copy">上传 Office、PDF 或文本文件。实验台会把源文件写入 RustFS，并复用正式 Python 管线完成解析、清洗、切块与索引。</p>
+      </div>
+      <div class="hero-stamp" aria-label="运行边界">
+        <span>LOOPBACK ONLY</span>
+        <strong>127.0.0.1</strong>
+        <small>无生产认证 · 禁止公网监听</small>
+      </div>
+    </header>
+
+    <section class="workspace-grid" aria-label="文档处理工作区">
+      <article class="panel upload-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-index">01 / INPUT</p>
+            <h2>投递测试文档</h2>
+          </div>
+          <span class="format-chip">DOCX · PDF · XLSX · PPTX</span>
+        </div>
+
+        <form id="upload-form">
+          <label class="drop-zone" id="drop-zone" for="file-input" tabindex="0">
+            <input id="file-input" name="file" type="file" accept=".txt,.md,.markdown,.docx,.pdf,.xlsx,.pptx" required>
+            <span class="upload-mark" aria-hidden="true">↥</span>
+            <strong id="drop-title">拖入文件，或点击选择</strong>
+            <span id="drop-copy">Office 常用格式优先；大小上限由服务端 MAX_SOURCE_BYTES 控制</span>
+          </label>
+          <div class="upload-actions">
+            <div class="selected-file" id="selected-file" aria-live="polite">尚未选择文件</div>
+            <button class="primary-button" id="upload-button" type="submit" disabled>
+              <span>写入 RustFS 并处理</span>
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <p class="form-message" id="form-message" role="status" aria-live="polite"></p>
+        </form>
+      </article>
+
+      <article class="panel pipeline-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-index">02 / OBSERVE</p>
+            <h2>当前处理轨道</h2>
+          </div>
+          <span class="status-badge is-idle" id="current-status">等待任务</span>
+        </div>
+
+        <div class="current-summary">
+          <div>
+            <span class="summary-label">当前文件</span>
+            <strong id="current-filename">—</strong>
+          </div>
+          <div class="progress-readout">
+            <span id="current-stage">idle</span>
+            <strong id="current-progress">0%</strong>
+          </div>
+        </div>
+        <div class="progress-bar" aria-hidden="true"><span id="progress-fill"></span></div>
+
+        <ol class="pipeline-track" id="pipeline-track">
+          <li data-step="queued"><span>01</span><strong>入队</strong><small>Job Store</small></li>
+          <li data-step="downloading"><span>02</span><strong>读取</strong><small>RustFS</small></li>
+          <li data-step="parsing"><span>03</span><strong>解析清洗</strong><small>Office / PDF</small></li>
+          <li data-step="saving_artifacts"><span>04</span><strong>保存产物</strong><small>clean + JSON</small></li>
+          <li data-step="chunking"><span>05</span><strong>切块</strong><small>Chunking</small></li>
+          <li data-step="embedding"><span>06</span><strong>向量化</strong><small>Embedding</small></li>
+          <li data-step="indexing"><span>07</span><strong>索引</strong><small>Vector Store</small></li>
+          <li data-step="finalizing"><span>08</span><strong>收口</strong><small>Manifest</small></li>
+        </ol>
+
+        <div class="error-box" id="error-box" hidden>
+          <strong id="error-code">处理失败</strong>
+          <p id="error-message"></p>
+          <button class="text-button" id="retry-button" type="button">重试该任务</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="lower-grid">
+      <article class="panel jobs-panel">
+        <div class="panel-heading compact">
+          <div>
+            <p class="panel-index">03 / HISTORY</p>
+            <h2>最近任务</h2>
+          </div>
+          <button class="icon-button" id="refresh-button" type="button" aria-label="刷新任务">↻</button>
+        </div>
+        <div class="job-list" id="job-list" aria-live="polite">
+          <p class="empty-state">正在读取本地任务记录…</p>
+        </div>
+      </article>
+
+      <article class="panel artifacts-panel">
+        <div class="panel-heading compact">
+          <div>
+            <p class="panel-index">04 / OUTPUT</p>
+            <h2>派生产物检查器</h2>
+          </div>
+          <span class="artifact-context" id="artifact-context">选择已完成任务</span>
+        </div>
+        <div class="artifact-tabs" role="tablist" aria-label="派生产物">
+          <button class="artifact-tab is-active" type="button" role="tab" aria-selected="true" data-artifact="clean.md">clean.md</button>
+          <button class="artifact-tab" type="button" role="tab" aria-selected="false" data-artifact="document.json">document.json</button>
+          <button class="artifact-tab" type="button" role="tab" aria-selected="false" data-artifact="manifest.json">manifest.json</button>
+        </div>
+        <pre class="artifact-viewer" id="artifact-viewer" tabindex="0"><code>任务完成后，可在这里检查清洗文本、统一文档结构和处理清单。</code></pre>
+      </article>
+    </section>
+
+    <footer>
+      <span>EasyShare Knowledge Service / Local Lab</span>
+      <span>测试辅助界面，不进入 Wails 客户端交付范围</span>
+    </footer>
+  </main>
+</body>
+</html>

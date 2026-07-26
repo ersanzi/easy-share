@@ -39,6 +39,15 @@ Desktop.ini
 # ─── 环境变量 ───
 .env
 .env.*
+!knowledge/.env.example
 
 # ─── 旧脚手架目录 ───
 easyshare-scaffold/
+# ─── Python ───
+__pycache__/
+*.py[cod]
+
+# ─── 本地测试产物 ───
+.playwright-cli/
+output/playwright/
+data/jobs.db

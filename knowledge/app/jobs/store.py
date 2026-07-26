@@ -131,6 +131,29 @@ class JobStore:
             raise KeyError(job_id)
         return self._from_row(row)
 
+    def find_latest(self, *, file_id: str, version_id: str) -> ProcessingJob | None:
+        """返回指定文件版本最近创建的任务，不存在时返回 None。"""
+        with self.lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM processing_jobs
+                WHERE file_id = ? AND version_id = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (file_id, version_id),
+            ).fetchone()
+        return self._from_row(row) if row is not None else None
+
+    def list_recent(self, *, limit: int = 20) -> list[ProcessingJob]:
+        """按创建时间倒序返回最近任务，并限制查询数量。"""
+        bounded_limit = max(1, min(limit, 100))
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT * FROM processing_jobs ORDER BY created_at DESC LIMIT ?",
+                (bounded_limit,),
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     def claim(self, job_id: str) -> ProcessingJob | None:
         now = _now()
         with self.lock, self.connection:

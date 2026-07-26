@@ -258,3 +258,57 @@ npm --prefix frontend run build
 ### 12.4 测试时出现 `__pycache__` 或 SQLite 文件冲突
 
 并发测试时设置 `PYTHONDONTWRITEBYTECODE=1`，并为每个进程使用独立的 `JOB_STORE_PATH`、`VECTOR_STORE_PATH`。语法检查使用 `compile(source, filename, "exec")`，不要并发运行 `compileall` 写同一个 `__pycache__`。
+### 12.5 黄金语料测试失败
+
+先单独运行：
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/golden -q
+```
+
+- 结构、来源位置或 Markdown 断言变化时，先判断是解析回归还是有意变更，不要直接放宽断言。
+- PPTX 标题不能用 `shape is slide.shapes.title` 判断；`python-pptx` 可能返回不同代理对象，应比较 `shape_id`。
+- 需要人工查看时运行 `knowledge/scripts/build_golden_corpus.py`，生成文件位于已忽略的 `knowledge/tests/golden/generated/`，不得提交这些二进制文件。
+- 修改生成器后必须同步审查 `cases.json`，并保留“两次生成后结构语义一致”的测试。
+
+### 12.6 真实 RustFS 测试无法启动
+
+真实测试必须显式设置 `EASYSHARE_RUSTFS_INTEGRATION=1` 以及 endpoint、access key、secret key、bucket。测试不会创建 bucket；`HeadBucket` 失败时先检查 bucket 是否存在和凭据是否与 `deploy/rustfs/.env` 一致，排障输出中不要打印 secret key。
+
+Docker Desktop 进程存在但出现以下错误时：
+
+```text
+request returned Internal Server Error ... /v1.24/info
+```
+
+检查 `wsl.exe -l -v`。若 `docker-desktop` 是 `Stopped`，执行：
+
+```powershell
+wsl.exe -d docker-desktop -e sh -lc 'echo ready'
+docker version
+```
+
+只有 `docker version` 同时显示 Client 和 Server，且 `docker compose ... ps` 显示 RustFS healthy，才运行：
+
+```powershell
+knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m integration
+```
+
+集成测试使用 UUID 隔离源对象，并只精确清理该源对象及三个派生产物；不要改成删除整个 `integration/` 或 `derived/` 前缀。
+
+### 12.7 Local Lab 无法上传或无法访问
+
+`/lab` 是 Python 文档管线的本地开发测试工具，不是 EasyShare 客户端功能，也没有生产认证、多租户隔离或 RBAC。
+
+1. 必须从 `knowledge/` 目录启动，并只监听回环地址：
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+   ```
+
+2. FastAPI 使用 `UploadFile` 需要 `python-multipart`。若启动时报 multipart 依赖错误，重新安装 `knowledge/requirements.txt`。
+3. `LOCAL_LAB_ENABLED=false` 时 `/lab` 和 `/lab/api/*` 返回 `404`；非回环来源返回 `403`。禁止为了测试改成监听 `0.0.0.0`。
+4. 当前 `JobRunner` 是进程内执行器，只支持单个 Uvicorn worker。多个 worker 会各自启动执行线程并共享 SQLite/JSON 存储，可能导致重复执行或状态冲突。
+5. 上传出现 `SignatureDoesNotMatch` 时，核对 `knowledge/.env` 与 `deploy/rustfs/.env`、当前 RustFS 实例使用的 access key/secret key 是否一致；修改后重启 Python 服务，让 Settings 重新加载。
+6. 实验台必须复用正式 `DocumentPipeline`，不要在 `lab` 包里复制解析、清洗或索引逻辑。

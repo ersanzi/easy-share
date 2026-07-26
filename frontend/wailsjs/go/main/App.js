@@ -114,12 +114,12 @@ export function SelectShareDirectory() {
   return window['go']['main']['App']['SelectShareDirectory']();
 }
 
-export function SendFile(arg1, arg2) {
-  return window['go']['main']['App']['SendFile'](arg1, arg2);
-}
-
 export function SendBatch(arg1, arg2) {
   return window['go']['main']['App']['SendBatch'](arg1, arg2);
+}
+
+export function SendFile(arg1, arg2) {
+  return window['go']['main']['App']['SendFile'](arg1, arg2);
 }
 
 export function ShutdownAll() {

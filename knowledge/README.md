@@ -121,6 +121,19 @@ GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
 - `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
 - `POST /query`：检索与生成；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
 
+## 本地 Web 可视化实验台
+
+启动服务后访问 `http://127.0.0.1:8000/lab`，可以上传 TXT、Markdown、DOCX、文本型 PDF、XLSX 和 PPTX，查看任务进度、最近任务及 `clean.md`、`document.json`、`manifest.json` 三类派生产物。
+
+> **产品边界：** Local Lab 只用于本地开发和测试文档管线，不是 EasyShare 客户端功能，不接入当前 Wails/Vue 桌面界面，也不代表最终产品 UI。它没有生产认证、多租户隔离或 RBAC，必须只监听 `127.0.0.1` 并使用单个 Uvicorn worker。
+
+```http
+GET  /lab
+POST /lab/api/uploads
+GET  /lab/api/jobs?limit=20
+```
+
+上传 API 将文件写入 RustFS 后复用正式 `DocumentPipeline`，不会另建一套解析或清洗逻辑。可通过 `LOCAL_LAB_ENABLED=false` 完全关闭页面及其 API；关闭后返回 `404`，非回环来源返回 `403`。
 ## 快速开始
 
 ```powershell
@@ -134,6 +147,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 
 Swagger：`http://127.0.0.1:8000/docs`
 
+Local Lab：`http://127.0.0.1:8000/lab`（仅本地开发测试）
+
 > 开发时可以使用 `--reload`，但不要同时添加多个 worker。
 
 ## 配置
@@ -142,6 +157,7 @@ Swagger：`http://127.0.0.1:8000/docs`
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
+| `LOCAL_LAB_ENABLED` | 是否启用仅回环可访问的 Local Lab 测试页面与上传 API | `true` |
 | `RUSTFS_ENDPOINT` / `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY` / `RUSTFS_BUCKET` | RustFS（S3 兼容）连接 | 本地 9000 / `easyshare` |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI 兼容生成模型；留空不生成 | 空 |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | OpenAI 兼容 Embedding；留空使用流程占位实现 | 空 |
@@ -163,7 +179,38 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-测试覆盖多格式解析、清洗、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换和 API 行为。
+测试覆盖多格式解析、清洗、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换、Local Lab 页面/上传/访问边界和 API 行为。真实 RustFS 测试默认跳过，因此普通回归不依赖 Docker。
+
+### Office/PDF 黄金语料
+
+首批黄金样本覆盖 DOCX、XLSX、PPTX 和文本型 PDF。二进制文档由 `tests/golden/builders.py` 确定性构造，人工可审查预期保存在 `tests/golden/cases.json`：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/golden -q
+```
+
+如需用 Office/PDF 阅读器人工查看，可物化到已忽略的 `tests/golden/generated/`：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/build_golden_corpus.py
+```
+
+不要提交生成的二进制文件。调整解析行为时，应同时审查结构块、来源位置、Markdown 片段和重复生成的语义一致性。
+
+### 真实 RustFS 集成测试
+
+测试要求 RustFS 已启动且目标 bucket 已存在；它不会自动创建或删除 bucket，只会创建唯一测试源对象并精确清理该对象与三个派生产物：
+
+```powershell
+$env:EASYSHARE_RUSTFS_INTEGRATION = '1'
+$env:EASYSHARE_RUSTFS_ENDPOINT = 'http://127.0.0.1:9000'
+$env:EASYSHARE_RUSTFS_ACCESS_KEY = '<access-key>'
+$env:EASYSHARE_RUSTFS_SECRET_KEY = '<secret-key>'
+$env:EASYSHARE_RUSTFS_BUCKET = 'easyshare'
+.\.venv\Scripts\python.exe -m pytest tests/integration -q -m integration
+```
+
+测试验证 `RustFS 源对象 → 解析清洗 → clean.md/document.json/manifest.json → 版本化索引`，同时检查派生产物 Content-Type。未设置 `EASYSHARE_RUSTFS_INTEGRATION=1` 时会明确跳过。
 
 ## 目录结构
 
@@ -172,6 +219,7 @@ knowledge/
 ├─ app/
 │  ├─ api/          # FastAPI 路由与模型
 │  ├─ jobs/         # SQLite 任务状态与线程执行器
+│  ├─ lab/          # 仅供本地测试的上传与管线可视化页面
 │  ├─ parsing/      # 多格式解析、清洗、统一结构、Markdown 渲染
 │  ├─ pipeline/     # 下载 → 解析 → 产物 → 切块 → 索引编排
 │  ├─ storage/      # RustFS / 可替换对象存储接口
@@ -179,7 +227,10 @@ knowledge/
 │  ├─ rag/          # LLM 生成
 │  ├─ services.py   # 依赖组装与生命周期
 │  └─ main.py       # FastAPI 入口
+├─ scripts/          # 黄金语料物化等开发脚本
 ├─ tests/
+│  ├─ golden/        # Office/PDF 确定性样本与可审查预期
+│  └─ integration/   # 显式开启的真实 RustFS 测试
 ├─ requirements.txt
 └─ requirements-dev.txt
 ```

@@ -30,6 +30,8 @@ docker compose ps
 
 ## 运行 EasyShare 一致性测试
 
+以下命令在仓库根目录执行：
+
 ```powershell
 $env:EASYSHARE_RUSTFS_INTEGRATION = '1'
 $env:EASYSHARE_RUSTFS_ENDPOINT = 'http://127.0.0.1:9000'
@@ -48,6 +50,31 @@ Remove-Item Env:EASYSHARE_RUSTFS_BUCKET
 
 测试开关未设置时，集成测试会跳过，普通 `go test ./...` 不依赖 Docker。
 
+同一组环境变量也用于 Python 文档管线的真实闭环测试：
+
+```powershell
+knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m integration
+```
+
+Python 测试会写入唯一的 `integration/python/rustfs-it-{uuid}/...` 源对象，并在结束时只删除该对象和对应的三个 `derived/{fileId}/v1/` 派生产物。测试不会自动创建 bucket；请提前在 Console 创建并确认 `HeadBucket` 可访问。
+
+## Docker Desktop 后端排障
+
+如果 Docker Desktop 进程已经存在，但 `docker version` 只有 Client，或返回 `/v1.24/info` Internal Server Error，先检查：
+
+```powershell
+wsl.exe -l -v
+```
+
+若 `docker-desktop` 为 `Stopped`，可显式唤起 WSL 后端：
+
+```powershell
+wsl.exe -d docker-desktop -e sh -lc 'echo ready'
+docker version
+```
+
+必须等 `docker version` 同时显示 Client 和 Server 后再运行 `docker compose up -d`。不要以 Windows 侧进程存在、命令退出码偶发为 0，或空的 ServerVersion 判断 daemon 已就绪。
+
 ## 停止与清理
 
 ```powershell
@@ -65,4 +92,4 @@ docker compose down --volumes
 - 当前配置是 loopback + HTTP，仅适用于本机开发；不要把端口绑定改成公网地址后继续使用 HTTP。
 - `.env` 已在本目录忽略；日志、终端历史和测试失败信息中也不得输出 secret key。
 - 生产必须使用 TLS、独立密钥管理、最小权限账号、备份、监控和恢复演练。
-- 当前 Docker daemon 不可用时只能执行静态检查；不得把“配置已写入”描述成“RustFS 已通过集成测试”。
+- Docker daemon 不可用时只能执行默认回归并看到集成测试跳过；只有显式运行真实测试成功后，才能描述为“RustFS 已通过集成测试”。

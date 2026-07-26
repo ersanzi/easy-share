@@ -289,6 +289,7 @@ export namespace task {
 	    localPath?: string;
 	    direction: string;
 	    peer: string;
+	    batchId?: string;
 	    totalBytes: number;
 	    transferredBytes: number;
 	    speed: number;
@@ -310,6 +311,7 @@ export namespace task {
 	        this.localPath = source["localPath"];
 	        this.direction = source["direction"];
 	        this.peer = source["peer"];
+	        this.batchId = source["batchId"];
 	        this.totalBytes = source["totalBytes"];
 	        this.transferredBytes = source["transferredBytes"];
 	        this.speed = source["speed"];

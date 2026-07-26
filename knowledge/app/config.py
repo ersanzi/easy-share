@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_name: str = "EasyShare Knowledge Service"
     host: str = "127.0.0.1"
     port: int = 8000
+    local_lab_enabled: bool = True
 
     # RustFS（S3 兼容）
     rustfs_endpoint: str = "http://127.0.0.1:9000"

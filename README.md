@@ -13,12 +13,14 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 - 系统托盘/菜单栏（Windows systray、macOS 原生 AppKit）+ Frameless 无边框窗口 + macOS 简约风格 UI
 - 设置页、传输历史、另存为、多文件发送、速度高亮
 - Core 异常恢复（watchdog + 配置热加载）
-- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引（当前不接桌面 UI）
+- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引；真实 RustFS 闭环、首批 Office/PDF 黄金语料及仅回环开放的 `/lab` 测试实验台已通过（当前不接桌面 UI）
 - Windows NSIS 安装包 + 开机自启动；macOS `.app`/DMG 构建脚本
 
 后续版本开始前请先阅读 [`docs/version-iteration.md`](docs/version-iteration.md)。
 
-长期产品方向是演进为企业知识管理平台：在文件采集与云盘存储之上，构建解析清洗、知识库（RAG）、AI 写作辅助，并通过 WPS 插件交付。Python 文档处理闭环已经落地，运行与 API 说明见 [`knowledge/README.md`](knowledge/README.md)，总体架构见 [`docs/knowledge-platform.md`](docs/knowledge-platform.md)。原网络云盘与内网协同方向见 [`docs/product-vision.md`](docs/product-vision.md)。
+长期产品方向是演进为企业知识管理平台：在文件采集与云盘存储之上，构建解析清洗、知识库（RAG）、AI 写作辅助，并通过 WPS 插件交付。Python 文档处理闭环已经落地，运行与 API 说明见 [knowledge/README.md](knowledge/README.md)，总体架构见 [docs/knowledge-platform.md](docs/knowledge-platform.md)。原网络云盘与内网协同方向见 [docs/product-vision.md](docs/product-vision.md)。
+
+> `/lab` 是为了测试方便提供的本地可视化实验台，不是 EasyShare 客户端功能，不代表最终产品 UI，也不具备生产认证、多租户或 RBAC。
 
 ## 环境要求
 
@@ -158,7 +160,7 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - 系统托盘 + Frameless 无边框窗口
 - 设置页、传输历史、另存为、多文件发送、速度高亮
 - Core 异常恢复（watchdog + 配置热加载）
-- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引（当前不接桌面 UI）
+- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引；真实 RustFS 闭环、首批 Office/PDF 黄金语料及仅回环开放的 `/lab` 测试实验台已通过（当前不接桌面 UI）
 - 网盘功能（RustFS）：上传/列表/下载/删除/分享，实时进度
 - 网盘在线预览：图片、PDF、限量 UTF-8 文本，内容访问使用短期 HMAC 票据
 - 「此电脑」品牌入口（Shell NameSpace，去盘符）

@@ -7,7 +7,7 @@
 
 **阶段 2：产品体验完善** — 进行中（文件传输/网盘能力已较完整）
 
-**新方向：企业知识管理平台** — 启动中（里程碑 0：Python AI 服务最小骨架）
+**新方向：企业知识管理平台** — 进行中（里程碑 1：Python 文档管线与本地测试实验台）
 
 阶段 0（局域网可用）和阶段 1（可分发）已全部完成并通过验收。产品定位正从消费级文件工具向企业知识管理平台演进，详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
@@ -58,12 +58,14 @@
 - [x] 双仓库推送与 macOS CI 日常流程：提交后分别推送 `origin`（Gitee）和 `github`（GitHub）；`dev` 自动构建、手动触发可选架构、`v*` tag 自动创建 Release
 - [x] P0 双平台测试 Release：`v0.1.0-test.2` 已验证 macOS/Windows Actions、Prerelease 创建和 6 个 Release 资产下载
 - [x] 首个对外预览版：采用 `v0.1.0-preview.1`；所有带连字符的 SemVer 预发布 tag（preview/beta/rc/test）自动标记为 GitHub Prerelease
+- [x] Python Local Lab：通过 `http://127.0.0.1:8000/lab` 上传 Office/PDF/文本文件、观察八阶段处理进度并检查三类派生产物；仅用于本地开发测试，不接入 Wails 客户端、不代表最终产品 UI
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
-| 2026-07-25 | RustFS 真实集成测试与 Office 黄金语料 | 进行中 |
+| 2026-07-25 | Python 本地文档处理可视化实验台 | 已完成 |
+| 2026-07-25 | RustFS 真实集成测试与 Office 黄金语料 | 已完成 |
 | 2026-07-25 | Python 文档入库与结构化清洗闭环 | 已完成 |
 | 2026-07-25 | Cloudreve 深度对标：文件身份、同步根与任务架构 | 已完成 |
 | 2026-07-25 | Cloudreve 对标研究与网盘在线预览 | 已完成 |
@@ -73,7 +75,7 @@
 | 2026-07-23 | macOS AppDelegate 链接冲突修复 | 已完成（待 Mac 复验） |
 | 2026-07-23 | macOS 支持（平台抽象 + Finder 挂载 + 构建脚本） | 已完成（待 Mac 实测） |
 | 2026-07-19 | 启动即用与双击进入 | 已完成 |
-| 2026-07-19 | RustFS 对象存储基础层 | 已完成（待 Docker 集成验证） |
+| 2026-07-19 | RustFS 对象存储基础层 | 已完成（Go/Python 真实 RustFS 集成验证通过） |
 | 2026-07-19 | NSIS 安装包 | 已完成 |
 | 2026-07-19 | 系统托盘 | 已完成（待手工验收） |
 | 2026-07-19 | 设置页 | 已完成 |
@@ -89,11 +91,9 @@
 
 ## 进行中
 
-**RustFS 真实集成测试与 Office 黄金语料** — 进行中。新增仅在显式环境开关下运行的 RustFS 端到端测试，并建立可重复生成、可审查预期结构的 DOCX/XLSX/PPTX/PDF 黄金样本，优先固定解析质量基线。详见 [`iterations/2026-07-25-rustfs-golden-corpus.md`](iterations/2026-07-25-rustfs-golden-corpus.md)。
-
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**知识平台里程碑 1：管线架构落地** — 第一段已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、清洗产物、版本化索引替换和失败恢复。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`knowledge-platform.md`](knowledge-platform.md) §3.6 和 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md)。
+**知识平台里程碑 1：管线架构落地** — 文档处理闭环和本地可视化实验台已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、清洗产物、版本化索引替换、失败恢复，以及仅回环开放的 `/lab` 测试页面。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-25-python-local-lab.md`](iterations/2026-07-25-python-local-lab.md)。
 
 ## 待开始（按优先级）
 
@@ -108,7 +108,6 @@
 
 ## 已知阻塞
 
-- Docker daemon 不可用，RustFS 集成测试暂时跳过（不影响当前阶段）
 - macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - macOS GitHub Actions 正在完成首次真实 runner 构建；Windows 尚无 CI，仍依赖本地 `scripts/build.ps1` 全量验证
 

@@ -1,0 +1,297 @@
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+
+const elements = {
+  form: $("#upload-form"),
+  fileInput: $("#file-input"),
+  dropZone: $("#drop-zone"),
+  dropTitle: $("#drop-title"),
+  dropCopy: $("#drop-copy"),
+  selectedFile: $("#selected-file"),
+  uploadButton: $("#upload-button"),
+  formMessage: $("#form-message"),
+  currentStatus: $("#current-status"),
+  currentFilename: $("#current-filename"),
+  currentStage: $("#current-stage"),
+  currentProgress: $("#current-progress"),
+  progressFill: $("#progress-fill"),
+  pipelineTrack: $("#pipeline-track"),
+  errorBox: $("#error-box"),
+  errorCode: $("#error-code"),
+  errorMessage: $("#error-message"),
+  retryButton: $("#retry-button"),
+  refreshButton: $("#refresh-button"),
+  jobList: $("#job-list"),
+  artifactContext: $("#artifact-context"),
+  artifactViewer: $("#artifact-viewer code"),
+};
+
+const pipelineSteps = ["queued", "downloading", "parsing", "saving_artifacts", "chunking", "embedding", "indexing", "finalizing"];
+const pipelineProgress = [0, 10, 30, 55, 68, 78, 90, 97];
+const stageLabels = {
+  queued: "等待执行", recovered: "恢复排队", starting: "启动任务", downloading: "读取 RustFS",
+  parsing: "解析与清洗", saving_artifacts: "保存派生产物", chunking: "文本切块",
+  embedding: "生成向量", indexing: "写入索引", finalizing: "生成 Manifest",
+  completed: "处理完成", failed: "处理失败",
+};
+const state = { jobs: [], selectedId: null, artifact: "clean.md", uploading: false };
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) { value /= 1024; index += 1; }
+  return `${value.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function formatTime(value) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+}
+
+function setSelectedFile(file) {
+  if (!file) {
+    elements.selectedFile.textContent = "尚未选择文件";
+    elements.dropTitle.textContent = "拖入文件，或点击选择";
+    elements.dropCopy.textContent = "Office 常用格式优先；大小上限由服务端 MAX_SOURCE_BYTES 控制";
+    elements.uploadButton.disabled = true;
+    return;
+  }
+  elements.selectedFile.textContent = `${file.name} · ${formatBytes(file.size)}`;
+  elements.dropTitle.textContent = file.name;
+  elements.dropCopy.textContent = `${formatBytes(file.size)} · 点击可重新选择`;
+  elements.uploadButton.disabled = false;
+}
+
+function setFormMessage(message, isError = false) {
+  elements.formMessage.textContent = message;
+  elements.formMessage.classList.toggle("is-error", isError);
+}
+
+async function parseError(response) {
+  try {
+    const payload = await response.json();
+    return payload.detail || JSON.stringify(payload);
+  } catch (_) {
+    return `${response.status} ${response.statusText}`;
+  }
+}
+
+async function uploadFile(file) {
+  if (!file || state.uploading) return;
+  state.uploading = true;
+  elements.uploadButton.disabled = true;
+  elements.uploadButton.querySelector("span:first-child").textContent = "正在写入与排队…";
+  setFormMessage("源文件正在写入 RustFS，请保持服务运行。", false);
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    const response = await fetch("/lab/api/uploads", { method: "POST", body });
+    if (!response.ok) throw new Error(await parseError(response));
+    const job = await response.json();
+    state.selectedId = job.id;
+    setFormMessage("上传成功，处理任务已进入流水线。", false);
+    elements.fileInput.value = "";
+    setSelectedFile(null);
+    await refreshJobs();
+  } catch (error) {
+    setFormMessage(error.message || "上传失败", true);
+  } finally {
+    state.uploading = false;
+    elements.uploadButton.querySelector("span:first-child").textContent = "写入 RustFS 并处理";
+    elements.uploadButton.disabled = !elements.fileInput.files.length;
+  }
+}
+
+function stageIndex(job) {
+  if (job.status === "completed") return pipelineSteps.length;
+  if (job.stage === "starting" || job.stage === "recovered") return 0;
+  const index = pipelineSteps.indexOf(job.stage);
+  if (index >= 0) return index;
+  if (job.status === "failed") {
+    return pipelineProgress.reduce(
+      (current, threshold, progressIndex) => job.progress >= threshold ? progressIndex : current,
+      0,
+    );
+  }
+  return 0;
+}
+
+function renderPipeline(job) {
+  if (!job) {
+    elements.currentStatus.textContent = "等待任务";
+    elements.currentStatus.className = "status-badge is-idle";
+    elements.currentFilename.textContent = "—";
+    elements.currentStage.textContent = "idle";
+    elements.currentProgress.textContent = "0%";
+    elements.progressFill.style.width = "0%";
+    elements.errorBox.hidden = true;
+    $$("#pipeline-track li").forEach((item) => item.className = "");
+    return;
+  }
+  elements.currentStatus.textContent = job.status;
+  elements.currentStatus.className = `status-badge is-${job.status}`;
+  elements.currentFilename.textContent = job.filename;
+  elements.currentStage.textContent = stageLabels[job.stage] || job.stage;
+  elements.currentProgress.textContent = `${job.progress}%`;
+  elements.progressFill.style.width = `${job.progress}%`;
+
+  const currentIndex = stageIndex(job);
+  $$("#pipeline-track li").forEach((item, index) => {
+    item.className = "";
+    if (job.status === "failed" && index === currentIndex) item.classList.add("is-failed");
+    else if (index < currentIndex || job.status === "completed") item.classList.add("is-done");
+    else if (index === currentIndex && job.status !== "queued") item.classList.add("is-current");
+  });
+
+  elements.errorBox.hidden = job.status !== "failed";
+  elements.errorCode.textContent = job.error_code || "PROCESSING_FAILED";
+  elements.errorMessage.textContent = job.error_message || "任务未提供详细错误信息。";
+}
+
+function createJobItem(job) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "job-item";
+  button.classList.toggle("is-selected", job.id === state.selectedId);
+  button.addEventListener("click", () => selectJob(job.id));
+
+  const dot = document.createElement("span");
+  dot.className = `job-state ${job.status}`;
+  dot.setAttribute("aria-hidden", "true");
+
+  const copy = document.createElement("span");
+  copy.className = "job-copy";
+  const title = document.createElement("strong");
+  title.textContent = job.filename;
+  const meta = document.createElement("span");
+  meta.textContent = `${formatTime(job.created_at)} · ${stageLabels[job.stage] || job.stage}`;
+  copy.append(title, meta);
+
+  const progress = document.createElement("span");
+  progress.className = "job-progress";
+  progress.textContent = job.status === "failed" ? "FAIL" : `${job.progress}%`;
+  button.append(dot, copy, progress);
+  return button;
+}
+
+function renderJobs() {
+  elements.jobList.replaceChildren();
+  if (!state.jobs.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "还没有任务。上传一个测试文档开始观察。";
+    elements.jobList.append(empty);
+    renderPipeline(null);
+    return;
+  }
+  state.jobs.forEach((job) => elements.jobList.append(createJobItem(job)));
+  const selected = state.jobs.find((job) => job.id === state.selectedId) || state.jobs[0];
+  state.selectedId = selected.id;
+  renderPipeline(selected);
+  if (selected.status === "completed") {
+    elements.artifactContext.textContent = `${selected.file_id} / ${selected.version_id}`;
+  }
+}
+
+async function refreshJobs() {
+  try {
+    const response = await fetch("/lab/api/jobs?limit=30", { cache: "no-store" });
+    if (!response.ok) throw new Error(await parseError(response));
+    state.jobs = await response.json();
+    if (!state.selectedId && state.jobs.length) state.selectedId = state.jobs[0].id;
+    renderJobs();
+    const selected = state.jobs.find((job) => job.id === state.selectedId);
+    if (selected?.status === "completed" && elements.artifactViewer.dataset.jobId !== selected.id) {
+      await loadArtifact(state.artifact);
+    }
+  } catch (error) {
+    elements.jobList.replaceChildren();
+    const message = document.createElement("p");
+    message.className = "empty-state";
+    message.textContent = `任务读取失败：${error.message}`;
+    elements.jobList.append(message);
+  }
+}
+
+async function selectJob(jobId) {
+  state.selectedId = jobId;
+  renderJobs();
+  const selected = state.jobs.find((job) => job.id === jobId);
+  if (selected?.status === "completed") await loadArtifact(state.artifact);
+  else {
+    elements.artifactContext.textContent = selected ? "任务尚未完成" : "选择已完成任务";
+    elements.artifactViewer.textContent = "派生产物将在任务完成后可用。";
+    delete elements.artifactViewer.dataset.jobId;
+  }
+}
+
+async function loadArtifact(name) {
+  state.artifact = name;
+  const selected = state.jobs.find((job) => job.id === state.selectedId);
+  if (!selected || selected.status !== "completed") return;
+  $$(".artifact-tab").forEach((tab) => {
+    const active = tab.dataset.artifact === name;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", String(active));
+  });
+  elements.artifactViewer.textContent = `正在读取 ${name}…`;
+  try {
+    const url = `/documents/${encodeURIComponent(selected.file_id)}/versions/${encodeURIComponent(selected.version_id)}/artifacts/${encodeURIComponent(name)}`;
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(await parseError(response));
+    const text = await response.text();
+    if (name.endsWith(".json")) {
+      try { elements.artifactViewer.textContent = JSON.stringify(JSON.parse(text), null, 2); }
+      catch (_) { elements.artifactViewer.textContent = text; }
+    } else {
+      elements.artifactViewer.textContent = text;
+    }
+    elements.artifactViewer.dataset.jobId = selected.id;
+    elements.artifactContext.textContent = `${selected.file_id} / ${selected.version_id}`;
+  } catch (error) {
+    elements.artifactViewer.textContent = `读取失败：${error.message}`;
+  }
+}
+
+async function retrySelected() {
+  const selected = state.jobs.find((job) => job.id === state.selectedId);
+  if (!selected || selected.status !== "failed") return;
+  elements.retryButton.disabled = true;
+  try {
+    const response = await fetch(`/jobs/${encodeURIComponent(selected.id)}/retry`, { method: "POST" });
+    if (!response.ok) throw new Error(await parseError(response));
+    await refreshJobs();
+  } catch (error) {
+    elements.errorMessage.textContent = `重试失败：${error.message}`;
+  } finally {
+    elements.retryButton.disabled = false;
+  }
+}
+
+elements.fileInput.addEventListener("change", () => setSelectedFile(elements.fileInput.files[0]));
+elements.form.addEventListener("submit", (event) => { event.preventDefault(); uploadFile(elements.fileInput.files[0]); });
+elements.dropZone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); elements.fileInput.click(); }
+});
+["dragenter", "dragover"].forEach((name) => elements.dropZone.addEventListener(name, (event) => { event.preventDefault(); elements.dropZone.classList.add("is-dragging"); }));
+["dragleave", "drop"].forEach((name) => elements.dropZone.addEventListener(name, (event) => { event.preventDefault(); elements.dropZone.classList.remove("is-dragging"); }));
+elements.dropZone.addEventListener("drop", (event) => {
+  const file = event.dataTransfer.files[0];
+  if (!file) return;
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  elements.fileInput.files = transfer.files;
+  setSelectedFile(file);
+});
+elements.refreshButton.addEventListener("click", refreshJobs);
+elements.retryButton.addEventListener("click", retrySelected);
+$$(".artifact-tab").forEach((tab) => tab.addEventListener("click", () => loadArtifact(tab.dataset.artifact)));
+
+refreshJobs();
+setInterval(() => {
+  const hasActiveJob = state.jobs.some((job) => job.status === "queued" || job.status === "processing");
+  if (!document.hidden && hasActiveJob) refreshJobs();
+}, 1200);
+setInterval(() => { if (!document.hidden) refreshJobs(); }, 8000);
