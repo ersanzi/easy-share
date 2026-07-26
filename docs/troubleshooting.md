@@ -127,6 +127,18 @@ Stop-Process -Name explorer -Force; Start-Sleep 2; Start-Process explorer
 
 当前传输面向可信 LAN，不要在不可信网络中发送敏感文件。
 
+### 7.1 任务中心打开了错误的接收目录
+
+1. 在设置页重新选择接收目录并点击“保存设置”，不能只在目录选择器中选中后直接离开。
+2. Windows 可只读取配置中的目录字段进行核对（不要发送完整 `config.json`，其中包含 API Token）：
+
+   ```powershell
+   (Get-Content "$env:LOCALAPPDATA\EasyShare\config.json" -Raw | ConvertFrom-Json).receiveDir
+   ```
+
+3. 最新版本会在每次点击“打开接收文件夹”时重新加载持久化配置，无需重启客户端；如果仍打开旧目录，先确认正在运行的是最新构建。
+4. 配置损坏或目录无法打开时，查看 `desktop.log` 中的 `open receive folder` 错误；重新选择一个存在且可访问的目录后保存。
+
 ## 8. 构建失败或 EXE 无法覆盖
 
 Windows 会锁定正在运行的可执行文件。先在 UI 点击“退出全部服务”，再关闭窗口，然后检查：

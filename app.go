@@ -279,13 +279,28 @@ func (a *App) OpenFile(path string) error {
 	return err
 }
 
-// OpenReceiveFolder 在文件管理器中打开文件接收目录。
+// OpenReceiveFolder 在文件管理器中打开当前设置的文件接收目录。
 func (a *App) OpenReceiveFolder() error {
-	dir := a.config.ReceiveDir
-	if dir == "" {
-		return nil
+	return a.openReceiveFolder(fsutil.OpenFolder)
+}
+
+// openReceiveFolder 每次从持久化配置读取接收目录，避免使用桌面端启动时的旧配置快照。
+func (a *App) openReceiveFolder(openFolder func(string) error) error {
+	value, err := config.Load(a.configPath)
+	if err != nil {
+		err = fmt.Errorf("读取接收目录配置失败：%w", err)
+		a.reportError("open receive folder", err)
+		return err
 	}
-	err := fsutil.OpenFolder(dir)
+
+	dir := strings.TrimSpace(value.ReceiveDir)
+	if dir == "" {
+		err = fmt.Errorf("接收目录未配置")
+		a.reportError("open receive folder", err)
+		return err
+	}
+
+	err = openFolder(dir)
 	a.reportError("open receive folder", err)
 	return err
 }
