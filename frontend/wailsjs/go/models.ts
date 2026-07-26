@@ -285,6 +285,7 @@ export namespace task {
 	
 	export class Task {
 	    id: string;
+	    kind: string;
 	    fileName: string;
 	    localPath?: string;
 	    direction: string;
@@ -307,6 +308,7 @@ export namespace task {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.kind = source["kind"];
 	        this.fileName = source["fileName"];
 	        this.localPath = source["localPath"];
 	        this.direction = source["direction"];

@@ -98,4 +98,27 @@ go build -o build/bin/easyshare-core.exe ./cmd/core
 
 ## 完成记录
 
-待实现与验证完成后补充。
+本轮已完成并进入代码基线：
+
+- 全局导航新增活动入口与右侧活动抽屉，任意页面都能查看任务；抽屉按“正在进行 → 需要处理 → 最近完成”排序，最多显示 8 项并可跳转完整任务中心。
+- 原“传输任务”页升级为统一任务中心，共用任务类型推断、状态文案、进度、速度、错误摘要及排序规则；局域网接收确认、批次分组和终态记录删除能力保留。
+- 云上传移除页面内临时队列，改由 Core 统一任务存储和 `transfer.updated` 事件反馈；旧持久任务缺少 `kind` 时仍按局域网方向兼容显示。
+- 新增 10 个组件回归用例，覆盖活动优先级、8 项上限、统一类型/状态文案、空状态、关闭/跳转交互、旧任务推断、接收操作、批次聚合及终态删除。
+
+验证结果：
+
+```text
+go build ./...                                          通过
+go test ./...                                           通过
+npm --prefix frontend run build                         通过（含 vue-tsc）
+npm --prefix frontend test                              通过（5 个测试文件，19 个测试）
+wails build                                             通过（build/bin/easyshare.exe）
+go build -o build/bin/easyshare-core.exe ./cmd/core     通过
+```
+
+`wails build` 期间仍会输出非阻塞提示 `Not found: time.Time`，但绑定生成与最终桌面端构建均成功。
+
+### 已知限制与待验收项
+
+- 云下载展示契约已经就绪，但当前 `App.CloudDownload()` 仍通过浏览器打开预签名 URL，浏览器托管下载无法提供真实任务进度。本轮不伪造下载完成状态；后续需迁移为 Core/桌面端可观测下载链路。
+- 尚需在 Windows 桌面端手工验收活动入口、背景/Escape 关闭、跨页面任务更新、真实云上传进度、旧局域网任务与完整任务中心交互。
