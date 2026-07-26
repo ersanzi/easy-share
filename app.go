@@ -399,17 +399,6 @@ func (a *App) CloudPreview(key string) (cloud.Preview, error) {
 	return result, err
 }
 
-// CloudUploadEvent is the payload emitted to the frontend during cloud uploads.
-type CloudUploadEvent struct {
-	Name  string  `json:"name"`
-	Size  int64   `json:"size"`
-	Sent  int64   `json:"sent"`
-	Speed float64 `json:"speed"` // bytes per second
-	ETA   float64 `json:"eta"`   // seconds remaining
-	Done  bool    `json:"done"`
-	Error string  `json:"error,omitempty"`
-}
-
 func (a *App) CloudUpload() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
 	if err != nil || path == "" {
@@ -427,46 +416,46 @@ func (a *App) CloudUpload() (string, error) {
 		return "", clientErr
 	}
 
-	// Notify frontend immediately so the file appears in the upload list.
-	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-		Name: fileName, Size: fileSize, Sent: 0,
+	// 在 Core 统一任务存储中注册云盘上传任务
+	created, createErr := client.CreateTask(a.ctx, map[string]any{
+		"kind": "cloud_upload", "fileName": fileName, "direction": "send",
+		"peer": "网盘", "totalBytes": fileSize, "status": "running",
 	})
+	if createErr != nil {
+		a.reportError("create cloud upload task", createErr)
+		return "", createErr
+	}
 
 	go func() {
 		start := time.Now()
-		var lastEmit time.Time
+		var lastPatch time.Time
 
 		result, uploadErr := client.CloudUploadStream(a.ctx, path, func(sent, total int64) {
 			now := time.Now()
-			// Throttle events to ~5 per second to avoid flooding the frontend.
-			if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
+			if now.Sub(lastPatch) < 200*time.Millisecond && sent < total {
 				return
 			}
-			lastEmit = now
+			lastPatch = now
 			elapsed := now.Sub(start).Seconds()
 			speed := 0.0
 			if elapsed > 0 {
 				speed = float64(sent) / elapsed
 			}
-			eta := 0.0
-			if speed > 0 {
-				eta = float64(total-sent) / speed
-			}
-			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-				Name: fileName, Size: total, Sent: sent, Speed: speed, ETA: eta,
+			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+				"transferredBytes": sent, "speed": speed, "status": "running",
 			})
 		})
 
 		if uploadErr != nil {
 			a.reportError("cloud upload", uploadErr)
-			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-				Name: fileName, Size: fileSize, Sent: 0, Error: uploadErr.Error(), Done: true,
+			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+				"status": "failed", "error": uploadErr.Error(),
 			})
 			return
 		}
 		a.logger.Printf("cloud upload done: key=%s etag=%s", result.Key, result.ETag)
-		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-			Name: fileName, Size: fileSize, Sent: fileSize, Done: true,
+		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+			"transferredBytes": fileSize, "speed": 0, "status": "completed",
 		})
 	}()
 
@@ -496,7 +485,7 @@ func (a *App) CloudUploadPaths(paths []string) error {
 	return nil
 }
 
-// uploadSingleFile 上传单个文件并推送进度事件。
+// uploadSingleFile 上传单个文件，进度写入 Core 统一任务存储。
 func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey string) {
 	fileName := filepath.Base(filePath)
 	info, err := os.Stat(filePath)
@@ -504,43 +493,44 @@ func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey strin
 		return
 	}
 	fileSize := info.Size()
-	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-		Name: fileName, Size: fileSize, Sent: 0,
+	created, createErr := client.CreateTask(a.ctx, map[string]any{
+		"kind": "cloud_upload", "fileName": fileName, "direction": "send",
+		"peer": "网盘", "totalBytes": fileSize, "status": "running",
 	})
+	if createErr != nil {
+		a.reportError("create cloud upload task", createErr)
+		return
+	}
 	start := time.Now()
-	var lastEmit time.Time
+	var lastPatch time.Time
 	_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, func(sent, total int64) {
 		now := time.Now()
-		if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
+		if now.Sub(lastPatch) < 200*time.Millisecond && sent < total {
 			return
 		}
-		lastEmit = now
+		lastPatch = now
 		elapsed := now.Sub(start).Seconds()
 		speed := 0.0
 		if elapsed > 0 {
 			speed = float64(sent) / elapsed
 		}
-		eta := 0.0
-		if speed > 0 {
-			eta = float64(total-sent) / speed
-		}
-		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-			Name: fileName, Size: total, Sent: sent, Speed: speed, ETA: eta,
+		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+			"transferredBytes": sent, "speed": speed, "status": "running",
 		})
 	})
 	if uploadErr != nil {
 		a.reportError("cloud upload", uploadErr)
-		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-			Name: fileName, Size: fileSize, Sent: 0, Error: uploadErr.Error(), Done: true,
+		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+			"status": "failed", "error": uploadErr.Error(),
 		})
 		return
 	}
-	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-		Name: fileName, Size: fileSize, Sent: fileSize, Done: true,
+	_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+		"transferredBytes": fileSize, "speed": 0, "status": "completed",
 	})
 }
 
-// uploadDir 遍历目录逐文件上传，保留目录结构。
+// uploadDir 遍历目录逐文件上传，保留目录结构。进度写入 Core 统一任务存储。
 func (a *App) uploadDir(client *desktop.Client, dir string) {
 	folderName := filepath.Base(dir)
 	var files []string
@@ -553,57 +543,36 @@ func (a *App) uploadDir(client *desktop.Client, dir string) {
 	if len(files) == 0 {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-		Name: folderName + "/", Size: int64(len(files)), Sent: 0,
+	// 文件夹级任务：totalBytes 为文件数，transferredBytes 为已完成文件数
+	created, createErr := client.CreateTask(a.ctx, map[string]any{
+		"kind": "cloud_upload", "fileName": folderName + "/", "direction": "send",
+		"peer": "网盘", "totalBytes": int64(len(files)), "status": "running",
 	})
+	if createErr != nil {
+		a.reportError("create cloud folder upload task", createErr)
+		return
+	}
 	for i, filePath := range files {
 		rel, relErr := filepath.Rel(dir, filePath)
 		if relErr != nil {
 			continue
 		}
 		objectKey := folderName + "/" + filepath.ToSlash(rel)
-		displayName := filepath.ToSlash(rel)
-		info, statErr := os.Stat(filePath)
-		if statErr != nil {
-			continue
-		}
-		fileSize := info.Size()
-		runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-			Name: folderName + "/", Size: int64(len(files)), Sent: int64(i),
-		})
-		start := time.Now()
-		var lastEmit time.Time
-		_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, func(sent, total int64) {
-			now := time.Now()
-			if now.Sub(lastEmit) < 200*time.Millisecond && sent < total {
-				return
-			}
-			lastEmit = now
-			elapsed := now.Sub(start).Seconds()
-			speed := 0.0
-			if elapsed > 0 {
-				speed = float64(sent) / elapsed
-			}
-			eta := 0.0
-			if speed > 0 {
-				eta = float64(total-sent) / speed
-			}
-			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-				Name: displayName, Size: total, Sent: sent, Speed: speed, ETA: eta,
-			})
-		})
+		_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, nil)
 		if uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
-			runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-				Name: folderName + "/", Size: int64(len(files)), Sent: int64(i), Error: uploadErr.Error(), Done: true,
+			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+				"status": "failed", "error": uploadErr.Error(),
 			})
 			return
 		}
-		_ = fileSize
+		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+			"transferredBytes": int64(i + 1), "status": "running",
+		})
 	}
 	a.logger.Printf("cloud folder upload done: %s (%d files)", folderName, len(files))
-	runtime.EventsEmit(a.ctx, "cloud-upload-progress", CloudUploadEvent{
-		Name: folderName + "/", Size: int64(len(files)), Sent: int64(len(files)), Done: true,
+	_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+		"transferredBytes": int64(len(files)), "speed": 0, "status": "completed",
 	})
 }
 

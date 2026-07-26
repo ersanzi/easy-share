@@ -77,7 +77,7 @@ func (receiver *Receiver) prepare(connection net.Conn) {
 		return
 	}
 	metadata.FileName = name
-	created, err := receiver.options.Tasks.Create(task.Task{FileName: name, Direction: task.DirectionReceive, Peer: metadata.DeviceName, TotalBytes: metadata.FileSize, Status: task.StatusPending})
+	created, err := receiver.options.Tasks.Create(task.Task{FileName: name, Kind: task.KindLANReceive, Direction: task.DirectionReceive, Peer: metadata.DeviceName, TotalBytes: metadata.FileSize, Status: task.StatusPending})
 	if err != nil {
 		connection.Close()
 		return

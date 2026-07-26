@@ -125,6 +125,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**客户端 C1.2：全局活动抽屉与统一任务中心前端一期** — 进行中。在 Core 统一任务契约基础上，把局域网发送/接收与云端任务统一为用户可理解的活动视图；本轮实现全局活动入口、跨页面活动抽屉、新状态/类型展示与旧任务兼容，不提前展示后端尚未提供的暂停、重试或取消按钮。详见 [`iterations/2026-07-27-client-activity-drawer.md`](iterations/2026-07-27-client-activity-drawer.md)。
+
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 **知识平台里程碑 1：管线架构落地** — 文档处理闭环和本地可视化实验台已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、Office OLE/OOXML 真实格式预检、清洗产物、版本化索引替换、失败恢复，以及仅回环开放的 `/lab` 测试页面。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-25-python-local-lab.md`](iterations/2026-07-25-python-local-lab.md)。

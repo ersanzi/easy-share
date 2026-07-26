@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import ActivityDrawer from './components/ActivityDrawer.vue'
 import CloudPanel from './components/CloudPanel.vue'
 import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
@@ -8,6 +9,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import TransferList from './components/TransferList.vue'
 import { useEasyShare } from './composables/useEasyShare'
+import { taskKind, taskSection } from './utils/tasks'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
 type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
@@ -15,10 +17,34 @@ type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
 const app = useEasyShare()
 const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
+const activityOpen = ref(false)
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+const activeTaskCount = computed(() => app.snapshot.value.tasks
+  .filter(task => taskSection(task) === 'active').length)
+const failedTaskCount = computed(() => app.snapshot.value.tasks
+  .filter(task => task.status === 'failed').length)
+const activityLabel = computed(() => {
+  if (!activeTaskCount.value && !failedTaskCount.value) return '活动：暂无进行中或失败任务'
+  return `活动：${activeTaskCount.value} 个进行中，${failedTaskCount.value} 个失败`
+})
+const completedCloudUploads = computed(() => app.snapshot.value.tasks
+  .filter(task => taskKind(task) === 'cloud_upload' && task.status === 'completed')
+  .map(task => `${task.id}:${task.updatedAt ?? ''}`)
+  .sort()
+  .join('|'))
 
 // 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
 watch(view, value => { app.activeView.value = value })
+// 云上传完成后刷新已挂载的网盘列表；未进入网盘页时由组件挂载自行加载。
+watch(completedCloudUploads, (current, previous) => {
+  if (previous !== undefined && current !== previous) cloudRef.value?.refresh()
+})
+
+const showAllTasks = () => {
+  view.value = 'transfers'
+  activityOpen.value = false
+}
 
 const handleCloudUpload = async () => {
   await app.cloudUpload()
@@ -48,9 +74,31 @@ const handleCloudDelete = async (key: string) => {
       @cancel="app.cancelDrop"
     />
 
+    <ActivityDrawer
+      v-if="activityOpen"
+      :tasks="app.snapshot.value.tasks"
+      @close="activityOpen = false"
+      @view-all="showAllTasks"
+    />
+
     <!-- 窗口控制条：拖拽区域 + 最小化/关闭（macOS 使用原生红绿灯，隐藏自定义按钮） -->
     <div class="window-chrome">
       <div class="drag-region" />
+      <div class="window-quick-actions">
+        <button
+          class="activity-trigger"
+          type="button"
+          :aria-label="activityLabel"
+          :aria-expanded="activityOpen"
+          aria-controls="activity-title"
+          @click="activityOpen = !activityOpen"
+        >
+          <svg viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8M9 11h6M9 15h4"/></svg>
+          <span>活动</span>
+          <b v-if="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
+          <b v-if="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
+        </button>
+      </div>
       <div v-if="!isMac" class="window-controls">
         <button class="win-btn" type="button" aria-label="最小化" @click="WindowMinimise()">
           <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
@@ -67,7 +115,7 @@ const handleCloudDelete = async (key: string) => {
           <div class="app-icon" aria-hidden="true">
             <svg viewBox="0 0 32 32"><path d="M8.5 12a6.5 6.5 0 0 1 12.6-2.2A5.5 5.5 0 1 1 22.5 20H8a5 5 0 0 1 .5-8Z"/><path d="m12 15 4-4 4 4M16 11v11"/></svg>
           </div>
-          <div><strong>EasyShare</strong><span>局域网文件空间</span></div>
+          <div><strong>EasyShare</strong><span>统一文件空间</span></div>
         </div>
 
         <nav class="sidebar-nav" aria-label="主导航">
@@ -82,7 +130,7 @@ const handleCloudDelete = async (key: string) => {
           </button>
           <button :class="['nav-item', view === 'transfers' ? 'active' : '']" type="button" @click="view = 'transfers'">
             <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
-            传输任务
+            任务中心
             <span>{{ app.snapshot.value.tasks.length }}</span>
           </button>
           <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
@@ -173,7 +221,7 @@ const handleCloudDelete = async (key: string) => {
               </div>
               <div class="summary-body">
                 <strong>{{ app.snapshot.value.tasks.length }} 个任务</strong>
-                <span>传输任务记录</span>
+                <span>统一任务与历史</span>
               </div>
               <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
             </button>
@@ -210,13 +258,13 @@ const handleCloudDelete = async (key: string) => {
           <PeerList :peers="app.snapshot.value.peers" @send="app.send" />
         </template>
 
-        <!-- ═══ 传输任务详情页 ═══ -->
+        <!-- ═══ 统一任务中心详情页 ═══ -->
         <template v-else-if="view === 'transfers'">
           <header class="workspace-header">
             <div>
-              <span class="section-label">传输</span>
-              <h1>传输任务</h1>
-              <p>查看发送与接收的文件传输进度和历史记录。</p>
+              <span class="section-label">活动</span>
+              <h1>任务中心</h1>
+              <p>统一查看局域网传输、云端上传下载和后续同步处理任务。</p>
             </div>
           </header>
           <TransferList :tasks="app.snapshot.value.tasks" @accept="app.accept" @accept-as="app.acceptAs" @reject="app.reject" @clear="app.clearHistory" @delete="app.deleteTask" />
