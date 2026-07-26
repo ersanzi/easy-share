@@ -131,13 +131,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**知识平台里程碑 1：管线架构落地** — 文档处理闭环和本地可视化实验台已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、Office OLE/OOXML 真实格式预检、清洗产物、版本化索引替换、失败恢复，以及仅回环开放的 `/lab` 测试页面。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-25-python-local-lab.md`](iterations/2026-07-25-python-local-lab.md)。
+**知识平台里程碑 1：管线架构落地** — 已落地：RustFS 对象引用异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析（含 Office 真实格式预检）、可配置清洗规则引擎（结构噪声/PII 脱敏/自定义 regex，manifest 命中可追溯）、版本化索引与失败恢复、检索质量评测基线（Hash 词面 + 真实 embedding 双口径）、`/lab` 实验台与知识问答页。剩余：**PaddleOCR 扫描件接入（下一步，规则引擎已就位承接 OCR 噪声）**、Unstructured 结构感知切块、Milvus 迁移；不提前引入 Java。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md)。
 
 ## 待开始（按优先级）
 
 > 知识平台各里程碑的目标与依据见 [`knowledge-platform.md`](knowledge-platform.md)；早期任务分解已归档至 [`archive/knowledge-platform-roadmap.md`](archive/knowledge-platform-roadmap.md)（选型以 knowledge-platform.md 为准）。
 
-1. **知识平台里程碑 1**：接入扫描件 OCR、增强复杂版面与结构感知切块、把当前 JSON 向量存储迁移到 Milvus
+1. **知识平台里程碑 1（收尾）**：PaddleOCR 扫描件接入（清洗规则引擎已就位）→ Unstructured 结构感知切块 → JSON 向量存储迁移 Milvus（迁移前后用检索评测集验证无回归）；评测集补难例（同义改写/近义干扰）
 2. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
 3. **知识平台里程碑 3**：WPS 插件（登录、侧边栏、调用 AI 接口）
 4. **网盘增强**：稳定 `fileId` 与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows Cloud Files API 独立原型
