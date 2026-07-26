@@ -1,56 +1,14 @@
 ﻿# EasyShare 版本迭代指南
 
-本文定义后续版本的固定开发流程。开始迭代时，将“版本工作区模板”复制到 `iterations/YYYY-MM-DD-<版本或主题>.md`，并随代码维护；结束后保留决策和验收结果，避免下次重新考古。
+本文定义后续版本的固定开发流程（**纯流程文档，不记录事实状态**）。开始迭代时，将"版本工作区模板"复制到 `iterations/YYYY-MM-DD-<版本或主题>.md`，并随代码维护；结束后保留决策和验收结果，避免下次重新考古。
 
-## 1. 当前可依赖基线
+## 1. 迭代前先对齐事实与方向
 
-截至 2026-07-19，已经验证：
+- **当前可依赖的行为**以 [`architecture.md`](architecture.md) 为准——它描述进程、端口、API 和生命周期的当前事实，任何迭代都不应无意破坏其中列出的行为。
+- **下一步做什么**以 [`progress.md`](progress.md) 的「路线总览」和「待开始（按优先级）」为准，本文不维护候选方向清单。
+- 涉及长期架构取舍时，先查 [`adr/`](adr/README.md) 中对应决策的状态与开放问题。
 
-- Wails 桌面端能够自动启动或复用身份匹配的 Core。
-- 并发/手动重复启动 Core 不再产生误导性端口冲突。
-- WebDAV 在 Windows 默认 `BasicAuthLevel=1` 下通过 Digest Authentication 工作。
-- `http://127.0.0.1:19080` 会转换为 `\\127.0.0.1@19080\DavWWWRoot`。
-- 映射前自动启动 WebDAV；不覆盖非 EasyShare 盘符。
-- 全退出顺序为：取消映射 → 停止 WebDAV → 取消后台 context → 退出 Core。
-- 前端在 ShutdownAll 前停止轮询，之后不再访问已退出的 Core。
-- 桌面、Core 和前端错误会写入 `%LOCALAPPDATA%\EasyShare\logs`。
-- Go 测试、前端测试、Vite 构建、Wails production 构建和真实 Windows 映射测试已通过。
-
-任何迭代都不应无意破坏这些行为。
-
-## 2. 推荐的下一步方向
-
-以下是候选项，不代表已经承诺。每次迭代只选择一个清晰主题：
-
-### 稳定性
-
-- Core 异常退出后的残留网络驱动器检测与恢复
-- 桌面启动期间的状态机和更明确的“正在启动”反馈
-- peers/tasks 的持久化或重启恢复策略
-- WebDAV、发现和接收服务的健康监测
-
-### 产品能力
-
-- 设置页：共享目录、接收目录、盘符、设备名称和端口
-- 托盘菜单：打开窗口、服务状态、退出全部服务
-- 传输历史、搜索和清理
-- 自动启动和安装器
-
-### 安全
-
-- 局域网设备配对和信任列表
-- 文件传输认证与加密
-- Token/密码轮换和 Windows 凭据保护
-- 更严格的来源授权和审计日志
-
-### 工程化
-
-- 统一版本号。目前健康 API、前端 package 和发布产物没有单一版本源
-- CI 自动运行 Go/前端测试和 production build
-- 安装包签名、升级和回滚
-- 日志打包/导出按钮以及隐私脱敏
-
-## 3. 版本工作区模板
+## 2. 版本工作区模板
 
 开始下一版时复制为 `docs/iterations/YYYY-MM-DD-<版本或主题>.md`。目录规则见 [`iterations/README.md`](iterations/README.md)。
 
@@ -95,7 +53,7 @@
 - 测试结果与日期
 ```
 
-## 4. 每次迭代的执行顺序
+## 3. 每次迭代的执行顺序
 
 ### A. 开始前
 
@@ -119,12 +77,12 @@
 2. `npm --prefix frontend test`
 3. `npm --prefix frontend run build`
 4. `scripts/build.ps1`
-5. Windows 手工验收清单
+5. 手工验收：Windows 按 [`testing/knowledge-service-checklist.md`](testing/knowledge-service-checklist.md)（知识服务）及迭代记录中的验收清单执行
 6. 涉及发现/传输时做两台机器验收
 7. 检查没有残留盘符和 EasyShare 进程
 8. 更新 README、架构、排障和本迭代完成记录
 
-## 5. Definition of Done
+## 4. Definition of Done
 
 一个版本只有在以下条件全部满足时才算完成：
 

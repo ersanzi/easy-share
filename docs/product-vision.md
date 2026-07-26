@@ -1,6 +1,8 @@
 ﻿# EasyShare 产品方向：网络云盘与内网协同
 
-> 本文描述产品长期方向，不代表当前代码已经实现。当前可依赖能力以 [`architecture.md`](architecture.md) 为准，逐版交付情况以 [`iterations/`](iterations/README.md) 为准。推荐技术路线见 [`technical-selection.md`](technical-selection.md)，长期架构取舍见 [`adr/`](adr/README.md)。
+> 本文描述**桌面文件产品主线**（消费级云盘方向）的长期方向，不代表当前代码已经实现。当前可依赖能力以 [`architecture.md`](architecture.md) 为准，阶段划分与执行状态以 [`progress.md`](progress.md) 的「路线总览」为准，逐版交付情况以 [`iterations/`](iterations/README.md) 为准。推荐技术路线见 [`technical-selection.md`](technical-selection.md)，长期架构取舍见 [`adr/`](adr/README.md)。
+>
+> **与知识平台主线的关系**：EasyShare 同时在演进企业知识管理平台（解析→RAG→WPS 插件，见 [`knowledge-platform.md`](knowledge-platform.md)）。两条主线共享统一账号与 RustFS 对象存储——本文所述桌面端与云盘是知识平台的采集触手与存储底座，二者不冲突、并行推进。
 
 ## 1. 产品定位
 
@@ -84,29 +86,24 @@ Shell 扩展必须控制在最小范围，避免拖慢或崩溃 `explorer.exe`�
 - 支持策略选择：优先内网、仅内网、允许公网回退；
 - 设备认证、加密和权限判断不能继续假设局域网天然可信。
 
-## 4. 分阶段路线
+## 4. 通往云盘的演进步骤
 
-### 阶段 0：Windows 本地入口可用（当前迭代）
+> 编号与执行状态统一见 [`progress.md`](progress.md) 路线总览（本节对应其主线一阶段 4-6）；本地入口与体验完善（阶段 0-2）已在推进，不再赘述。
 
-- 启动桌面端后自动连接现有 WebDAV 网络盘；
-- 安全复用 EasyShare 自身映射；
-- 双击标准网络驱动器进入；
-- 继续验证 Core 生命周期、日志和 Windows WebClient 兼容性。
-
-### 阶段 1：云端 MVP
+### 云端 MVP（主线阶段 4）
 
 - 账号与设备登录；
 - 文件元数据 API、对象存储和用户配额；
 - 应用内上传、下载、目录浏览和持久化传输任务；
 - 暂时可使用普通本地同步目录，不立即开发复杂 Shell 扩展。
 
-### 阶段 2：同步文件夹
+### 同步文件夹（主线阶段 5 前半）
 
 - 本地目录监听、云端增量游标、双向同步和冲突处理；
 - 断点续传、缓存管理、暂停/恢复和传输历史；
 - 双机、断网、重启和大文件验收。
 
-### 阶段 3：WPS 式系统原生入口（Windows CfAPI / macOS FileProvider）
+### WPS 式系统原生入口（主线阶段 5 后半，Windows CfAPI / macOS FileProvider）
 
 同一目标在两个平台的对等实现，可共享同步引擎设计：
 
@@ -114,7 +111,7 @@ Shell 扩展必须控制在最小范围，避免拖慢或崩溃 `explorer.exe`�
 - **macOS**：FileProvider 扩展（App Extension，跑在系统 `fileproviderd`），让 EasyShare 作为带品牌图标的位置出现在 Finder 侧边栏，支持占位文件、按需下载、同步状态角标、Finder 内增删改自动同步。这是 macOS 上「此电脑」的真正对等方案，取代 mac-ready 阶段临时的 WebDAV 挂载。
 - **macOS 投入说明**：FileProvider 须用 Swift/Objective-C 编写独立扩展、Xcode 构建、Apple 开发者账号签名公证，是独立于 Go/Vue 栈的技术投入，工作量与 Windows CfAPI 相当。详见 [`macos-port.md`](macos-port.md)。
 
-### 阶段 4：云端与内网融合
+### 云端与内网融合（主线阶段 6）
 
 - 可信设备配对和端到端加密；
 - 同一内容优先从局域网设备获取；

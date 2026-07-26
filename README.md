@@ -4,19 +4,16 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 
 ## 当前基线
 
-当前代码处于 **阶段 2：产品体验完善（0.1.x 开发基线）**：
+当前代码处于 **阶段 2：产品体验完善（0.1.x 开发基线）**，已具备的能力：
 
-- UDP 局域网设备发现 + TCP 流式文件发送/接收
-- 拖拽发送：文件/文件夹拖入窗口即弹设备选择浮层，点选即发（文件夹自动打包传输）
-- 网盘功能（RustFS）：文件/文件夹上传、列表、下载、删除、分享链接，实时进度，拖拽上传，以及图片/PDF/限量 UTF-8 文本在线预览
-- 系统文件入口：Windows Shell NameSpace 委托 WebDAV UNC；macOS Finder 挂载 WebDAV 卷
-- 系统托盘/菜单栏（Windows systray、macOS 原生 AppKit）+ Frameless 无边框窗口 + macOS 简约风格 UI
-- 设置页、传输历史、另存为、多文件发送、速度高亮
-- Core 异常恢复（watchdog + 配置热加载）
-- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引；真实 RustFS 闭环、首批 Office/PDF 黄金语料及仅回环开放的 `/lab` 测试实验台已通过，并在解析前校验 Office OLE/OOXML 真实格式；`/lab` 内可对已入库文档检索问答并溯源引用（当前不接桌面 UI）
-- Windows NSIS 安装包 + 开机自启动；macOS `.app`/DMG 构建脚本
+- **局域网互传**：UDP 设备发现 + TCP 流式传输；拖拽即发（文件夹自动打包），多文件发送、另存为、传输历史与实时速度
+- **网盘（RustFS）**：上传/列表/下载/删除/分享，文件夹上传保留目录结构，图片/PDF/限量文本在线预览（HMAC 短期票据）
+- **系统集成**：Windows「此电脑」品牌入口（Shell NameSpace 委托 WebDAV）；macOS Finder 挂载卷 + 原生菜单栏；系统托盘 + Frameless 窗口
+- **可靠性**：Core watchdog 自动恢复、配置热加载、WebSocket 实时事件 + 传输完成系统通知
+- **知识计算面（Python，暂不接桌面 UI）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/文本型 PDF/XLSX/PPTX，Office 真实格式预检）、版本化索引、检索质量评测基线，`/lab` 实验台支持上传观察与检索问答（引用可溯源）
+- **分发**：Windows NSIS 安装包 + 开机自启；macOS `.app`/DMG 构建脚本与 CI
 
-后续版本开始前请先阅读 [`docs/version-iteration.md`](docs/version-iteration.md)。
+逐项完成情况、迭代记录与待开始优先级见 [`docs/progress.md`](docs/progress.md)（唯一真相源）。开始新迭代前先读 [`docs/version-iteration.md`](docs/version-iteration.md)。
 
 长期产品方向是演进为企业知识管理平台：在文件采集与云盘存储之上，构建解析清洗、知识库（RAG）、AI 写作辅助，并通过 WPS 插件交付。Python 文档处理闭环已经落地，运行与 API 说明见 [knowledge/README.md](knowledge/README.md)，总体架构见 [docs/knowledge-platform.md](docs/knowledge-platform.md)。原网络云盘与内网协同方向见 [docs/product-vision.md](docs/product-vision.md)。
 
@@ -125,78 +122,20 @@ git push github dev
 
 ## 文档
 
-- [`docs/README.md`](docs/README.md)：文档导航和资料状态
-- [`docs/architecture.md`](docs/architecture.md)：当前架构、端口、API 和关键流程
-- [`docs/product-vision.md`](docs/product-vision.md)：网络云盘、Windows 原生入口与内网协同的长期方向
-- [docs/cloudreve-benchmark.md](docs/cloudreve-benchmark.md)：Cloudreve 能力对标、EasyShare 差距与迁移优先级
+完整导航（按读者路径分组）见 [`docs/README.md`](docs/README.md)。最常用的三份：
+
+- [`docs/architecture.md`](docs/architecture.md)：当前架构、端口、API 和关键流程（当前事实以此为准）
+- [`docs/progress.md`](docs/progress.md)：两条主线的路线总览、进度与迭代记录（唯一真相源）
 - [`docs/development.md`](docs/development.md)：开发环境、改动入口、测试方法
-- [`docs/macos-port.md`](docs/macos-port.md)：macOS 平台差异、构建、Finder 集成与排障
-- [`docs/version-iteration.md`](docs/version-iteration.md)：下一版本规划和交付流程
-- [`docs/iterations/README.md`](docs/iterations/README.md)：逐版本目标、决策和验收记录
-- [`docs/troubleshooting.md`](docs/troubleshooting.md)：日志与常见 Windows 故障
-- [`docs/testing/windows-mvp-checklist.md`](docs/testing/windows-mvp-checklist.md)：Windows 手工验收清单
 
 ## 开发路线
 
-EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一个清晰主题，验收通过后再进入下一阶段。
+EasyShare 采用小步迭代策略：两条产品主线（桌面文件产品 阶段 0-6、企业知识平台 里程碑 0-3）的阶段划分、当前状态与待开始优先级，统一维护在 [`docs/progress.md`](docs/progress.md) 的「路线总览」。方向依据：
 
-### 阶段 0：局域网可用（已完成）
-
-- UDP 设备发现、TCP 流式传输、WebDAV 网络驱动器
-- 启动即自动映射盘符，双击进入共享空间
-- 文件日志、有序退出、重复 Core 检测
-- 生产构建流水线
-
-### 阶段 1：可分发、可日常使用（已完成）
-
-- NSIS 安装包：一键安装/卸载，注册到"应用和功能"
-- 安装时自动部署 `easyshare.exe` + `easyshare-core.exe`
-- 可选开机自启动
-- 卸载时清理进程、网络映射和残留数据
-- 统一版本号（单一版本源）
-
-### 阶段 2：产品体验完善（当前）
-
-- 系统托盘 + Frameless 无边框窗口
-- 设置页、传输历史、另存为、多文件发送、速度高亮
-- Core 异常恢复（watchdog + 配置热加载）
-- Python 知识计算面：从 RustFS 异步处理 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX，生成可追溯清洗产物并建立版本化索引；真实 RustFS 闭环、首批 Office/PDF 黄金语料及仅回环开放的 `/lab` 测试实验台已通过，并在解析前校验 Office OLE/OOXML 真实格式；`/lab` 内可对已入库文档检索问答并溯源引用（当前不接桌面 UI）
-- 网盘功能（RustFS）：上传/列表/下载/删除/分享，实时进度
-- 网盘在线预览：图片、PDF、限量 UTF-8 文本，内容访问使用短期 HMAC 票据
-- 「此电脑」品牌入口（Shell NameSpace，去盘符）
-- 拖拽发送（原生文件拖放 + 设备选择浮层）
-- 文件夹传输：局域网自动打包/安全解压，网盘保留目录结构并支持拖拽上传
-- macOS 平台抽象、Finder WebDAV 入口、原生 AppKit 菜单栏与 universal 构建脚本（GitHub Actions 自动打包已通过，待真机运行验收）
-- 下一步：网盘增强（稳定文件身份与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows 按需文件原型）
-
-### 阶段 3：安全加固
-
-- 局域网设备配对与信任列表
-- 文件传输认证与加密（TLS）
-- Token/密码轮换，Windows 凭据保护
-
-### 阶段 4：云端 MVP
-
-- 账号与设备登录
-- 文件元数据 API + RustFS 对象存储
-- 应用内上传、下载、目录浏览
-- 持久化传输任务（SQLite）
-
-### 阶段 5：同步与原生入口
-
-- 同步文件夹：双向同步、冲突处理、断点续传
-- Windows CfAPI Sync Root：占位文件、按需下载
-- macOS FileProvider 扩展：Finder 侧边栏品牌入口、占位文件、按需下载（CfAPI 的 macOS 对等）
-- 品牌图标、同步状态、右键菜单
-
-### 阶段 6：云端与内网融合
-
-- 可信设备配对、端到端加密
-- 同内容优先局域网获取
-- 网络切换与离线策略
+- 桌面文件产品 → 网络云盘：[`docs/product-vision.md`](docs/product-vision.md)，能力对标 [`docs/cloudreve-benchmark.md`](docs/cloudreve-benchmark.md)
+- 企业知识平台（解析→RAG→WPS 插件）：[`docs/knowledge-platform.md`](docs/knowledge-platform.md)
 
 > 每个阶段的具体目标、设计决策和验收记录见 [`docs/iterations/`](docs/iterations/README.md)。
-> 当前开发进度见 [`docs/progress.md`](docs/progress.md)。
 
 ## 当前限制
 

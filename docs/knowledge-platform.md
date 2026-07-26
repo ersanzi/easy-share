@@ -106,11 +106,12 @@ EasyShare 起步于消费级局域网文件传输与云盘工具（对标百度�
 策略：先让整条管线从头到尾流起来，每一环都做最薄版本，验证端到端闭环后再逐环加厚。不先把单环做深。
 
 - **里程碑 0（已完成）**：Python AI 服务最小骨架——读一份文档 → 解析 → 切块向量化 → 提供问答接口。证明核心命题"文档能否变成可用知识"。账号、WPS、多文件格式均后置。
-- **里程碑 1（进行中）**：第一段已完成 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 的统一解析、清洗产物、异步任务和版本化索引；下一段接入扫描件 OCR、Unstructured 结构增强与 Milvus。
+- **里程碑 1（进行中）**：第一段已完成 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 的统一解析、清洗产物、异步任务、版本化索引和检索质量评测基线；下一段接入扫描件 OCR、Unstructured 结构增强与 Milvus。
+- **里程碑 1.5（已完成）**：`/lab` 最简问答页——检索 + 生成 + 引用溯源，让价值闭环从"产物可看"走到"知识可问"，提前用真实文档验证检索与回答质量。
 - **里程碑 2**：Java 控制面接入——账号、权限、文件登记、权限感知检索。走向多用户企业级。
 - **里程碑 3**：WPS 插件——登录、侧边栏、调用 AI 接口，完成最后一公里交付。
 
-> 各里程碑的详细任务、交付物、验收标准与依赖见 [`knowledge-platform-roadmap.md`](knowledge-platform-roadmap.md)。
+> 各里程碑的当前状态与待开始优先级见 [`progress.md`](progress.md) 路线总览；早期任务分解已归档至 [`archive/knowledge-platform-roadmap.md`](archive/knowledge-platform-roadmap.md)（选型以本文为准）。
 
 ## 6. 目录结构约定
 
@@ -123,11 +124,13 @@ knowledge/                  # Python AI 服务（计算面）
     config.py               # 配置（RustFS / LLM / embedding / 向量库）
     api/routes.py           # 异步处理、任务、产物、兼容入库与查询接口
     jobs/                   # SQLite 执行状态与进程内任务执行器（过渡实现）
+    lab/                    # 仅回环开放的本地测试实验台（上传观察 + 问答）
     parsing/                # 多格式解析、清洗、统一块模型与 Markdown 渲染
     pipeline/service.py     # RustFS → 产物 → 切块 → 索引编排
     kb/chunker.py           # 文本 → 切块
     kb/embedder.py          # 切块 → 向量（可替换网关）
     kb/store.py             # 向量库
+    eval/retrieval.py       # 检索质量评测器（recall@k / MRR / 片段命中率）
     rag/retriever.py        # 检索相关片段
     rag/generator.py        # 片段 + 问题 → LLM 回答
     storage/rustfs.py       # 从 RustFS 读文件

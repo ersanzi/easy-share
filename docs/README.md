@@ -1,27 +1,49 @@
-﻿# EasyShare 文档导航
+# EasyShare 文档导航
 
 这里记录**当前实现**、**迭代流程**和**历史设计**。代码行为与文档冲突时，以代码和测试为准，并在同一次改动中修正文档。
 
-## 开发必读
+## 按读者路径
+
+### 🚀 新人上手（按顺序读）
+
+1. [`../README.md`](../README.md) — 项目定位、快速开始、构建与产物
+2. [`architecture.md`](architecture.md) — 进程、端口、API、生命周期（**当前事实以此为准**）
+3. [`development.md`](development.md) — 本地开发、测试、按功能定位代码
+4. [`../agents.md`](../agents.md) — 设计哲学、代码约定、关键坑（人类与 AI 协作者通用）
+
+### 📍 现在到哪了
+
+| 文档 | 用途 |
+| --- | --- |
+| [`progress.md`](progress.md) | **进度与路线唯一真相源**：两条主线的阶段/里程碑状态、已完成、待开始优先级 |
+| [`iterations/`](iterations/README.md) | 每个版本的目标、决策和验收记录（逐迭代一文件） |
+
+### 🧭 方向与决策（为什么这么做）
 
 | 文档 | 用途 | 维护时机 |
 | --- | --- | --- |
-| [`../README.md`](../README.md) | 项目入口、快速运行、产物位置 | 环境或入口变化时 |
-| [`architecture.md`](architecture.md) | 进程、模块、端口、API、生命周期 | 架构或协议变化时 |
-| [`progress.md`](progress.md) | 进度唯一真相源、迭代记录表 | 每次迭代开始和结束时 |
-| [`product-vision.md`](product-vision.md) | WPS 式网络云盘与内网协同的长期方向 | 产品边界或路线变化时 |
-| [`knowledge-platform.md`](knowledge-platform.md) | 知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
-| [`macos-port.md`](macos-port.md) | macOS 移植状态、平台抽象与 CI | 跨平台结构变化时 |
-| [cloudreve-benchmark.md](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计 | 对标基线或优先级变化时 |
-| [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线、阶段门禁与推荐组合 | 技术路线或首选方案变化时 |
-| [`technology-evaluation.md`](technology-evaluation.md) | “成熟但先进”的评估门禁、产品雷达和对象存储候选 | 依赖状态变化或生产选型复审时 |
+| [`product-vision.md`](product-vision.md) | 主线一：桌面文件产品 → 网络云盘与内网协同 | 产品边界或路线变化时 |
+| [`knowledge-platform.md`](knowledge-platform.md) | 主线二：企业知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
+| [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计 | 对标基线或优先级变化时 |
+| [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线与阶段门禁 | 技术路线或首选方案变化时 |
+| [`technology-evaluation.md`](technology-evaluation.md) | "成熟但先进"评估门禁、产品雷达和对象存储候选 | 依赖状态变化或生产选型复审时 |
 | [`adr/`](adr/README.md) | 跨版本架构决策、备选方案和验证要求 | 重要决策提出、接受或被取代时 |
-| [`development.md`](development.md) | 本地开发、测试、代码定位 | 工具链或目录变化时 |
-| [`version-iteration.md`](version-iteration.md) | 下一版本从规划到发布的操作步骤 | 流程变化时 |
-| [`iterations/`](iterations/README.md) | 每个版本的目标、决策和验收记录 | 每次迭代开始和结束时 |
-| [../deploy/rustfs/](../deploy/rustfs/README.md) | 固定版本的 RustFS 本地开发与一致性测试环境 | RustFS 版本或启动方式变化时 |
-| [`troubleshooting.md`](troubleshooting.md) | 日志读取和常见故障 | 每次解决新运行问题后 |
-| [`testing/knowledge-service-checklist.md`](testing/knowledge-service-checklist.md) | 知识服务手工验收 | 知识平台功能变化时 |
+
+### 🔁 迭代与流程
+
+| 文档 | 用途 |
+| --- | --- |
+| [`version-iteration.md`](version-iteration.md) | 迭代固定流程、版本工作区模板、Definition of Done（纯流程，不记事实） |
+
+### 🧰 专题参考
+
+| 文档 | 用途 |
+| --- | --- |
+| [`../knowledge/README.md`](../knowledge/README.md) | Python 知识服务：架构边界、API、测试、评测、Local Lab |
+| [`macos-port.md`](macos-port.md) | macOS 平台差异、构建、Finder 集成与排障 |
+| [`troubleshooting.md`](troubleshooting.md) | 日志读取和常见故障（Windows/macOS/Python 管线） |
+| [`testing/knowledge-service-checklist.md`](testing/knowledge-service-checklist.md) | 知识服务手工验收清单 |
+| [`../deploy/rustfs/`](../deploy/rustfs/README.md) | 固定版本的 RustFS 本地开发与一致性测试环境 |
 
 ## 历史资料
 
@@ -33,13 +55,8 @@
 
 ## 文档维护约定
 
-1. 当前事实写入 `architecture.md` 或 `development.md`，不要继续修改历史计划来伪装现状。
+1. **单一真相源**：当前事实 → `architecture.md`；进度与路线 → `progress.md`；其余文档引用而不复制，避免多处漂移。
 2. 新版本开始时，按 `version-iteration.md` 的模板在 `iterations/` 新建记录，先写目标、非目标和验收标准，再开始编码。
-3. API、端口、配置字段、退出顺序或日志位置变化时，必须同步更新相关文档。
+3. API、端口、配置字段、退出顺序或日志位置变化时，必须在同一次改动中同步相关文档。
 4. 新发现的环境问题在修复后记录到 `troubleshooting.md`。
-5. 发布前按 Windows 验收清单逐项检查，并记录未完成项。
-
-
-
-
-
+5. 文档过时后移入 `archive/` 并在本页登记，不要原地修改历史计划来伪装现状。

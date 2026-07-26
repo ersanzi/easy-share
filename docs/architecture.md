@@ -204,10 +204,12 @@ desktop eventStream (Go 协程，指数退避重连)
 
 ## 11. 知识平台（独立服务）
 
-`knowledge/` 是 Python FastAPI 服务，独立于 Go 双进程运行：
+`knowledge/` 是 Python FastAPI 服务，独立于 Go 双进程运行（架构与运行说明见 [`../knowledge/README.md`](../knowledge/README.md)，方向见 [`knowledge-platform.md`](knowledge-platform.md)）：
 
-- 文档解析管线：PDF/DOCX/PPTX/XLSX/HTML/Markdown 统一提取 → 结构化清洗 → Markdown 渲染
-- 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维）
-- LLM 生成：SenseNova deepseek-v4-flash（推理模型）
-- 对象存储：复用 RustFS
+- 文档解析管线：TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 统一提取（含 Office OLE/OOXML 真实格式预检）→ 结构化清洗 → Markdown 渲染 → 切块 → 版本化索引
+- 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维），未配置时退回 HashEmbedder（仅跑通流程）
+- LLM 生成：SenseNova deepseek-v4-flash（推理模型），未配置时 /query 降级为纯检索
+- 检索质量评测：`tests/retrieval/` 标注集 + recall@5 / MRR 基线进入 pytest 回归
+- 对象存储：复用 RustFS；派生产物写 `derived/{fileId}/{versionId}/`
 - 凭据存 `knowledge/.env`（.gitignore 已排除）
+- `/lab` 本地实验台（仅回环）：上传观察八阶段处理 + 检索问答（引用溯源 clean.md）

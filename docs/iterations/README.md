@@ -6,8 +6,8 @@
 
 - [版本迭代指南](../version-iteration.md)
 - [当前架构](../architecture.md)
+- [进度与路线](../progress.md)
 - [开发指南](../development.md)
-- [Windows 验收清单](../testing/windows-mvp-checklist.md)
 
 建议文件名使用 `YYYY-MM-DD-vX.Y.Z.md`；尚未确定版本号时可使用 `YYYY-MM-DD-topic.md`。
 
