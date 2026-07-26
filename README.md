@@ -97,7 +97,7 @@ build/bin/EasyShare.dmg
 
 仓库的 `.github/workflows/build-mac.yml` 有三种主要使用方式：
 
-1. 推送 `dev`：自动构建，完成后在该次 Actions 运行的 **Artifacts** 下载 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；
+1. PR 到 `master` 或推送 `master`：自动构建，完成后在该次 Actions 运行的 **Artifacts** 下载 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；
 2. `workflow_dispatch`：在 Actions 页面手动运行，并选择 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`；
 3. 推送 `v*` tag：自动构建并创建 GitHub Release，发布同一组安装包与校验文件。
 
@@ -108,7 +108,7 @@ git push origin dev
 git push github dev
 ```
 
-随后等待 GitHub Actions 自动构建，并从 Artifacts 下载 DMG。发布版本时把 tag 同时推送到两个仓库；GitHub 上的 tag 构建成功后会自动创建 Release。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
+推送 `dev` 会自动运行「Knowledge Tests」（Python 知识面测试，按 `knowledge/**` 路径过滤）；桌面端 DMG/安装包构建在 PR、`master`、tag 或手动触发时进行。发布版本时把 tag 同时推送到两个仓库；GitHub 上的 tag 构建成功后会自动创建 Release。macOS 详细构建与排障见 [`docs/macos-port.md`](docs/macos-port.md)。
 
 版本阶段约定：`test` 仅用于流水线冒烟，`preview` 用于功能仍在完善且尚未完成全部真机验收的公开预览，`beta` 用于主要功能稳定后的扩大测试，`rc` 用于正式版候选。所有带 `-` 的 SemVer 预发布 tag（如 `v0.1.0-preview.1`）都会自动标记为 GitHub Prerelease；当前阶段使用 `preview`。
 
@@ -204,4 +204,4 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传暂不支持断点续传；在线预览当前支持图片、PDF 和最多 1 MiB 的 UTF-8 文本，暂不支持 Office、音视频、SVG 等高级或主动内容格式。
-- 暂无自动升级；macOS 与 Windows GitHub Actions 均支持 master/PR、手动和 tag 构建并产出安装包与 SHA-256 校验文件；`dev` 推送仅触发 macOS 构建，Windows 日常验证仍以本地 `scripts/build.ps1` 为准。
+- 暂无自动升级；macOS 与 Windows GitHub Actions 均支持 master/PR、手动和 tag 构建并产出安装包与 SHA-256 校验文件；`dev` 推送仅触发 Python 知识面测试（Knowledge Tests），Windows 日常验证仍以本地 `scripts/build.ps1` 为准。

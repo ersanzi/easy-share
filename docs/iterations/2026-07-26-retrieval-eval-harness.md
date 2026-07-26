@@ -62,4 +62,4 @@
 - 已知问题 / 后续工作：
   - 评测集应随语料库扩充持续增长（目标 50+），尤其在接入 OCR 扫描件后补充图片 PDF 用例；
   - 真实 embedding 的语义基线报告待配置 `.env` 后首次留存；
-  - GitHub Actions「Knowledge Tests」首跑验证待下次推送后确认。
+  - GitHub Actions「Knowledge Tests」首跑已于 2026-07-26 随 `17fabeb` 推送触发并通过（conclusion: success）。
