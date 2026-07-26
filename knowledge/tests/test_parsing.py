@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 
 import pytest
 from docx import Document
@@ -82,10 +83,68 @@ def test_blank_pdf_requires_ocr() -> None:
         parse_document("scan.pdf", buffer.getvalue())
 
 
+@pytest.mark.parametrize(
+    ("filename", "legacy_extension", "modern_extension"),
+    [
+        ("员工手册.docx", ".doc", ".docx"),
+        ("预算.xlsx", ".xls", ".xlsx"),
+        ("汇报.pptx", ".ppt", ".pptx"),
+    ],
+)
+def test_legacy_office_with_modern_extension_has_actionable_error(
+    filename: str,
+    legacy_extension: str,
+    modern_extension: str,
+) -> None:
+    legacy_content = bytes.fromhex("D0CF11E0A1B11AE1") + b"\x00" * 64
+
+    with pytest.raises(DocumentParseError) as exc_info:
+        parse_document(filename, legacy_content)
+
+    message = str(exc_info.value)
+    assert "旧版 Office 二进制格式" in message
+    assert legacy_extension in message
+    assert modern_extension in message
+    assert "另存为" in message
+    assert "File is not a zip file" not in message
+
+
 @pytest.mark.parametrize("filename", ["bad.docx", "bad.xlsx", "bad.pptx"])
 def test_corrupted_office_file_fails_explicitly(filename: str) -> None:
-    with pytest.raises(DocumentParseError):
+    with pytest.raises(DocumentParseError) as exc_info:
         parse_document(filename, b"not-an-office-file")
+
+    message = str(exc_info.value)
+    assert filename in message
+    assert "不是有效的 Office Open XML 文件" in message
+    assert "损坏" in message
+    assert "File is not a zip file" not in message
+
+
+def test_office_open_xml_extension_mismatch_is_reported() -> None:
+    workbook = Workbook()
+    workbook.active.append(["Name", "Team"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    with pytest.raises(DocumentParseError) as exc_info:
+        parse_document("employees.docx", buffer.getvalue())
+
+    message = str(exc_info.value)
+    assert "实际内容是 .xlsx" in message
+    assert "扩展名 .docx 不一致" in message
+
+
+def test_office_open_xml_missing_core_member_is_reported() -> None:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types />")
+
+    with pytest.raises(DocumentParseError) as exc_info:
+        parse_document("empty.docx", buffer.getvalue())
+
+    message = str(exc_info.value)
+    assert "缺少必要核心结构 word/document.xml" in message
 
 
 def test_unsupported_format_fails() -> None:

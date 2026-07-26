@@ -89,6 +89,32 @@ def test_lab_upload_office_docx_and_recent_jobs(tmp_path) -> None:
         assert jobs.json()[0]["id"] == second.json()["id"]
 
 
+def test_lab_upload_legacy_office_reports_actionable_error(tmp_path) -> None:
+    storage = FakeStorage()
+    app = create_app(make_services(tmp_path, storage))
+    legacy_content = bytes.fromhex("D0CF11E0A1B11AE1") + b"\x00" * 64
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/lab/api/uploads",
+            files={
+                "file": (
+                    "员工手册.docx",
+                    legacy_content,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+        )
+        assert response.status_code == 202
+
+        failed = _wait_for_terminal(client, response.json()["id"])
+        assert failed["status"] == "failed"
+        assert failed["error_code"] == "DocumentParseError"
+        assert "旧版 Office 二进制格式（.doc）" in failed["error_message"]
+        assert "另存为” .docx" in failed["error_message"]
+        assert "File is not a zip file" not in failed["error_message"]
+
+
 def test_lab_upload_validation_and_size_limit(tmp_path) -> None:
     services = make_services(tmp_path, FakeStorage())
     services.config.max_source_bytes = 4

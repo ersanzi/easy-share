@@ -1,7 +1,7 @@
 # EasyShare 开发进度
 
 > 本文是开发者和 AI 协作的进度快照。每次迭代开始和结束时更新。
-> 最后更新：2026-07-25
+> 最后更新：2026-07-26
 
 ## 当前位置
 
@@ -59,11 +59,13 @@
 - [x] P0 双平台测试 Release：`v0.1.0-test.2` 已验证 macOS/Windows Actions、Prerelease 创建和 6 个 Release 资产下载
 - [x] 首个对外预览版：采用 `v0.1.0-preview.1`；所有带连字符的 SemVer 预发布 tag（preview/beta/rc/test）自动标记为 GitHub Prerelease
 - [x] Python Local Lab：通过 `http://127.0.0.1:8000/lab` 上传 Office/PDF/文本文件、观察八阶段处理进度并检查三类派生产物；仅用于本地开发测试，不接入 Wails 客户端、不代表最终产品 UI
+- [x] Office 文件格式签名校验：在解析前识别旧版 OLE、损坏 OOXML、类型错配与缺少核心结构，向 Local Lab 返回可操作的中文修复提示。详见 [`iterations/2026-07-26-office-format-signature-validation.md`](iterations/2026-07-26-office-format-signature-validation.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-26 | Office 文件格式签名校验与可操作错误提示 | 已完成 |
 | 2026-07-25 | Python 本地文档处理可视化实验台 | 已完成 |
 | 2026-07-25 | RustFS 真实集成测试与 Office 黄金语料 | 已完成 |
 | 2026-07-25 | Python 文档入库与结构化清洗闭环 | 已完成 |
@@ -93,7 +95,7 @@
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
-**知识平台里程碑 1：管线架构落地** — 文档处理闭环和本地可视化实验台已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、清洗产物、版本化索引替换、失败恢复，以及仅回环开放的 `/lab` 测试页面。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-25-python-local-lab.md`](iterations/2026-07-25-python-local-lab.md)。
+**知识平台里程碑 1：管线架构落地** — 文档处理闭环和本地可视化实验台已完成：Python 已具备基于 RustFS 对象引用的异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析、Office OLE/OOXML 真实格式预检、清洗产物、版本化索引替换、失败恢复，以及仅回环开放的 `/lab` 测试页面。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。下一步集中在 PaddleOCR、Unstructured 结构增强和 Milvus，不提前引入 Java。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-25-python-local-lab.md`](iterations/2026-07-25-python-local-lab.md)。
 
 ## 待开始（按优先级）
 

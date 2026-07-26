@@ -134,6 +134,16 @@ GET  /lab/api/jobs?limit=20
 ```
 
 上传 API 将文件写入 RustFS 后复用正式 `DocumentPipeline`，不会另建一套解析或清洗逻辑。可通过 `LOCAL_LAB_ENABLED=false` 完全关闭页面及其 API；关闭后返回 `404`，非回环来源返回 `403`。
+### Office 文件格式要求
+
+`.docx/.xlsx/.pptx` 必须是现代 Office Open XML（OOXML）文件，不支持把旧版 `.doc/.xls/.ppt` 直接改扩展名后上传。解析器会在进入第三方库前检查文件内容：
+
+- 文件头 `D0 CF 11 E0 A1 B1 1A E1` 表示旧版 OLE Office 二进制格式；
+- DOCX 必须包含 `word/document.xml`；
+- XLSX 必须包含 `xl/workbook.xml`；
+- PPTX 必须包含 `ppt/presentation.xml`。
+
+遇到格式不一致时，请用 Word/WPS 打开原文件并通过“另存为”生成真正的 `.docx/.xlsx/.pptx`；只重命名扩展名不会转换格式。
 ## 快速开始
 
 ```powershell
@@ -179,7 +189,7 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-测试覆盖多格式解析、清洗、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换、Local Lab 页面/上传/访问边界和 API 行为。真实 RustFS 测试默认跳过，因此普通回归不依赖 Docker。
+测试覆盖多格式解析、清洗、Office OLE/OOXML 格式签名与类型错配、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换、Local Lab 页面/上传/访问边界和 API 行为。真实 RustFS 测试默认跳过，因此普通回归不依赖 Docker。
 
 ### Office/PDF 黄金语料
 

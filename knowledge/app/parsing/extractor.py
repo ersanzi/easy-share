@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import re
+import zipfile
 from collections.abc import Iterable
 
 from app.parsing.cleaner import clean_document
@@ -13,10 +14,50 @@ from app.parsing.renderer import render_markdown
 
 logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".markdown", ".docx", ".pdf", ".xlsx", ".pptx"}
+OLE_COMPOUND_FILE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
+OFFICE_OPEN_XML_FORMATS = {
+    ".docx": (".doc", "word/document.xml"),
+    ".xlsx": (".xls", "xl/workbook.xml"),
+    ".pptx": (".ppt", "ppt/presentation.xml"),
+}
 
 
 class DocumentParseError(ValueError):
     """文件格式不支持、损坏或没有可提取内容。"""
+
+
+def _validate_office_open_xml(filename: str, extension: str, content: bytes) -> None:
+    """在第三方解析器前识别旧版 Office、损坏容器和 OOXML 类型错配。"""
+    legacy_extension, required_member = OFFICE_OPEN_XML_FORMATS[extension]
+    if content.startswith(OLE_COMPOUND_FILE_SIGNATURE):
+        raise DocumentParseError(
+            f"{filename} 的内容是旧版 Office 二进制格式（{legacy_extension}），"
+            f"与扩展名 {extension} 不一致；请用 Word/WPS 打开后“另存为” {extension} 再上传"
+        )
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = set(archive.namelist())
+    except zipfile.BadZipFile as exc:
+        raise DocumentParseError(
+            f"{filename} 不是有效的 Office Open XML 文件；"
+            "可能已损坏、下载不完整或扩展名被修改"
+        ) from exc
+
+    if required_member in members:
+        return
+
+    for actual_extension, (_, core_member) in OFFICE_OPEN_XML_FORMATS.items():
+        if core_member in members:
+            raise DocumentParseError(
+                f"{filename} 的实际内容是 {actual_extension}，与扩展名 {extension} 不一致；"
+                f"请使用正确的文件名，或用 Office/WPS 另存为 {extension} 后再上传"
+            )
+
+    raise DocumentParseError(
+        f"{filename} 不是有效的 {extension} 文件：缺少必要核心结构 {required_member}；"
+        "文件可能已损坏或扩展名被修改"
+    )
 
 
 def parse_document(filename: str, content: bytes) -> ParsedDocument:
@@ -26,6 +67,8 @@ def parse_document(filename: str, content: bytes) -> ParsedDocument:
         raise DocumentParseError(f"不支持的文件格式 {extension or '(无扩展名)'}，当前支持: {supported}")
     if not content:
         raise DocumentParseError("文件内容为空")
+    if extension in OFFICE_OPEN_XML_FORMATS:
+        _validate_office_open_xml(filename, extension, content)
 
     try:
         if extension in {".txt", ".md", ".markdown"}:

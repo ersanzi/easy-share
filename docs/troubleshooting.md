@@ -243,9 +243,10 @@ npm --prefix frontend run build
 ### 12.2 Office 文件失败或 PDF 提示 OCR
 
 - 确认文件扩展名与真实格式一致，并安装 `python-docx`、`openpyxl`、`python-pptx`、`pypdf`。
-- 损坏 Office 文件会显式失败，不会把 ZIP/XML 二进制内容当文本。
+- `.docx/.xlsx/.pptx` 是 ZIP/OOXML 容器，不是旧版 `.doc/.xls/.ppt`。文件头为 `D0 CF 11 E0 A1 B1 1A E1` 时，内容属于旧版 OLE Office 二进制格式；请用 Word/WPS 打开后“另存为”现代格式，不能只改扩展名。
+- OOXML 核心成员分别为 DOCX 的 `word/document.xml`、XLSX 的 `xl/workbook.xml`、PPTX 的 `ppt/presentation.xml`。若任务提示实际类型与扩展名不一致，按实际类型修正文件名，或重新另存为目标格式。
+- 损坏 Office 文件会显式失败，不会把 ZIP/XML 二进制内容当文本，也不再直接暴露 `File is not a zip file` 等第三方库错误。
 - 当前 PDF 只支持文本层；扫描 PDF/图片需等待 PaddleOCR 阶段，出现 OCR 提示属于预期保护。
-
 ### 12.3 任务失败但查询命中了新版本
 
 `manifest.json` 是完成标志。当前实现会在 manifest 写入失败时恢复该 `file_id` 的旧索引，并对同一文件加进程内锁，避免并发版本互相覆盖。若仍出现不一致：
