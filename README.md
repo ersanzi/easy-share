@@ -204,4 +204,4 @@ EasyShare 采用小步迭代、逐步交付的策略。每个阶段只聚焦一�
 - Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传暂不支持断点续传；在线预览当前支持图片、PDF 和最多 1 MiB 的 UTF-8 文本，暂不支持 Office、音视频、SVG 等高级或主动内容格式。
-- 暂无自动升级；macOS GitHub Actions 支持 master/PR、手动和 tag 构建，产出 DMG、`.app.zip` 与 SHA-256 校验文件；Windows 仍依赖本地 `scripts/build.ps1` 全量验证。
+- 暂无自动升级；macOS 与 Windows GitHub Actions 均支持 master/PR、手动和 tag 构建并产出安装包与 SHA-256 校验文件；`dev` 推送仅触发 macOS 构建，Windows 日常验证仍以本地 `scripts/build.ps1` 为准。

@@ -60,11 +60,13 @@
 - [x] 首个对外预览版：采用 `v0.1.0-preview.1`；所有带连字符的 SemVer 预发布 tag（preview/beta/rc/test）自动标记为 GitHub Prerelease
 - [x] Python Local Lab：通过 `http://127.0.0.1:8000/lab` 上传 Office/PDF/文本文件、观察八阶段处理进度并检查三类派生产物；仅用于本地开发测试，不接入 Wails 客户端、不代表最终产品 UI
 - [x] Office 文件格式签名校验：在解析前识别旧版 OLE、损坏 OOXML、类型错配与缺少核心结构，向 Local Lab 返回可操作的中文修复提示。详见 [`iterations/2026-07-26-office-format-signature-validation.md`](iterations/2026-07-26-office-format-signature-validation.md)
+- [x] 检索质量评测集：30 条标注（黄金 Office 样本 + 6 篇企业文档语料，含权限范围用例），recall@5 / hit@1 / MRR / 片段命中率基线进入 pytest 常规回归；`scripts/eval_retrieval.py` 可切真实 embedding 对比。新增 knowledge-tests CI（ubuntu，dev/master push + PR）补上 Python 测试无 CI 的缺口。详见 [`iterations/2026-07-26-retrieval-eval-harness.md`](iterations/2026-07-26-retrieval-eval-harness.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-26 | 检索质量评测集与知识面 CI | 已完成（Actions 首跑待推送验证） |
 | 2026-07-26 | Office 文件格式签名校验与可操作错误提示 | 已完成 |
 | 2026-07-25 | Python 本地文档处理可视化实验台 | 已完成 |
 | 2026-07-25 | RustFS 真实集成测试与 Office 黄金语料 | 已完成 |
@@ -111,7 +113,7 @@
 ## 已知阻塞
 
 - macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
-- macOS GitHub Actions 正在完成首次真实 runner 构建；Windows 尚无 CI，仍依赖本地 `scripts/build.ps1` 全量验证
+- Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 
 ## 版本约定
 

@@ -207,6 +207,23 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 
 不要提交生成的二进制文件。调整解析行为时，应同时审查结构块、来源位置、Markdown 片段和重复生成的语义一致性。
 
+### 检索质量评测
+
+`tests/retrieval/` 维护标注评测集（30 条「问题 → 应命中文档/片段」，语料 = 黄金 Office 样本 + `tests/retrieval/corpus/` 下的企业文档），经真实 `DocumentPipeline` 索引后计算 recall@5、hit@1、MRR 与片段命中率。常规回归中以 HashEmbedder 确定性基线运行，指标跌破阈值即失败：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/retrieval -q
+```
+
+对比语义检索质量或切块参数改动时，用脚本跑同一评测集（`--real` 使用 `.env` 配置的真实 Embedding，会产生少量 API 调用）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/eval_retrieval.py
+.\.venv\Scripts\python.exe scripts/eval_retrieval.py --real --output data/eval-report.json
+```
+
+任何切块、Embedding、向量库或检索策略改动，都应先留存新旧评测报告再合入；阈值调整需同步更新对应迭代记录。
+
 ### 真实 RustFS 集成测试
 
 测试要求 RustFS 已启动且目标 bucket 已存在；它不会自动创建或删除 bucket，只会创建唯一测试源对象并精确清理该对象与三个派生产物：
@@ -234,12 +251,14 @@ knowledge/
 │  ├─ pipeline/     # 下载 → 解析 → 产物 → 切块 → 索引编排
 │  ├─ storage/      # RustFS / 可替换对象存储接口
 │  ├─ kb/           # 切块、Embedding、向量存储与检索
+│  ├─ eval/         # 检索质量评测器（recall@k / MRR / 片段命中率）
 │  ├─ rag/          # LLM 生成
 │  ├─ services.py   # 依赖组装与生命周期
 │  └─ main.py       # FastAPI 入口
-├─ scripts/          # 黄金语料物化等开发脚本
+├─ scripts/          # 黄金语料物化、检索评测等开发脚本
 ├─ tests/
 │  ├─ golden/        # Office/PDF 确定性样本与可审查预期
+│  ├─ retrieval/     # 检索质量评测集（语料 + 标注 + 基线测试）
 │  └─ integration/   # 显式开启的真实 RustFS 测试
 ├─ requirements.txt
 └─ requirements-dev.txt

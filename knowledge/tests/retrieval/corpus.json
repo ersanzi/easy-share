@@ -1,0 +1,14 @@
+{
+  "documents": [
+    {"file_id": "travel-reimburse", "filename": "travel-reimburse.md", "path": "travel-reimburse.md"},
+    {"file_id": "vpn-remote", "filename": "vpn-remote.md", "path": "vpn-remote.md"},
+    {"file_id": "meeting-room", "filename": "meeting-room.txt", "path": "meeting-room.txt"},
+    {"file_id": "onboarding", "filename": "onboarding.md", "path": "onboarding.md"},
+    {"file_id": "backup-policy", "filename": "backup-policy.md", "path": "backup-policy.md"},
+    {"file_id": "service-sla", "filename": "service-sla.txt", "path": "service-sla.txt"},
+    {"file_id": "golden-docx-policy", "filename": "word-policy.docx", "builder": "docx_policy"},
+    {"file_id": "golden-xlsx-projects", "filename": "project-register.xlsx", "builder": "xlsx_project_register"},
+    {"file_id": "golden-pptx-review", "filename": "quality-review.pptx", "builder": "pptx_quality_review"},
+    {"file_id": "golden-pdf-blank", "filename": "text-and-blank.pdf", "builder": "pdf_text_with_blank_page"}
+  ]
+}
