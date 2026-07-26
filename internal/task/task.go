@@ -6,15 +6,35 @@ import (
 	"time"
 )
 
+// Kind 区分任务来源，统一展示在任务中心。
+type Kind string
+
+const (
+	KindLANSend      Kind = "lan_send"
+	KindLANReceive   Kind = "lan_receive"
+	KindCloudUpload  Kind = "cloud_upload"
+	KindCloudDownload Kind = "cloud_download"
+	// 预留：后续里程碑扩展
+	KindSync  Kind = "sync"
+	KindParse Kind = "parse"
+)
+
 type Status string
 
 const (
-	StatusPending   Status = "pending"
-	StatusAccepted  Status = "accepted"
-	StatusRunning   Status = "running"
-	StatusCompleted Status = "completed"
-	StatusRejected  Status = "rejected"
-	StatusFailed    Status = "failed"
+	// 原有状态（局域网传输使用）
+	StatusPending   Status = "pending"     // 等待用户确认（接收方）
+	StatusAccepted  Status = "accepted"    // 已接受，准备传输
+	StatusRunning   Status = "running"     // 传输中
+	StatusCompleted Status = "completed"   // 完成
+	StatusRejected  Status = "rejected"    // 用户拒绝
+	StatusFailed    Status = "failed"      // 失败
+
+	// 扩展状态（统一任务模型）
+	StatusQueued         Status = "queued"          // 排队等待
+	StatusPaused         Status = "paused"          // 用户暂停
+	StatusWaitingNetwork Status = "waiting_network" // 等待网络恢复
+	StatusCancelled      Status = "cancelled"       // 用户取消
 )
 
 type Direction string
@@ -35,6 +55,7 @@ var (
 
 type Task struct {
 	ID               string    `json:"id"`
+	Kind             Kind      `json:"kind"`
 	FileName         string    `json:"fileName"`
 	LocalPath        string    `json:"localPath,omitempty"`
 	Direction        Direction `json:"direction"`
@@ -50,19 +71,26 @@ type Task struct {
 }
 
 func validTransition(current, next Status) bool {
+	// 终态不可再变更（failed 允许重试→queued）
 	if terminal(current) {
-		return false
+		return current == StatusFailed && next == StatusQueued
 	}
 	if current == next {
 		return true
 	}
 	switch current {
 	case StatusPending:
-		return next == StatusAccepted || next == StatusRejected || next == StatusFailed
+		return next == StatusAccepted || next == StatusRejected || next == StatusFailed || next == StatusCancelled
 	case StatusAccepted:
-		return next == StatusRunning || next == StatusFailed
+		return next == StatusRunning || next == StatusFailed || next == StatusCancelled
+	case StatusQueued:
+		return next == StatusRunning || next == StatusFailed || next == StatusCancelled || next == StatusWaitingNetwork
 	case StatusRunning:
-		return next == StatusCompleted || next == StatusFailed
+		return next == StatusCompleted || next == StatusFailed || next == StatusPaused || next == StatusWaitingNetwork || next == StatusCancelled
+	case StatusPaused:
+		return next == StatusRunning || next == StatusQueued || next == StatusCancelled || next == StatusFailed
+	case StatusWaitingNetwork:
+		return next == StatusRunning || next == StatusQueued || next == StatusFailed || next == StatusCancelled
 	default:
 		return false
 	}
@@ -70,7 +98,19 @@ func validTransition(current, next Status) bool {
 
 func validStatus(value Status) bool {
 	switch value {
-	case StatusPending, StatusAccepted, StatusRunning, StatusCompleted, StatusRejected, StatusFailed:
+	case StatusPending, StatusAccepted, StatusRunning, StatusCompleted,
+		StatusRejected, StatusFailed, StatusQueued, StatusPaused,
+		StatusWaitingNetwork, StatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+func validKind(value Kind) bool {
+	switch value {
+	case KindLANSend, KindLANReceive, KindCloudUpload, KindCloudDownload,
+		KindSync, KindParse, "":
 		return true
 	default:
 		return false
@@ -78,7 +118,7 @@ func validStatus(value Status) bool {
 }
 
 func terminal(value Status) bool {
-	return value == StatusCompleted || value == StatusRejected || value == StatusFailed
+	return value == StatusCompleted || value == StatusRejected || value == StatusFailed || value == StatusCancelled
 }
 
 func validDirection(value Direction) bool {

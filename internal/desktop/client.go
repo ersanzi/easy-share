@@ -102,6 +102,19 @@ func (client *Client) ClearTasks(ctx context.Context) error {
 func (client *Client) DeleteTask(ctx context.Context, id string) error {
 	return client.request(ctx, http.MethodDelete, "/api/tasks/"+id, nil, nil)
 }
+
+// CreateTask 在 Core 统一任务存储中注册外部任务（云盘上传/下载），返回创建后的完整任务。
+func (client *Client) CreateTask(ctx context.Context, input map[string]any) (task.Task, error) {
+	var result task.Task
+	err := client.request(ctx, http.MethodPost, "/api/tasks", input, &result)
+	return result, err
+}
+
+// PatchTask 更新外部任务的进度/状态。
+func (client *Client) PatchTask(ctx context.Context, id string, input map[string]any) error {
+	return client.request(ctx, http.MethodPatch, "/api/tasks/"+id, input, nil)
+}
+
 func (client *Client) CloudList(ctx context.Context) ([]cloud.File, error) {
 	var result []cloud.File
 	err := client.request(ctx, http.MethodGet, "/api/cloud/files", nil, &result)

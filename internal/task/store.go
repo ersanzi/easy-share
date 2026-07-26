@@ -20,7 +20,7 @@ func NewStore() *Store {
 }
 
 func (s *Store) Create(value Task) (Task, error) {
-	if !validStatus(value.Status) || !validDirection(value.Direction) {
+	if !validStatus(value.Status) || !validDirection(value.Direction) || !validKind(value.Kind) {
 		return Task{}, ErrInvalidTask
 	}
 	if !validProgress(value) {
@@ -48,9 +48,7 @@ func (s *Store) Create(value Task) (Task, error) {
 	}
 	s.tasks[value.ID] = value
 	s.mutex.Unlock()
-	if terminal(value.Status) {
-		s.persist()
-	}
+	s.persist()
 	return value, nil
 }
 
@@ -106,7 +104,7 @@ func (s *Store) Update(id string, update func(*Task) error) (Task, error) {
 		s.mutex.Unlock()
 		return Task{}, ErrImmutableID
 	}
-	if next.CreatedAt != current.CreatedAt || next.TotalBytes != current.TotalBytes || next.Direction != current.Direction || next.FileName != current.FileName || next.LocalPath != current.LocalPath || next.Peer != current.Peer {
+	if next.CreatedAt != current.CreatedAt || next.TotalBytes != current.TotalBytes || next.Direction != current.Direction || next.FileName != current.FileName || next.LocalPath != current.LocalPath || next.Peer != current.Peer || next.Kind != current.Kind {
 		s.mutex.Unlock()
 		return Task{}, ErrImmutableField
 	}
@@ -125,9 +123,7 @@ func (s *Store) Update(id string, update func(*Task) error) (Task, error) {
 	next.UpdatedAt = time.Now().UTC()
 	s.tasks[id] = next
 	s.mutex.Unlock()
-	if terminal(next.Status) {
-		s.persist()
-	}
+	s.persist()
 	return next, nil
 }
 

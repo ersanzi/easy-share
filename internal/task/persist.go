@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 )
 
-// EnablePersistence configures the store to load history from and save terminal
-// tasks to the given file path. Only completed, rejected, and failed tasks are
-// persisted; in-flight tasks are ephemeral by nature.
+// EnablePersistence configures the store to load history from and save all
+// tasks to the given file path. All tasks (including non-terminal) are
+// persisted so that queued/running/paused tasks survive restarts.
 func (s *Store) EnablePersistence(path string) {
 	s.mutex.Lock()
 	s.persistPath = path
@@ -45,8 +45,12 @@ func (s *Store) loadHistory() {
 	}
 	s.mutex.Lock()
 	for _, value := range history {
-		if value.ID != "" && terminal(value.Status) {
+		if value.ID != "" {
 			if _, exists := s.tasks[value.ID]; !exists {
+				// 非终态任务重启后标记为 waiting_network（网络状态未知）
+				if !terminal(value.Status) && value.Status != StatusPending {
+					value.Status = StatusWaitingNetwork
+				}
 				s.tasks[value.ID] = value
 			}
 		}
@@ -61,18 +65,13 @@ func (s *Store) persist() {
 		s.mutex.RUnlock()
 		return
 	}
-	var history []Task
+	all := make([]Task, 0, len(s.tasks))
 	for _, value := range s.tasks {
-		if terminal(value.Status) {
-			history = append(history, value)
-		}
+		all = append(all, value)
 	}
 	s.mutex.RUnlock()
 
-	if history == nil {
-		history = []Task{}
-	}
-	data, err := json.MarshalIndent(history, "", "  ")
+	data, err := json.MarshalIndent(all, "", "  ")
 	if err != nil {
 		return
 	}
@@ -80,7 +79,7 @@ func (s *Store) persist() {
 
 	directory := filepath.Dir(path)
 	_ = os.MkdirAll(directory, 0o700)
-	tmp, err := os.CreateTemp(directory, "history-*.tmp")
+	tmp, err := os.CreateTemp(directory, "activities-*.tmp")
 	if err != nil {
 		return
 	}

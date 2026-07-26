@@ -101,6 +101,8 @@ func (server *Server) routes() http.Handler {
 	})))
 	mux.Handle("POST /api/tasks/clear", server.auth(http.HandlerFunc(server.clearTasks)))
 	mux.Handle("DELETE /api/tasks/{id}", server.auth(http.HandlerFunc(server.deleteTask)))
+	mux.Handle("POST /api/tasks", server.auth(http.HandlerFunc(server.createTask)))
+	mux.Handle("PATCH /api/tasks/{id}", server.auth(http.HandlerFunc(server.patchTask)))
 	mux.Handle("GET /api/events", server.auth(http.HandlerFunc(server.events)))
 	mux.Handle("POST /api/shutdown", server.auth(http.HandlerFunc(server.shutdownAll)))
 	mux.Handle("POST /api/drive/start", server.auth(http.HandlerFunc(server.startDrive)))
@@ -387,6 +389,77 @@ func (server *Server) deleteTask(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+// createTask 由桌面端调用，在 Core 统一任务存储中注册云盘上传/下载等外部任务。
+func (server *Server) createTask(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Kind       task.Kind      `json:"kind"`
+		FileName   string         `json:"fileName"`
+		Direction  task.Direction `json:"direction"`
+		Peer       string         `json:"peer"`
+		BatchID    string         `json:"batchId"`
+		TotalBytes int64          `json:"totalBytes"`
+		Status     task.Status    `json:"status"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid JSON"})
+		return
+	}
+	if input.Status == "" {
+		input.Status = task.StatusQueued
+	}
+	created, err := server.tasks.Create(task.Task{
+		Kind:       input.Kind,
+		FileName:   input.FileName,
+		Direction:  input.Direction,
+		Peer:       input.Peer,
+		BatchID:    input.BatchID,
+		TotalBytes: input.TotalBytes,
+		Status:     input.Status,
+	})
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "create_failed", Message: err.Error()})
+		return
+	}
+	server.Publish(Event{Type: "transfer.updated", Data: created})
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+// patchTask 由桌面端调用，更新外部任务的进度/状态（云盘上传进度等）。
+func (server *Server) patchTask(writer http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("id")
+	var input struct {
+		TransferredBytes *int64       `json:"transferredBytes"`
+		Speed            *float64     `json:"speed"`
+		Status           *task.Status `json:"status"`
+		Error            *string      `json:"error"`
+	}
+	if json.NewDecoder(request.Body).Decode(&input) != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid JSON"})
+		return
+	}
+	updated, err := server.tasks.Update(id, func(value *task.Task) error {
+		if input.TransferredBytes != nil {
+			value.TransferredBytes = *input.TransferredBytes
+		}
+		if input.Speed != nil {
+			value.Speed = *input.Speed
+		}
+		if input.Status != nil {
+			value.Status = *input.Status
+		}
+		if input.Error != nil {
+			value.Error = *input.Error
+		}
+		return nil
+	})
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "update_failed", Message: err.Error()})
+		return
+	}
+	server.Publish(Event{Type: "transfer.updated", Data: updated})
+	writeJSON(writer, http.StatusOK, updated)
 }
 
 func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) {
