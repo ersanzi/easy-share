@@ -121,11 +121,11 @@ const handleCloudDelete = async (key: string) => {
         <nav class="sidebar-nav" aria-label="主导航">
           <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-            概览
+            首页
           </button>
           <button :class="['nav-item', view === 'devices' ? 'active' : '']" type="button" @click="view = 'devices'">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
-            附近设备
+            设备
             <span>{{ app.snapshot.value.peers.length }}</span>
           </button>
           <button :class="['nav-item', view === 'transfers' ? 'active' : '']" type="button" @click="view = 'transfers'">
@@ -135,7 +135,7 @@ const handleCloudDelete = async (key: string) => {
           </button>
           <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
-            网盘
+            文件
           </button>
           <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
@@ -177,13 +177,13 @@ const handleCloudDelete = async (key: string) => {
           <span>运行日志保存在 {{ app.logDirectory.value }}</span>
         </div>
 
-        <!-- ═══ 概览页 ═══ -->
+        <!-- ═══ 首页 ═══ -->
         <template v-else-if="view === 'overview'">
           <header class="workspace-header">
             <div>
-              <span class="section-label">共享中心</span>
+              <span class="section-label">工作台</span>
               <h1>你好，欢迎回来</h1>
-              <p>在附近设备间传送文件，共享空间与网盘可在“此电脑”中直接访问。</p>
+              <p>文件传输、云端存储与知识处理，统一在这里管理。</p>
             </div>
             <div :class="['availability', app.snapshot.value.status.core ? 'online' : '']">
               <span />
@@ -231,14 +231,37 @@ const handleCloudDelete = async (key: string) => {
                 <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
               </div>
               <div class="summary-body">
-                <strong>网盘</strong>
+                <strong>文件</strong>
                 <span>{{ app.snapshot.value.status.cloudEnabled ? '云端文件存储' : '未连接' }}</span>
               </div>
               <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
             </button>
           </div>
 
-          <!-- 共享空间留在概览 -->
+          <!-- 进行中的任务摘要 -->
+          <section v-if="app.activeTasks.value.length" class="card active-tasks-preview">
+            <header class="card-header">
+              <div>
+                <span class="section-label">正在进行</span>
+                <h2>{{ app.activeTasks.value.length }} 个活动任务</h2>
+              </div>
+              <button class="text-button" type="button" @click="view = 'transfers'">查看全部</button>
+            </header>
+            <div class="active-tasks-list">
+              <div v-for="task in app.activeTasks.value.slice(0, 4)" :key="task.id" class="active-task-row">
+                <div class="active-task-info">
+                  <strong>{{ task.fileName }}</strong>
+                  <span>{{ task.peer }}</span>
+                </div>
+                <div class="active-task-progress">
+                  <div class="mini-track"><i :style="{ width: `${task.totalBytes ? Math.min(100, Math.round(task.transferredBytes / task.totalBytes * 100)) : 0}%` }" /></div>
+                  <span class="active-task-percent">{{ task.totalBytes ? Math.min(100, Math.round(task.transferredBytes / task.totalBytes * 100)) : 0 }}%</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 共享空间留在首页 -->
           <DrivePanel
             :status="app.snapshot.value.status"
             @start="app.startDrive"

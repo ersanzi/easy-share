@@ -227,6 +227,19 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 .summary-arrow { width: 14px; height: 14px; flex: 0 0 auto; color: #c7c7cc; stroke-width: 2.2; }
 .summary-card:hover .summary-arrow { color: var(--blue); }
 
+/* ─── 首页进行中任务摘要 ─── */
+.active-tasks-preview { margin-bottom: 18px; }
+.active-tasks-list { padding: 4px 18px 14px; }
+.active-task-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-bottom: 1px solid rgba(60,60,67,.06); }
+.active-task-row:last-child { border-bottom: none; }
+.active-task-info { min-width: 0; flex: 1; }
+.active-task-info strong { display: block; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.active-task-info span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+.active-task-progress { display: flex; align-items: center; gap: 8px; flex: 0 0 140px; }
+.mini-track { flex: 1; height: 4px; overflow: hidden; background: #e9e9ed; border-radius: 2px; }
+.mini-track i { display: block; height: 100%; background: linear-gradient(90deg, #178cfb, #4aa5f8); border-radius: inherit; transition: width .3s ease; }
+.active-task-percent { flex: 0 0 auto; color: var(--blue); font-size: 10px; font-weight: 700; }
+
 /* ─── 详情页内容限宽 ─── */
 .workspace > .card { max-width: 720px; }
 

@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import type { CoreSnapshot, TransferTask } from '../types/core'
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
@@ -262,6 +262,10 @@ export function useEasyShare() {
     OnFileDropOff()
   })
 
+  const activeTasks = computed(() =>
+    snapshot.value.tasks.filter(t =>
+      ['pending', 'accepted', 'running', 'queued', 'paused', 'waiting_network'].includes(t.status)))
+
   return {
     snapshot,
     loading,
@@ -273,6 +277,7 @@ export function useEasyShare() {
     droppedDirs,
     dropSending,
     activeView,
+    activeTasks,
     clearError,
     refresh,
     sendDropped,
