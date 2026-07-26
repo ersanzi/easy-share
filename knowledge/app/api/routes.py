@@ -20,6 +20,7 @@ from app.api.schemas import (
 )
 from app.kb.chunker import chunk_text
 from app.parsing.extractor import extract_text
+from app.parsing.rules import load_rules
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,19 @@ def get_artifact(file_id: str, version_id: str, name: str, request: Request) -> 
             raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
         raise
     return Response(content=content, media_type=content_type)
+
+
+@router.get("/cleaning/rules")
+def cleaning_rules(request: Request) -> dict:
+    """当前生效的清洗规则集（只读）。规则治理（按租户配置、审计）属于里程碑 2 的
+    Java 控制面；当前通过 data/cleaning_rules.json 覆盖内置默认。"""
+    services = _services(request)
+    engine = load_rules(services.config.cleaning_rules_path)
+    return {
+        "source": services.config.cleaning_rules_path,
+        "rules": [rule.to_dict() for rule in engine.rules],
+        "warnings": engine.load_warnings,
+    }
 
 
 @router.post("/ingest", response_model=IngestResponse)

@@ -147,7 +147,7 @@ Java 控制面后续置于独立目录（如 `platform/`），现阶段未建。
 | 环节 | 选型 | 理由 |
 | --- | --- | --- |
 | 文档解析 | **Unstructured**（主编排）+ **PaddleOCR**（扫描件 fallback） | Unstructured 覆盖 20+ 格式、输出 Element 分类（Title/Table/NarrativeText）对切块友好；PaddleOCR 中文 OCR 精度开源天花板，处理无文本层的扫描件/图片 PDF |
-| 清洗 | 薄规则层，基于 Unstructured Element 类型过滤（去 Header/Footer/PageBreak 等） | 简单，不需要框架 |
+| 清洗 | 基础归一化 + **可配置规则引擎**（结构噪声默认开、PII 脱敏默认关、自定义 regex；规则集为 JSON 数据，将来由 Java 按租户下发） | 已落地；后续叠加 Unstructured Element 类型过滤 |
 | 切块 | Unstructured `chunk_by_title`（尊重文档结构）+ max_characters 上限 | 按标题/段落/表格边界切，不机械按字数；后续可叠加语义切块 |
 | 向量库 | **Milvus Standalone**（docker-compose：etcd + Milvus，对象存储复用 RustFS，不额外跑 MinIO） | 商业级天花板（亿级向量、混合检索）、国产生态好、Standalone 模式资源可控 |
 | Embedding | 阿里云百炼 `qwen3.7-text-embedding`（1024 维，OpenAI 兼容） | 已验证 |

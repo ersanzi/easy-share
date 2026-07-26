@@ -33,6 +33,7 @@ RustFS 原始对象
   → 下载与大小限制
   → 结构化解析
   → Unicode / 控制字符 / 空白清洗与相邻重复块去重
+  → 清洗规则引擎（结构噪声 + 可选 PII 脱敏，命中数写入 manifest）
   → clean.md + document.json
   → 切块
   → Embedding
@@ -118,8 +119,33 @@ GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
 ### 兼容接口
 
 - `GET /health`：服务、Embedding、LLM、索引记录和任务计数。
+- `GET /cleaning/rules`：当前生效的清洗规则集（只读）。
 - `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
 - `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`（管线入库的记录）供引用溯源；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
+
+### 清洗规则引擎
+
+清洗分两层：基础归一化（Unicode/控制字符/空白/相邻去重，始终执行）+ **可配置规则引擎**。规则集是 JSON 数据，`data/cleaning_rules.json` 按 `id` 覆盖内置默认（未给出的字段继承内置值），新 `id` 追加为自定义规则；里程碑 2 起由 Java 控制面按租户下发同一 schema。
+
+内置规则与默认开关：
+
+| 规则 id | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `header-footer` | 跨页频率检测 | **开** | 同一短行出现在 ≥max(3, 60% 页数) 个分页上即删除 |
+| `page-number` | 整行正则删除 | **开** | 仅分页文档；`- 3 -`、`第 3 页/共 10 页` 等独立页码行 |
+| `phone-mask` | 正则脱敏 | 关 | `138****5678`（保前 3 后 4） |
+| `id-card-mask` | 正则脱敏 | 关 | 保行政区划 + 校验位 |
+| `email-mask` | 正则脱敏 | 关 | 遮本地部分，保域名 |
+| `address-mask` | 正则脱敏 | 关 | 实验性，正则误伤率高 |
+
+PII 默认关：脱敏会伤问答召回（"张三电话多少"将不可答），属业务决策。开启示例：
+
+```json
+{"rules": [{"id": "phone-mask", "enabled": true},
+           {"id": "watermark", "kind": "regex_replace", "pattern": "内部资料", "replacement": ""}]}
+```
+
+每次处理的逐规则命中数记录在 manifest 的 `cleaning.rules[]`，可与清洗前文档对账。外部规则有防护：正则长度 ≤200、规则数 ≤100、坏正则/坏配置降级为警告并跳过。
 
 ## 本地 Web 可视化实验台
 
@@ -173,6 +199,7 @@ Local Lab：`http://127.0.0.1:8000/lab`（仅本地开发测试）
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | OpenAI 兼容 Embedding；留空使用流程占位实现 | 空 |
 | `EMBEDDING_DIM` | 向量维度，必须与模型一致 | `1024` |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切块长度与重叠 | `800` / `120` |
+| `CLEANING_RULES_PATH` | 清洗规则集 JSON（不存在则用内置默认） | `./data/cleaning_rules.json` |
 | `VECTOR_STORE_PATH` | 当前 JSON 向量存储 | `./data/vector_store.json` |
 | `JOB_STORE_PATH` | 当前 SQLite 执行任务库 | `./data/jobs.db` |
 | `JOB_WORKERS` | 进程内任务线程数 | `2` |

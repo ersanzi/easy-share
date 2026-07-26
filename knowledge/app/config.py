@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     retrieval_top_k: int = 5
 
+    # 清洗规则引擎：JSON 规则集路径（不存在则用内置默认；里程碑 2 起由 Java 下发同一 schema）
+    cleaning_rules_path: str = "./data/cleaning_rules.json"
+
     # 本地持久化与任务执行
     vector_store_path: str = "./data/vector_store.json"
     job_store_path: str = "./data/jobs.db"

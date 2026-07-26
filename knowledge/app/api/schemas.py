@@ -91,5 +91,6 @@ class ArtifactManifestResponse(BaseModel):
     characters: int
     chunks: int
     warnings: list[str] = Field(default_factory=list)
+    cleaning: dict[str, Any] | None = None
     artifacts: dict[str, str]
     processed_at: str

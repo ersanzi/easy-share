@@ -76,6 +76,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 网盘功能（RustFS）：文件上传/列表/下载/删除/分享链接，设置页 RustFS 连接配置
 - [x] 网盘在线预览：后端声明图片/PDF/文本能力，图片/PDF 使用五分钟 HMAC 内容票据，文本限量 1 MiB 并仅按 UTF-8 纯文本渲染。详见 [`cloudreve-benchmark.md`](cloudreve-benchmark.md) 与 [`iterations/2026-07-25-cloudreve-benchmark-and-preview.md`](iterations/2026-07-25-cloudreve-benchmark-and-preview.md)
 - [x] Cloudreve 深度对标：明确稳定 `fileId`、轻量目录层、Upload Session、统一任务、文件事件流与 Windows CfAPI 原型路线。详见 [`iterations/2026-07-25-cloudreve-deep-benchmark.md`](iterations/2026-07-25-cloudreve-deep-benchmark.md)
+- [x] 客户端 C1.2 全局活动抽屉与统一任务中心：局域网发送/接收与云上传统一进入 Core 任务真相源；提供跨页面活动入口、三段优先级排序、完整任务中心、新状态/类型展示及旧任务兼容。详见 [`iterations/2026-07-27-client-activity-drawer.md`](iterations/2026-07-27-client-activity-drawer.md)
 - [x] 此电脑品牌入口：去盘符，命名空间入口直接委托 WebDAV UNC（类 WPS），去 Digest 认证（仅回环），修复入口显示名（清 LocalizedString 等旧值）
 - [x] 拖拽发送：Wails v2.13.0 原生 EnableFileDrop + OnFileDrop 接收真实文件路径，过滤文件夹后弹设备选择浮层，点选设备即发
 - [x] 文件夹传输（局域网）：拖入文件夹自动 zip 打包走 TCP 管线（Metadata.Kind=folder），接收端解压到同名目录并删 zip，含 zip slip 防护
@@ -89,11 +90,14 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] Office 文件格式签名校验：在解析前识别旧版 OLE、损坏 OOXML、类型错配与缺少核心结构，向 Local Lab 返回可操作的中文修复提示。详见 [`iterations/2026-07-26-office-format-signature-validation.md`](iterations/2026-07-26-office-format-signature-validation.md)
 - [x] 检索质量评测集：30 条标注（黄金 Office 样本 + 6 篇企业文档语料，含权限范围用例），recall@5 / hit@1 / MRR / 片段命中率基线进入 pytest 常规回归；`scripts/eval_retrieval.py` 可切真实 embedding 对比。新增 knowledge-tests CI（ubuntu，dev/master push + PR）补上 Python 测试无 CI 的缺口。详见 [`iterations/2026-07-26-retrieval-eval-harness.md`](iterations/2026-07-26-retrieval-eval-harness.md)
 - [x] /lab 知识问答页（里程碑 1.5）：检索 + 生成 + 引用溯源，`/query` contexts 透出 `file_id/version_id`，引用一键打开 clean.md；未配置 LLM 时降级纯检索并明示能力。真机冒烟通过（百炼 embedding + SenseNova LLM 真实链路）。详见 [`iterations/2026-07-26-lab-ask-panel.md`](iterations/2026-07-26-lab-ask-panel.md)
+- [x] 清洗规则引擎：结构噪声（跨页页眉页脚/页码，默认开）+ PII 脱敏（手机/身份证/邮箱/地址，默认关）+ 自定义 regex；规则集为 JSON 数据（本地文件过渡，里程碑 2 由 Java 按租户下发同一 schema），manifest 记录逐规则命中数，含 ReDoS/坏配置防护。真实 embedding 语义基线同步留存（评测集全指标 1.000）。详见 [`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-27 | 客户端 C1.2：全局活动抽屉与统一任务中心前端一期 | 已完成（待手工交互验收） |
+| 2026-07-27 | 清洗规则引擎（结构噪声+PII 脱敏+自定义规则）+ 真实 embedding 基线 | 已完成 |
 | 2026-07-27 | 文档体系治理：单一真相源重组、断链修复、过时内容清理 | 已完成 |
 | 2026-07-26 | /lab 知识问答页（检索+生成+引用溯源，里程碑 1.5） | 已完成 |
 | 2026-07-26 | 检索质量评测集与知识面 CI | 已完成（Actions 首跑通过） |
@@ -124,8 +128,6 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
-
-**客户端 C1.2：全局活动抽屉与统一任务中心前端一期** — 进行中。在 Core 统一任务契约基础上，把局域网发送/接收与云端任务统一为用户可理解的活动视图；本轮实现全局活动入口、跨页面活动抽屉、新状态/类型展示与旧任务兼容，不提前展示后端尚未提供的暂停、重试或取消按钮。详见 [`iterations/2026-07-27-client-activity-drawer.md`](iterations/2026-07-27-client-activity-drawer.md)。
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 

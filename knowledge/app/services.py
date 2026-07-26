@@ -54,6 +54,7 @@ def build_services(config: Settings = settings) -> AppServices:
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,
         max_source_bytes=config.max_source_bytes,
+        cleaning_rules_path=config.cleaning_rules_path,
     )
     job_runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     return AppServices(

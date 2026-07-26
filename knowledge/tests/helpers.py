@@ -39,6 +39,7 @@ def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServ
         _env_file=None,
         vector_store_path=str(tmp_path / "vectors.json"),
         job_store_path=str(tmp_path / "jobs.db"),
+        cleaning_rules_path=str(tmp_path / "cleaning_rules.json"),
         embedding_dim=32,
         chunk_size=80,
         chunk_overlap=10,
@@ -57,6 +58,7 @@ def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServ
         chunk_size=config.chunk_size,
         chunk_overlap=config.chunk_overlap,
         max_source_bytes=config.max_source_bytes,
+        cleaning_rules_path=config.cleaning_rules_path,
     )
     runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     return AppServices(

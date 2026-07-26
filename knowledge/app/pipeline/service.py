@@ -13,9 +13,10 @@ from app.kb.embedder import Embedder
 from app.kb.store import VectorStore
 from app.parsing.extractor import parse_document
 from app.parsing.renderer import render_markdown
+from app.parsing.rules import load_rules
 from app.storage.base import ObjectStorage
 
-PIPELINE_VERSION = "2026-07-25.1"
+PIPELINE_VERSION = "2026-07-27.1"
 ProgressReporter = Callable[[str, int], None]
 
 
@@ -38,6 +39,7 @@ class DocumentPipeline:
         chunk_size: int,
         chunk_overlap: int,
         max_source_bytes: int,
+        cleaning_rules_path: str | None = None,
     ) -> None:
         self.storage = storage
         self.embedder = embedder
@@ -45,6 +47,7 @@ class DocumentPipeline:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.max_source_bytes = max_source_bytes
+        self.cleaning_rules_path = cleaning_rules_path
         self._document_locks_guard = threading.Lock()
         self._document_locks: dict[str, threading.Lock] = {}
 
@@ -63,6 +66,19 @@ class DocumentPipeline:
 
         report("parsing", 30)
         document = parse_document(job.filename, content)
+
+        # 规则引擎清洗：解析后的独立阶段，命中统计写入 manifest 保证可追溯
+        rules_engine = load_rules(self.cleaning_rules_path)
+        rule_hits = rules_engine.apply(document)
+        document.warnings.extend(rules_engine.load_warnings)
+        cleaning_report = {
+            "rules": [
+                {"id": rule.id, "name": rule.name, "hits": rule_hits.get(rule.id, 0)}
+                for rule in rules_engine.enabled_rules()
+            ],
+            "warnings": rules_engine.load_warnings,
+        }
+
         markdown = render_markdown(document)
         if not markdown.strip():
             raise ValueError("清洗结果为空")
@@ -137,6 +153,7 @@ class DocumentPipeline:
             "characters": len(markdown),
             "chunks": len(chunks),
             "warnings": document.warnings,
+            "cleaning": cleaning_report,
             "artifacts": keys,
             "processed_at": datetime.now(UTC).isoformat(),
         }
