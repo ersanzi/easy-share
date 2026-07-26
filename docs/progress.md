@@ -61,11 +61,13 @@
 - [x] Python Local Lab：通过 `http://127.0.0.1:8000/lab` 上传 Office/PDF/文本文件、观察八阶段处理进度并检查三类派生产物；仅用于本地开发测试，不接入 Wails 客户端、不代表最终产品 UI
 - [x] Office 文件格式签名校验：在解析前识别旧版 OLE、损坏 OOXML、类型错配与缺少核心结构，向 Local Lab 返回可操作的中文修复提示。详见 [`iterations/2026-07-26-office-format-signature-validation.md`](iterations/2026-07-26-office-format-signature-validation.md)
 - [x] 检索质量评测集：30 条标注（黄金 Office 样本 + 6 篇企业文档语料，含权限范围用例），recall@5 / hit@1 / MRR / 片段命中率基线进入 pytest 常规回归；`scripts/eval_retrieval.py` 可切真实 embedding 对比。新增 knowledge-tests CI（ubuntu，dev/master push + PR）补上 Python 测试无 CI 的缺口。详见 [`iterations/2026-07-26-retrieval-eval-harness.md`](iterations/2026-07-26-retrieval-eval-harness.md)
+- [x] /lab 知识问答页（里程碑 1.5）：检索 + 生成 + 引用溯源，`/query` contexts 透出 `file_id/version_id`，引用一键打开 clean.md；未配置 LLM 时降级纯检索并明示能力。真机冒烟通过（百炼 embedding + SenseNova LLM 真实链路）。详见 [`iterations/2026-07-26-lab-ask-panel.md`](iterations/2026-07-26-lab-ask-panel.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-26 | /lab 知识问答页（检索+生成+引用溯源，里程碑 1.5） | 已完成 |
 | 2026-07-26 | 检索质量评测集与知识面 CI | 已完成（Actions 首跑通过） |
 | 2026-07-26 | Office 文件格式签名校验与可操作错误提示 | 已完成 |
 | 2026-07-25 | Python 本地文档处理可视化实验台 | 已完成 |

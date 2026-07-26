@@ -33,6 +33,19 @@ def test_lab_page_marks_product_boundary(tmp_path) -> None:
         assert client.get("/lab/assets/lab.js").status_code == 200
 
 
+def test_lab_page_contains_ask_panel_with_citation_support(tmp_path) -> None:
+    app = create_app(make_services(tmp_path))
+    with TestClient(app) as client:
+        page = client.get("/lab")
+        assert page.status_code == 200
+        assert "知识问答" in page.text
+        assert 'id="ask-form"' in page.text
+        assert 'id="ask-citation-list"' in page.text
+        script = client.get("/lab/assets/lab.js").text
+        assert '"/query"' in script
+        assert "artifacts/clean.md" in script
+
+
 def test_lab_upload_txt_runs_pipeline_and_sanitizes_filename(tmp_path) -> None:
     storage = FakeStorage()
     app = create_app(make_services(tmp_path, storage))

@@ -24,6 +24,14 @@ const elements = {
   jobList: $("#job-list"),
   artifactContext: $("#artifact-context"),
   artifactViewer: $("#artifact-viewer code"),
+  askForm: $("#ask-form"),
+  askInput: $("#ask-input"),
+  askButton: $("#ask-button"),
+  askMode: $("#ask-mode"),
+  askMessage: $("#ask-message"),
+  askResult: $("#ask-result"),
+  askAnswerText: $("#ask-answer-text"),
+  askCitationList: $("#ask-citation-list"),
 };
 
 const pipelineSteps = ["queued", "downloading", "parsing", "saving_artifacts", "chunking", "embedding", "indexing", "finalizing"];
@@ -34,7 +42,7 @@ const stageLabels = {
   embedding: "生成向量", indexing: "写入索引", finalizing: "生成 Manifest",
   completed: "处理完成", failed: "处理失败",
 };
-const state = { jobs: [], selectedId: null, artifact: "clean.md", uploading: false };
+const state = { jobs: [], selectedId: null, artifact: "clean.md", uploading: false, asking: false };
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return "";
@@ -270,6 +278,89 @@ async function retrySelected() {
   }
 }
 
+function setAskMessage(message, isError = false) {
+  elements.askMessage.textContent = message;
+  elements.askMessage.classList.toggle("is-error", isError);
+}
+
+async function detectAskMode() {
+  try {
+    const response = await fetch("/health", { cache: "no-store" });
+    if (!response.ok) throw new Error();
+    const health = await response.json();
+    if (health.llm === "configured") {
+      elements.askMode.textContent = `生成模式 · ${health.embedder} · ${health.records} 条索引`;
+    } else {
+      elements.askMode.textContent = `纯检索模式（未配置 LLM）· ${health.records} 条索引`;
+    }
+  } catch (_) {
+    elements.askMode.textContent = "服务能力未知";
+  }
+}
+
+function createCitationItem(context, index) {
+  const item = document.createElement("li");
+  item.className = "citation-item";
+
+  const head = document.createElement("div");
+  head.className = "citation-head";
+  const label = document.createElement("strong");
+  label.textContent = `[${index + 1}] ${context.filename || context.doc_id || "未知来源"}`;
+  const score = document.createElement("span");
+  score.className = "citation-score";
+  score.textContent = Number.isFinite(context.score) ? `score ${context.score.toFixed(3)}` : "";
+  head.append(label, score);
+
+  const text = document.createElement("p");
+  text.className = "citation-text";
+  text.textContent = context.text;
+
+  item.append(head, text);
+  if (context.file_id && context.version_id) {
+    const link = document.createElement("a");
+    link.className = "citation-link";
+    link.href = `/documents/${encodeURIComponent(context.file_id)}/versions/${encodeURIComponent(context.version_id)}/artifacts/clean.md`;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = `查看 clean.md（${context.file_id} / ${context.version_id}）↗`;
+    item.append(link);
+  }
+  return item;
+}
+
+async function askQuestion(question) {
+  if (!question || state.asking) return;
+  state.asking = true;
+  elements.askButton.disabled = true;
+  elements.askButton.querySelector("span:first-child").textContent = "检索与生成中…";
+  setAskMessage("正在检索知识库…", false);
+  try {
+    const response = await fetch("/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, top_k: 5 }),
+    });
+    if (!response.ok) throw new Error(await parseError(response));
+    const payload = await response.json();
+    elements.askAnswerText.textContent = payload.answer || "（无回答）";
+    elements.askCitationList.replaceChildren(
+      ...(payload.contexts || []).map((context, index) => createCitationItem(context, index)),
+    );
+    elements.askResult.hidden = false;
+    if (!(payload.contexts || []).length) {
+      setAskMessage("知识库中没有命中相关片段；请先在上方上传并处理文档。", false);
+    } else {
+      setAskMessage("", false);
+    }
+  } catch (error) {
+    setAskMessage(error.message || "查询失败", true);
+  } finally {
+    state.asking = false;
+    elements.askButton.querySelector("span:first-child").textContent = "提问";
+    elements.askButton.disabled = !elements.askInput.value.trim();
+  }
+}
+
 elements.fileInput.addEventListener("change", () => setSelectedFile(elements.fileInput.files[0]));
 elements.form.addEventListener("submit", (event) => { event.preventDefault(); uploadFile(elements.fileInput.files[0]); });
 elements.dropZone.addEventListener("keydown", (event) => {
@@ -288,8 +379,16 @@ elements.dropZone.addEventListener("drop", (event) => {
 elements.refreshButton.addEventListener("click", refreshJobs);
 elements.retryButton.addEventListener("click", retrySelected);
 $$(".artifact-tab").forEach((tab) => tab.addEventListener("click", () => loadArtifact(tab.dataset.artifact)));
+elements.askInput.addEventListener("input", () => {
+  elements.askButton.disabled = state.asking || !elements.askInput.value.trim();
+});
+elements.askForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  askQuestion(elements.askInput.value.trim());
+});
 
 refreshJobs();
+detectAskMode();
 setInterval(() => {
   const hasActiveJob = state.jobs.some((job) => job.status === "queued" || job.status === "processing");
   if (!document.hidden && hasActiveJob) refreshJobs();

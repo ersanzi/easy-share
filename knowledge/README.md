@@ -119,11 +119,11 @@ GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
 
 - `GET /health`：服务、Embedding、LLM、索引记录和任务计数。
 - `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
-- `POST /query`：检索与生成；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
+- `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`（管线入库的记录）供引用溯源；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
 
 ## 本地 Web 可视化实验台
 
-启动服务后访问 `http://127.0.0.1:8000/lab`，可以上传 TXT、Markdown、DOCX、文本型 PDF、XLSX 和 PPTX，查看任务进度、最近任务及 `clean.md`、`document.json`、`manifest.json` 三类派生产物。
+启动服务后访问 `http://127.0.0.1:8000/lab`，可以上传 TXT、Markdown、DOCX、文本型 PDF、XLSX 和 PPTX，查看任务进度、最近任务及 `clean.md`、`document.json`、`manifest.json` 三类派生产物；页面底部的「知识问答」面板可对已入库文档提问，回答附引用片段并可一键溯源对应 `clean.md`（未配置 LLM 时降级为纯检索模式）。
 
 > **产品边界：** Local Lab 只用于本地开发和测试文档管线，不是 EasyShare 客户端功能，不接入当前 Wails/Vue 桌面界面，也不代表最终产品 UI。它没有生产认证、多租户隔离或 RBAC，必须只监听 `127.0.0.1` 并使用单个 Uvicorn worker。
 

@@ -52,6 +52,49 @@ def test_process_query_idempotency_and_artifacts(tmp_path) -> None:
         assert query.json()["contexts"]
 
 
+class _StubGenerator:
+    def generate(self, question: str, contexts: list[dict]) -> dict:
+        refs = "".join(f"[{index + 1}]" for index in range(len(contexts)))
+        return {
+            "answer": f"根据资料回答：{question} {refs}",
+            "sources": [{"doc_id": context.get("doc_id"), "score": context.get("score")} for context in contexts],
+        }
+
+
+def test_query_citations_are_traceable_to_artifacts(tmp_path) -> None:
+    storage = FakeStorage({"source/policy.txt": b"EasyShare requires traceable citations."})
+    services = make_services(tmp_path, storage)
+    app = create_app(services)
+
+    with TestClient(app) as client:
+        submitted = client.post(
+            "/documents/process",
+            json={"file_id": "file-9", "version_id": "v3", "object_key": "source/policy.txt"},
+        )
+        _wait_for_terminal(client, submitted.json()["id"])
+
+        degraded = client.post("/query", json={"question": "traceable citations?"})
+        assert degraded.status_code == 200
+        payload = degraded.json()
+        assert payload["answer"].startswith("（未配置 LLM")
+        context = payload["contexts"][0]
+        assert context["file_id"] == "file-9"
+        assert context["version_id"] == "v3"
+        assert context["filename"] == "policy.txt"
+        artifact = client.get(
+            f"/documents/{context['file_id']}/versions/{context['version_id']}/artifacts/clean.md"
+        )
+        assert artifact.status_code == 200
+        assert "traceable citations" in artifact.text
+
+        services.generator = _StubGenerator()
+        generated = client.post("/query", json={"question": "traceable citations?"})
+        assert generated.status_code == 200
+        assert generated.json()["answer"].startswith("根据资料回答：")
+        assert generated.json()["sources"][0]["doc_id"] == "file-9"
+        assert generated.json()["contexts"][0]["version_id"] == "v3"
+
+
 def test_api_validation_not_found_and_retry_conflict(tmp_path) -> None:
     services = make_services(tmp_path, FakeStorage())
     app = create_app(services)

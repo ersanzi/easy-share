@@ -129,6 +129,39 @@
       </article>
     </section>
 
+    <section class="ask-grid" aria-label="知识问答">
+      <article class="panel ask-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-index">05 / ASK</p>
+            <h2>知识问答</h2>
+          </div>
+          <span class="ask-mode" id="ask-mode">检测服务能力中…</span>
+        </div>
+
+        <form id="ask-form" class="ask-form">
+          <input id="ask-input" type="text" autocomplete="off" maxlength="500"
+                 placeholder="就已入库文档提问，回答附引用片段与来源产物链接">
+          <button class="primary-button ask-button" id="ask-button" type="submit" disabled>
+            <span>提问</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+        <p class="form-message" id="ask-message" role="status" aria-live="polite"></p>
+
+        <div class="ask-result" id="ask-result" hidden>
+          <div class="ask-answer">
+            <span class="summary-label">回答</span>
+            <p id="ask-answer-text"></p>
+          </div>
+          <div class="ask-citations">
+            <span class="summary-label">引用片段 · 点击溯源 clean.md</span>
+            <ol class="citation-list" id="ask-citation-list"></ol>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <footer>
       <span>EasyShare Knowledge Service / Local Lab</span>
       <span>测试辅助界面，不进入 Wails 客户端交付范围</span>

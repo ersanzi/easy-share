@@ -36,6 +36,8 @@ class SourceRef(BaseModel):
 
 class RetrievedChunk(BaseModel):
     doc_id: str | None = None
+    file_id: str | None = None
+    version_id: str | None = None
     filename: str | None = None
     score: float | None = None
     text: str

@@ -174,6 +174,8 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
     chunks = [
         RetrievedChunk(
             doc_id=context.get("doc_id"),
+            file_id=context.get("file_id"),
+            version_id=context.get("version_id"),
             filename=(context.get("metadata") or {}).get("filename"),
             score=context.get("score"),
             text=context["text"],
