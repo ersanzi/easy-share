@@ -95,7 +95,7 @@ def list_jobs(
 )
 async def upload_document(
     request: Request,
-    file: Annotated[UploadFile, File(description="待处理的 Office、PDF 或文本文件")],
+    file: Annotated[UploadFile, File(description="待处理的 Office、PDF、图片或文本文件")],
     file_id: Annotated[str | None, Form()] = None,
     version_id: Annotated[str, Form()] = "v1",
     force: Annotated[bool, Form()] = False,

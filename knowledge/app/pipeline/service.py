@@ -8,7 +8,8 @@ from datetime import UTC, datetime
 from typing import Callable
 
 from app.jobs.store import ProcessingJob
-from app.kb.chunker import chunk_text
+from app.ocr import OCRProvider
+from app.kb.chunker import chunk_document
 from app.kb.embedder import Embedder
 from app.kb.store import VectorStore
 from app.parsing.extractor import parse_document
@@ -16,7 +17,7 @@ from app.parsing.renderer import render_markdown
 from app.parsing.rules import load_rules
 from app.storage.base import ObjectStorage
 
-PIPELINE_VERSION = "2026-07-27.1"
+PIPELINE_VERSION = "2026-07-28.1"
 ProgressReporter = Callable[[str, int], None]
 
 
@@ -40,6 +41,8 @@ class DocumentPipeline:
         chunk_overlap: int,
         max_source_bytes: int,
         cleaning_rules_path: str | None = None,
+        ocr_provider: OCRProvider | None = None,
+        ocr_min_text_chars: int = 20,
     ) -> None:
         self.storage = storage
         self.embedder = embedder
@@ -48,6 +51,8 @@ class DocumentPipeline:
         self.chunk_overlap = chunk_overlap
         self.max_source_bytes = max_source_bytes
         self.cleaning_rules_path = cleaning_rules_path
+        self.ocr_provider = ocr_provider
+        self.ocr_min_text_chars = ocr_min_text_chars
         self._document_locks_guard = threading.Lock()
         self._document_locks: dict[str, threading.Lock] = {}
 
@@ -65,7 +70,12 @@ class DocumentPipeline:
         source_sha256 = hashlib.sha256(content).hexdigest()
 
         report("parsing", 30)
-        document = parse_document(job.filename, content)
+        document = parse_document(
+            job.filename,
+            content,
+            ocr_provider=self.ocr_provider,
+            ocr_min_text_chars=self.ocr_min_text_chars,
+        )
 
         # 规则引擎清洗：解析后的独立阶段，命中统计写入 manifest 保证可追溯
         rules_engine = load_rules(self.cleaning_rules_path)
@@ -108,12 +118,12 @@ class DocumentPipeline:
         )
 
         report("chunking", 68)
-        chunks = chunk_text(markdown, self.chunk_size, self.chunk_overlap)
+        chunks = chunk_document(document, self.chunk_size, self.chunk_overlap)
         if not chunks:
             raise ValueError("清洗结果无法生成有效文本块")
 
         report("embedding", 78)
-        embeddings = self.embedder.embed(chunks)
+        embeddings = self.embedder.embed([chunk.text for chunk in chunks])
         if len(embeddings) != len(chunks):
             raise ValueError("Embedding 返回数量与文本块数量不一致")
 
@@ -123,11 +133,12 @@ class DocumentPipeline:
                 "doc_id": job.file_id,
                 "file_id": job.file_id,
                 "version_id": job.version_id,
-                "text": chunk,
+                "text": chunk.text,
                 "metadata": {
                     "filename": job.filename,
                     "object_key": job.object_key,
                     "pipeline_version": PIPELINE_VERSION,
+                    **chunk.metadata(),
                 },
                 "embedding": embedding,
             }
@@ -153,6 +164,7 @@ class DocumentPipeline:
             "characters": len(markdown),
             "chunks": len(chunks),
             "warnings": document.warnings,
+            "ocr": document.metadata.get("ocr"),
             "cleaning": cleaning_report,
             "artifacts": keys,
             "processed_at": datetime.now(UTC).isoformat(),

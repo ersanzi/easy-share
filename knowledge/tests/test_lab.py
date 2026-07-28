@@ -29,6 +29,7 @@ def test_lab_page_marks_product_boundary(tmp_path) -> None:
         assert "仅供本地测试" in response.text
         assert "不是 EasyShare 客户端功能" in response.text
         assert "不代表最终产品界面" in response.text
+        assert 'accept=".txt,.md,.markdown,.docx,.pdf,.xlsx,.pptx,.png,.jpg,.jpeg,.bmp,.tif,.tiff"' in response.text
         assert client.get("/lab/assets/lab.css").status_code == 200
         assert client.get("/lab/assets/lab.js").status_code == 200
 

@@ -5,15 +5,26 @@ import io
 import logging
 import os
 import re
+import time
 import zipfile
 from collections.abc import Iterable
 
 from app.parsing.cleaner import clean_document
 from app.parsing.models import DocumentBlock, ParsedDocument, SourceLocation
 from app.parsing.renderer import render_markdown
+from app.ocr import (
+    OCRPageResult,
+    OCRProvider,
+    OCRRecognitionError,
+    OCRUnavailableError,
+    UnavailableOCRProvider,
+)
 
 logger = logging.getLogger(__name__)
-SUPPORTED_EXTENSIONS = {".txt", ".md", ".markdown", ".docx", ".pdf", ".xlsx", ".pptx"}
+SUPPORTED_EXTENSIONS = {
+    ".txt", ".md", ".markdown", ".docx", ".pdf", ".xlsx", ".pptx",
+    ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
+}
 OLE_COMPOUND_FILE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 OFFICE_OPEN_XML_FORMATS = {
     ".docx": (".doc", "word/document.xml"),
@@ -60,7 +71,13 @@ def _validate_office_open_xml(filename: str, extension: str, content: bytes) -> 
     )
 
 
-def parse_document(filename: str, content: bytes) -> ParsedDocument:
+def parse_document(
+    filename: str,
+    content: bytes,
+    *,
+    ocr_provider: OCRProvider | None = None,
+    ocr_min_text_chars: int = 20,
+) -> ParsedDocument:
     extension = os.path.splitext(filename.lower())[1]
     if extension not in SUPPORTED_EXTENSIONS:
         supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
@@ -76,7 +93,14 @@ def parse_document(filename: str, content: bytes) -> ParsedDocument:
         elif extension == ".docx":
             document = _parse_docx(filename, content)
         elif extension == ".pdf":
-            document = _parse_pdf(filename, content)
+            document = _parse_pdf(
+                filename,
+                content,
+                ocr_provider=ocr_provider,
+                ocr_min_text_chars=ocr_min_text_chars,
+            )
+        elif extension in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
+            document = _parse_image(filename, content, ocr_provider=ocr_provider)
         elif extension == ".xlsx":
             document = _parse_xlsx(filename, content)
         else:
@@ -228,38 +252,204 @@ def _parse_docx(filename: str, content: bytes) -> ParsedDocument:
     )
 
 
-def _parse_pdf(filename: str, content: bytes) -> ParsedDocument:
+def _render_pdf_page(content: bytes, page_number: int) -> bytes:
+    """将 PDF 单页渲染为 PNG，供 OCR 识别。"""
+    try:
+        import fitz
+    except ImportError as exc:
+        raise DocumentParseError(
+            "扫描 PDF OCR 需要 PyMuPDF；请安装 knowledge/requirements-ocr.txt"
+        ) from exc
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+        try:
+            page = document.load_page(page_number - 1)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            return pixmap.tobytes("png")
+        finally:
+            document.close()
+    except Exception as exc:  # noqa: BLE001 - 统一转换为可诊断的领域错误
+        raise DocumentParseError(f"PDF 第 {page_number} 页渲染为 OCR 图片失败：{exc}") from exc
+
+
+def _ocr_blocks(result: OCRPageResult, *, page: int) -> list[DocumentBlock]:
+    blocks: list[DocumentBlock] = []
+    for index, item in enumerate(result.blocks, start=1):
+        text = item.text.strip()
+        if not text:
+            continue
+        metadata = {"extraction_method": "ocr"}
+        if item.confidence is not None:
+            metadata["ocr_confidence"] = item.confidence
+        if item.bbox:
+            metadata["ocr_bbox"] = item.bbox
+        blocks.append(
+            DocumentBlock(
+                id=f"ocr-p{page}-{index}",
+                type="paragraph",
+                text=text,
+                source=SourceLocation(page=page),
+                metadata=metadata,
+            )
+        )
+    return blocks
+
+
+def _resolve_ocr_provider(ocr_provider: OCRProvider | None) -> OCRProvider:
+    return ocr_provider or UnavailableOCRProvider()
+
+
+def _text_layer_blocks(paragraphs: list[str], *, page: int, offset: int) -> list[DocumentBlock]:
+    return [
+        DocumentBlock(
+            id=f"b{offset + index}",
+            type="paragraph",
+            text=paragraph,
+            source=SourceLocation(page=page),
+        )
+        for index, paragraph in enumerate(paragraphs, start=1)
+    ]
+
+
+def _parse_pdf(
+    filename: str,
+    content: bytes,
+    *,
+    ocr_provider: OCRProvider | None,
+    ocr_min_text_chars: int,
+) -> ParsedDocument:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
+    provider = _resolve_ocr_provider(ocr_provider)
+    capability = provider.capability()
     blocks: list[DocumentBlock] = []
     empty_pages = 0
+    ocr_pages: list[int] = []
+    failed_pages: list[int] = []
+    low_confidence_blocks = 0
+    ocr_duration_ms = 0
+
     for page_number, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n|(?<=。)\s*\n", text) if part.strip()]
+        paragraphs = [
+            part.strip()
+            for part in re.split(r"\n\s*\n|(?<=。)\s*\n", text)
+            if part.strip()
+        ]
+        text_blocks = _text_layer_blocks(paragraphs, page=page_number, offset=len(blocks))
         if not paragraphs:
             empty_pages += 1
+        if paragraphs and len(text.strip()) >= ocr_min_text_chars:
+            blocks.extend(text_blocks)
             continue
-        for paragraph in paragraphs:
-            blocks.append(
-                DocumentBlock(
-                    id=f"b{len(blocks) + 1}",
-                    type="paragraph",
-                    text=paragraph,
-                    source=SourceLocation(page=page_number),
-                )
-            )
+
+        if not capability.available:
+            if text_blocks:
+                blocks.extend(text_blocks)
+            else:
+                failed_pages.append(page_number)
+            continue
+
+        try:
+            rendered = _render_pdf_page(content, page_number)
+            result = provider.recognize_image(rendered, filename=filename, page=page_number)
+        except OCRUnavailableError:
+            if text_blocks:
+                blocks.extend(text_blocks)
+            else:
+                failed_pages.append(page_number)
+            continue
+        except OCRRecognitionError:
+            if text_blocks:
+                blocks.extend(text_blocks)
+            else:
+                failed_pages.append(page_number)
+            continue
+
+        page_blocks = _ocr_blocks(result, page=page_number)
+        if page_blocks:
+            blocks.extend(page_blocks)
+            ocr_pages.append(page_number)
+            low_confidence_blocks += result.low_confidence_blocks
+            ocr_duration_ms += result.duration_ms or 0
+        elif text_blocks:
+            blocks.extend(text_blocks)
+        else:
+            failed_pages.append(page_number)
+
     if not blocks:
-        raise DocumentParseError("PDF 没有可提取的文本层；扫描件需要后续 OCR 管线")
-    warnings = []
-    if empty_pages:
-        warnings.append(f"有 {empty_pages} 页未提取到文本，可能包含扫描页或纯图片")
+        reason = capability.reason or "OCR 未识别出有效文字"
+        raise DocumentParseError(
+            f"{filename} 没有可提取的文本层；扫描件 OCR 不可用：{reason}。"
+            "请安装并初始化 PaddleOCR，或上传带文本层的 PDF"
+        )
+
+    warnings: list[str] = []
+    if failed_pages:
+        warnings.append(
+            f"有 {len(failed_pages)} 页未提取到文本，可能包含扫描页或纯图片；"
+            f"OCR 未成功：{failed_pages}"
+        )
+    metadata = {
+        "pages": len(reader.pages),
+        "empty_pages": empty_pages,
+        "ocr": {
+            "provider": capability.provider,
+            "pages_total": len(reader.pages),
+            "pages_ocr": ocr_pages,
+            "failed_pages": failed_pages,
+            "low_confidence_blocks": low_confidence_blocks,
+            "duration_ms": ocr_duration_ms,
+        },
+    }
     return ParsedDocument(
         filename=filename,
         media_type="application/pdf",
         blocks=blocks,
         warnings=warnings,
-        metadata={"pages": len(reader.pages), "empty_pages": empty_pages},
+        metadata=metadata,
+    )
+
+
+def _parse_image(filename: str, content: bytes, *, ocr_provider: OCRProvider | None) -> ParsedDocument:
+    provider = _resolve_ocr_provider(ocr_provider)
+    started = time.perf_counter()
+    try:
+        result = provider.recognize_image(content, filename=filename, page=1)
+    except OCRUnavailableError as exc:
+        raise DocumentParseError(
+            f"{filename} 需要 OCR 才能解析，但当前不可用：{exc}。"
+            "请安装 knowledge/requirements-ocr.txt 后重试"
+        ) from exc
+    except OCRRecognitionError as exc:
+        raise DocumentParseError(str(exc)) from exc
+    blocks = _ocr_blocks(result, page=1)
+    if not blocks:
+        raise DocumentParseError(f"{filename} OCR 未识别出有效文字，请检查图片清晰度")
+    duration_ms = result.duration_ms or round((time.perf_counter() - started) * 1000)
+    return ParsedDocument(
+        filename=filename,
+        media_type={
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".bmp": "image/bmp",
+            ".tif": "image/tiff",
+            ".tiff": "image/tiff",
+        }[os.path.splitext(filename.lower())[1]],
+        blocks=blocks,
+        metadata={
+            "pages": 1,
+            "ocr": {
+                "provider": provider.capability().provider,
+                "pages_total": 1,
+                "pages_ocr": [1],
+                "failed_pages": [],
+                "low_confidence_blocks": result.low_confidence_blocks,
+                "duration_ms": duration_ms,
+            },
+        },
     )
 
 

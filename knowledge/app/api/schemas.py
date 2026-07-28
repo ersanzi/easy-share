@@ -41,6 +41,9 @@ class RetrievedChunk(BaseModel):
     filename: str | None = None
     score: float | None = None
     text: str
+    block_ids: list[str] = Field(default_factory=list)
+    source_locations: list[dict[str, Any]] = Field(default_factory=list)
+    extraction_methods: list[str] = Field(default_factory=list)
 
 
 class QueryResponse(BaseModel):
@@ -92,5 +95,6 @@ class ArtifactManifestResponse(BaseModel):
     chunks: int
     warnings: list[str] = Field(default_factory=list)
     cleaning: dict[str, Any] | None = None
+    ocr: dict[str, Any] | None = None
     artifacts: dict[str, str]
     processed_at: str

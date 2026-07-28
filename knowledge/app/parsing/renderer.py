@@ -23,16 +23,17 @@ def _render_table(block: DocumentBlock) -> str:
     return "\n".join(lines)
 
 
+def render_block(block: DocumentBlock) -> str:
+    """把单个结构化文档块渲染为 Markdown。"""
+    if block.type == "heading":
+        level = min(max(block.level or 2, 1), 6)
+        return f"{'#' * level} {block.text}" if block.text else ""
+    if block.type == "table":
+        return _render_table(block)
+    return block.text or ""
+
+
 def render_markdown(document: ParsedDocument) -> str:
-    parts: list[str] = []
-    for block in document.blocks:
-        if block.type == "heading":
-            level = min(max(block.level or 2, 1), 6)
-            parts.append(f"{'#' * level} {block.text}")
-        elif block.type == "table":
-            rendered = _render_table(block)
-            if rendered:
-                parts.append(rendered)
-        elif block.text:
-            parts.append(block.text)
+    parts = [render_block(block) for block in document.blocks]
+    parts = [part for part in parts if part.strip()]
     return "\n\n".join(parts).strip() + "\n"

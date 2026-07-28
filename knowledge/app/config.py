@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     embedding_dim: int = 1024
 
+    # OCR 为可选运行时，重量级依赖单独安装。
+    ocr_enabled: bool = True
+    ocr_lang: str = "ch"
+    ocr_min_text_chars: int = 20
+
     # 切块与检索
     chunk_size: int = 800
     chunk_overlap: int = 120

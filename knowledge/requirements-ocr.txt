@@ -1,0 +1,5 @@
+﻿# 可选扫描件 OCR 依赖；普通测试和文本型文档不需要安装。
+paddleocr>=2.7,<3
+paddlepaddle>=2.6
+PyMuPDF>=1.24
+Pillow>=10

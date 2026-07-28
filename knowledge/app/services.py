@@ -9,6 +9,7 @@ from app.jobs.store import JobStore
 from app.kb.embedder import Embedder, build_embedder
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
+from app.ocr import OCRProvider, build_paddle_provider
 from app.rag.generator import Generator, build_generator
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
@@ -26,6 +27,7 @@ class AppServices:
     job_store: JobStore
     pipeline: DocumentPipeline
     job_runner: JobRunner
+    ocr: OCRProvider | None = None
 
     def start(self) -> None:
         self.job_runner.start()
@@ -43,6 +45,7 @@ def build_services(config: Settings = settings) -> AppServices:
         bucket=config.rustfs_bucket,
     )
     embedder = build_embedder(config)
+    ocr = build_paddle_provider(enabled=config.ocr_enabled, lang=config.ocr_lang)
     vector_store = VectorStore(config.vector_store_path)
     retriever = Retriever(embedder, vector_store)
     generator = build_generator(config)
@@ -55,6 +58,8 @@ def build_services(config: Settings = settings) -> AppServices:
         chunk_overlap=config.chunk_overlap,
         max_source_bytes=config.max_source_bytes,
         cleaning_rules_path=config.cleaning_rules_path,
+        ocr_provider=ocr,
+        ocr_min_text_chars=config.ocr_min_text_chars,
     )
     job_runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     return AppServices(
@@ -67,4 +72,5 @@ def build_services(config: Settings = settings) -> AppServices:
         job_store=job_store,
         pipeline=pipeline,
         job_runner=job_runner,
+        ocr=ocr,
     )

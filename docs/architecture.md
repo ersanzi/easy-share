@@ -162,7 +162,7 @@ desktop eventStream (Go 协程，指数退避重连)
     ├── transfer.updated → 原地更新 tasks 数组
     ├── status.changed / drive.status.changed → 全量 refresh
     └── error → 显示错误提示
-    
+
 5s 轮询 GetSnapshot() 作为 fallback（断线/遗漏兜底）
 ```
 
@@ -206,9 +206,10 @@ desktop eventStream (Go 协程，指数退避重连)
 
 `knowledge/` 是 Python FastAPI 服务，独立于 Go 双进程运行（架构与运行说明见 [`../knowledge/README.md`](../knowledge/README.md)，方向见 [`knowledge-platform.md`](knowledge-platform.md)）：
 
-- 文档解析管线：TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 统一提取（含 Office OLE/OOXML 真实格式预检）→ 结构化清洗 → Markdown 渲染 → 切块 → 版本化索引
+- 文档解析管线：TXT/Markdown/DOCX/PDF/XLSX/PPTX 与 PNG/JPEG/BMP/TIFF 统一解析（含 Office OLE/OOXML 真实格式预检、可选 PaddleOCR 页级识别）→ 结构化清洗 → Markdown 渲染 → 来源感知切块 → 版本化索引
 - 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维），未配置时退回 HashEmbedder（仅跑通流程）
 - LLM 生成：SenseNova deepseek-v4-flash（推理模型），未配置时 /query 降级为纯检索
+- OCR 能力：`/health` 声明 provider/availability/reason/formats；manifest 记录 OCR 页、失败页、低置信度块和耗时；`/query` contexts 返回块 ID、来源位置和提取方式
 - 检索质量评测：`tests/retrieval/` 标注集 + recall@5 / MRR 基线进入 pytest 回归
 - 对象存储：复用 RustFS；派生产物写 `derived/{fileId}/{versionId}/`
 - 凭据存 `knowledge/.env`（.gitignore 已排除）

@@ -10,7 +10,7 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 - **网盘（RustFS）**：上传/列表/下载/删除/分享，文件夹上传保留目录结构，图片/PDF/限量文本在线预览（HMAC 短期票据）
 - **系统集成**：Windows「此电脑」品牌入口（Shell NameSpace 委托 WebDAV）；macOS Finder 挂载卷 + 原生菜单栏；系统托盘 + Frameless 窗口
 - **可靠性**：Core watchdog 自动恢复、配置热加载、WebSocket 实时事件 + 传输完成系统通知
-- **知识计算面（Python，暂不接桌面 UI）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/文本型 PDF/XLSX/PPTX，Office 真实格式预检）、版本化索引、检索质量评测基线，`/lab` 实验台支持上传观察与检索问答（引用可溯源）
+- **知识计算面（Python，暂不接桌面 UI）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/PDF/XLSX/PPTX 与图片，含 Office 真实格式预检、可选 PaddleOCR 扫描件识别）、来源感知切块、版本化索引和检索质量评测；`/lab` 支持上传观察与检索问答（引用可溯源）
 - **分发**：Windows NSIS 安装包 + 开机自启；macOS `.app`/DMG 构建脚本与 CI
 
 逐项完成情况、迭代记录与待开始优先级见 [`docs/progress.md`](docs/progress.md)（唯一真相源）。开始新迭代前先读 [`docs/version-iteration.md`](docs/version-iteration.md)。

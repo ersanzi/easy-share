@@ -9,6 +9,7 @@ from app.jobs.store import JobStore
 from app.kb.embedder import HashEmbedder
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
+from app.ocr import OCRProvider, UnavailableOCRProvider
 from app.rag.retriever import Retriever
 from app.services import AppServices
 
@@ -34,12 +35,17 @@ class FakeStorage:
         self.content_types[key] = content_type
 
 
-def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServices:
+def make_services(
+    tmp_path: Path,
+    storage: FakeStorage | None = None,
+    ocr_provider: OCRProvider | None = None,
+) -> AppServices:
     config = Settings(
         _env_file=None,
         vector_store_path=str(tmp_path / "vectors.json"),
         job_store_path=str(tmp_path / "jobs.db"),
         cleaning_rules_path=str(tmp_path / "cleaning_rules.json"),
+        ocr_enabled=False,
         embedding_dim=32,
         chunk_size=80,
         chunk_overlap=10,
@@ -47,6 +53,7 @@ def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServ
         job_workers=1,
     )
     resolved_storage = storage or FakeStorage()
+    resolved_ocr = ocr_provider or UnavailableOCRProvider("OCR 已在测试配置中关闭")
     embedder = HashEmbedder(config.embedding_dim)
     vector_store = VectorStore(config.vector_store_path)
     retriever = Retriever(embedder, vector_store)
@@ -59,6 +66,8 @@ def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServ
         chunk_overlap=config.chunk_overlap,
         max_source_bytes=config.max_source_bytes,
         cleaning_rules_path=config.cleaning_rules_path,
+        ocr_provider=resolved_ocr,
+        ocr_min_text_chars=config.ocr_min_text_chars,
     )
     runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     return AppServices(
@@ -71,4 +80,5 @@ def make_services(tmp_path: Path, storage: FakeStorage | None = None) -> AppServ
         job_store=job_store,
         pipeline=pipeline,
         job_runner=runner,
+        ocr=resolved_ocr,
     )

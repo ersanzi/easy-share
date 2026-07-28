@@ -47,6 +47,7 @@ def health(request: Request) -> dict:
         "status": "ok",
         "embedder": type(services.embedder).__name__,
         "llm": "configured" if services.generator else "absent",
+        "ocr": services.ocr.capability().to_dict() if services.ocr else {"available": False, "provider": "unknown", "reason": "OCR 服务未配置"},
         "records": len(services.vector_store.records),
         "jobs": services.job_store.counts(),
     }
@@ -193,6 +194,9 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
             filename=(context.get("metadata") or {}).get("filename"),
             score=context.get("score"),
             text=context["text"],
+            block_ids=(context.get("metadata") or {}).get("block_ids", []),
+            source_locations=(context.get("metadata") or {}).get("source_locations", []),
+            extraction_methods=(context.get("metadata") or {}).get("extraction_methods", []),
         )
         for context in contexts
     ]

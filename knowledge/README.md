@@ -48,11 +48,12 @@ RustFS 原始对象
 | TXT | UTF-8/GB18030 解码、段落清洗 |
 | Markdown | 标题与段落结构保留 |
 | DOCX | 尽量保持标题、段落、表格的文档顺序 |
-| PDF | 提取文本层并保留页码 |
+| PDF | 优先提取文本层，空白/短文本页在 OCR 可用时执行页级识别，保留页码 |
+| PNG/JPEG/BMP/TIFF | 通过可选 OCR provider 识别，保留置信度和边界框 |
 | XLSX | 保留工作表、行号和表格内容 |
 | PPTX | 保留幻灯片、段落和表格内容 |
 
-扫描 PDF 和图片 OCR 暂不处理；没有文本层的 PDF 会明确失败并提示需要 OCR，而不是静默生成空知识。
+扫描 PDF 和图片已接入可选 PaddleOCR。未安装 OCR 依赖时，文本型文档仍正常处理；图片或纯扫描 PDF 会明确提示安装 `requirements-ocr.txt`。
 
 ## 派生产物
 
@@ -118,10 +119,10 @@ GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
 
 ### 兼容接口
 
-- `GET /health`：服务、Embedding、LLM、索引记录和任务计数。
+- `GET /health`：服务、Embedding、LLM、OCR capability、索引记录和任务计数。
 - `GET /cleaning/rules`：当前生效的清洗规则集（只读）。
 - `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
-- `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`（管线入库的记录）供引用溯源；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
+- `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`、`block_ids`、`source_locations` 和 `extraction_methods` 供引用溯源；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
 
 ### 清洗规则引擎
 
@@ -149,7 +150,7 @@ PII 默认关：脱敏会伤问答召回（"张三电话多少"将不可答）�
 
 ## 本地 Web 可视化实验台
 
-启动服务后访问 `http://127.0.0.1:8000/lab`，可以上传 TXT、Markdown、DOCX、文本型 PDF、XLSX 和 PPTX，查看任务进度、最近任务及 `clean.md`、`document.json`、`manifest.json` 三类派生产物；页面底部的「知识问答」面板可对已入库文档提问，回答附引用片段并可一键溯源对应 `clean.md`（未配置 LLM 时降级为纯检索模式）。
+启动服务后访问 `http://127.0.0.1:8000/lab`，可以上传 TXT、Markdown、DOCX、PDF、XLSX、PPTX 和常见图片，查看任务进度、最近任务及 `clean.md`、`document.json`、`manifest.json` 三类派生产物；页面底部的「知识问答」面板可对已入库文档提问，回答附引用片段并可一键溯源对应 `clean.md`（未配置 LLM 时降级为纯检索模式）。
 
 > **产品边界：** Local Lab 只用于本地开发和测试文档管线，不是 EasyShare 客户端功能，不接入当前 Wails/Vue 桌面界面，也不代表最终产品 UI。它没有生产认证、多租户隔离或 RBAC，必须只监听 `127.0.0.1` 并使用单个 Uvicorn worker。
 
@@ -177,6 +178,8 @@ cd knowledge
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+# 可选：需要扫描件/图片 OCR 时安装
+pip install -r requirements-ocr.txt
 Copy-Item .env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
@@ -198,6 +201,7 @@ Local Lab：`http://127.0.0.1:8000/lab`（仅本地开发测试）
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | OpenAI 兼容生成模型；留空不生成 | 空 |
 | `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` | OpenAI 兼容 Embedding；留空使用流程占位实现 | 空 |
 | `EMBEDDING_DIM` | 向量维度，必须与模型一致 | `1024` |
+| `OCR_ENABLED` / `OCR_LANG` / `OCR_MIN_TEXT_CHARS` | 是否启用 OCR、PaddleOCR 语言与 PDF 短文本页触发阈值 | `true` / `ch` / `20` |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切块长度与重叠 | `800` / `120` |
 | `CLEANING_RULES_PATH` | 清洗规则集 JSON（不存在则用内置默认） | `./data/cleaning_rules.json` |
 | `VECTOR_STORE_PATH` | 当前 JSON 向量存储 | `./data/vector_store.json` |
@@ -216,7 +220,7 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-测试覆盖多格式解析、清洗、Office OLE/OOXML 格式签名与类型错配、损坏文件、OCR 提示、任务幂等/重试/恢复、三类派生产物、版本替换、Local Lab 页面/上传/访问边界和 API 行为。真实 RustFS 测试默认跳过，因此普通回归不依赖 Docker。
+测试覆盖多格式解析、清洗、Office OLE/OOXML 格式签名与类型错配、损坏文件、fake OCR 图片/扫描 PDF/混合 PDF、来源感知切块、OCR health/manifest/query 字段、任务幂等/重试/恢复、三类派生产物、版本替换、Local Lab 页面/上传/访问边界和 API 行为。真实 RustFS 与 PaddleOCR 测试默认跳过，因此普通回归不依赖 Docker 或 OCR 模型。
 
 ### Office/PDF 黄金语料
 
@@ -274,6 +278,7 @@ knowledge/
 │  ├─ api/          # FastAPI 路由与模型
 │  ├─ jobs/         # SQLite 任务状态与线程执行器
 │  ├─ lab/          # 仅供本地测试的上传与管线可视化页面
+│  ├─ ocr/          # 可选 OCR Provider 与 PaddleOCR 适配
 │  ├─ parsing/      # 多格式解析、清洗、统一结构、Markdown 渲染
 │  ├─ pipeline/     # 下载 → 解析 → 产物 → 切块 → 索引编排
 │  ├─ storage/      # RustFS / 可替换对象存储接口
@@ -288,13 +293,13 @@ knowledge/
 │  ├─ retrieval/     # 检索质量评测集（语料 + 标注 + 基线测试）
 │  └─ integration/   # 显式开启的真实 RustFS 测试
 ├─ requirements.txt
-└─ requirements-dev.txt
+├─ requirements-dev.txt
+└─ requirements-ocr.txt  # 可选 PaddleOCR 扫描件依赖
 ```
 
 ## 当前限制与下一步
 
 1. 真实生产任务编排需迁移到 Java + 消息队列/任务系统，Python 任务必须继续保持幂等。
 2. JSON 向量存储是当前验证实现，后续按路线图迁移 Milvus。
-3. 增加 PaddleOCR，覆盖扫描 PDF 和图片。
-4. 引入更强的结构感知解析/切块，同时保留当前统一 `DocumentBlock` 和派生产物契约。
-5. Go/Java 接入时只传对象身份和业务上下文，不通过 HTTP 重传整个 Office 文件。
+3. 引入更强的结构感知解析/切块，同时保留当前统一 `DocumentBlock`、OCR metadata 和派生产物契约。
+4. Go/Java 接入时只传对象身份和业务上下文，不通过 HTTP 重传整个 Office 文件。

@@ -2,7 +2,7 @@
 
 > 本文记录 EasyShare 从消费级文件工具向企业知识管理平台演进的总体方向与架构决策。
 > 这是长期方向文档，逐版交付情况以 [`progress.md`](progress.md) 和 [`iterations/`](iterations/README.md) 为准。
-> 最后更新：2026-07-25
+> 最后更新：2026-07-28
 
 ## 1. 定位演进
 
@@ -106,7 +106,7 @@ EasyShare 起步于消费级局域网文件传输与云盘工具（对标百度�
 策略：先让整条管线从头到尾流起来，每一环都做最薄版本，验证端到端闭环后再逐环加厚。不先把单环做深。
 
 - **里程碑 0（已完成）**：Python AI 服务最小骨架——读一份文档 → 解析 → 切块向量化 → 提供问答接口。证明核心命题"文档能否变成可用知识"。账号、WPS、多文件格式均后置。
-- **里程碑 1（进行中）**：第一段已完成 TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 的统一解析、清洗产物、异步任务、版本化索引和检索质量评测基线；下一段接入扫描件 OCR、Unstructured 结构增强与 Milvus。
+- **里程碑 1（进行中）**：已完成 TXT/Markdown/DOCX/PDF/XLSX/PPTX 与图片的统一解析、可选 PaddleOCR 扫描件识别、清洗产物、来源感知切块、异步任务、版本化索引和检索质量评测基线；下一段先做 Unstructured 结构感知切块，评测无回归后再迁移 Milvus。
 - **里程碑 1.5（已完成）**：`/lab` 最简问答页——检索 + 生成 + 引用溯源，让价值闭环从"产物可看"走到"知识可问"，提前用真实文档验证检索与回答质量。
 - **里程碑 2**：Java 控制面接入——账号、权限、文件登记、权限感知检索。走向多用户企业级。
 - **里程碑 3**：WPS 插件——登录、侧边栏、调用 AI 接口，完成最后一公里交付。
@@ -121,13 +121,14 @@ Python 计算面服务置于仓库根目录 `knowledge/` 下，与现有 Go 桌�
 knowledge/                  # Python AI 服务（计算面）
   app/
     main.py                 # FastAPI 入口
-    config.py               # 配置（RustFS / LLM / embedding / 向量库）
+    config.py               # 配置（RustFS / LLM / embedding / OCR / 向量库）
     api/routes.py           # 异步处理、任务、产物、兼容入库与查询接口
     jobs/                   # SQLite 执行状态与进程内任务执行器（过渡实现）
     lab/                    # 仅回环开放的本地测试实验台（上传观察 + 问答）
+    ocr/                    # 可选 OCR Provider 与 PaddleOCR 适配
     parsing/                # 多格式解析、清洗、统一块模型与 Markdown 渲染
     pipeline/service.py     # RustFS → 产物 → 切块 → 索引编排
-    kb/chunker.py           # 文本 → 切块
+    kb/chunker.py           # 结构化文档 → 来源感知切块
     kb/embedder.py          # 切块 → 向量（可替换网关）
     kb/store.py             # 向量库
     eval/retrieval.py       # 检索质量评测器（recall@k / MRR / 片段命中率）
