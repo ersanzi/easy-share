@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from app.config import Settings, settings
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
+from app.kb.bm25 import BM25Retriever
 from app.kb.embedder import Embedder, build_embedder
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
@@ -25,6 +26,7 @@ class AppServices:
     storage: ObjectStorage
     embedder: Embedder
     vector_store: VectorStore
+    bm25: BM25Retriever
     retriever: Retriever
     generator: Generator | None
     job_store: JobStore
@@ -65,6 +67,7 @@ def build_services(config: Settings = settings) -> AppServices:
     embedder = build_embedder(config)
     ocr = build_paddle_provider(enabled=config.ocr_enabled, lang=config.ocr_lang)
     vector_store = build_vector_store(config)
+    bm25 = BM25Retriever()
     retriever = Retriever(embedder, vector_store)
     generator = build_generator(config)
     job_store = JobStore(config.job_store_path)
@@ -85,6 +88,7 @@ def build_services(config: Settings = settings) -> AppServices:
         storage=storage,
         embedder=embedder,
         vector_store=vector_store,
+        bm25=bm25,
         retriever=retriever,
         generator=generator,
         job_store=job_store,

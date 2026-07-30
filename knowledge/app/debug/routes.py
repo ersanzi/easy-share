@@ -115,24 +115,26 @@ async def inspect_document(file_id: str, request: Request, version_id: str = "v1
 
 
 # ---------------------------------------------------------------------------
-# 检索调试
+# 检索调试（多策略对比）
 # ---------------------------------------------------------------------------
 
 class DebugQueryRequest(BaseModel):
     question: str
     top_k: int = 5
     doc_ids: list[str] | None = None
+    strategies: list[str] | None = None  # ["vector", "bm25", "hybrid"]，默认全部
 
 
-@router.post("/query")
-async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
-    """检索调试：返回详细的检索结果（含 score、metadata、chunk 全文）。"""
-    services = _guard(request)
+def _ensure_bm25_index(services: AppServices) -> None:
+    """懒加载 BM25 索引：首次调用时从向量库记录构建。"""
+    if services.bm25.n_docs == 0:
+        with services.vector_store.lock:
+            records = list(services.vector_store.records)
+        services.bm25.rebuild(records)
 
-    results = await run_in_threadpool(
-        services.retriever.retrieve, body.question, top_k=body.top_k, doc_ids=body.doc_ids
-    )
 
+def _format_results(results: list[dict]) -> list[dict]:
+    """统一格式化检索结果。"""
     detailed = []
     for rank, record in enumerate(results, start=1):
         meta = record.get("metadata", {})
@@ -149,15 +151,92 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
             "source_locations": meta.get("source_locations", []),
             "extraction_methods": meta.get("extraction_methods", []),
         })
+    return detailed
 
-    return {
+
+def _hybrid_fusion(
+    vector_results: list[dict],
+    bm25_results: list[dict],
+    top_k: int,
+    alpha: float = 0.6,
+) -> list[dict]:
+    """RRF（Reciprocal Rank Fusion）混合排序。alpha 为向量权重。"""
+    k = 60  # RRF 常数
+    scores: dict[str, float] = {}
+    records_map: dict[str, dict] = {}
+
+    for rank, record in enumerate(vector_results, start=1):
+        rid = record.get("id", "")
+        scores[rid] = scores.get(rid, 0.0) + alpha / (k + rank)
+        records_map[rid] = record
+
+    for rank, record in enumerate(bm25_results, start=1):
+        rid = record.get("id", "")
+        scores[rid] = scores.get(rid, 0.0) + (1 - alpha) / (k + rank)
+        if rid not in records_map:
+            records_map[rid] = record
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    results = []
+    for rid, score in ranked:
+        record = dict(records_map[rid])
+        record["score"] = round(score, 6)
+        results.append(record)
+    return results
+
+
+@router.post("/query")
+async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
+    """检索调试：多策略并排对比（vector / bm25 / hybrid）。"""
+    services = _guard(request)
+    strategies = body.strategies or ["vector", "bm25", "hybrid"]
+
+    # 向量检索
+    vector_results = []
+    if "vector" in strategies or "hybrid" in strategies:
+        vector_results = await run_in_threadpool(
+            services.retriever.retrieve, body.question, top_k=body.top_k * 2, doc_ids=body.doc_ids
+        )
+
+    # BM25 检索
+    bm25_results = []
+    if "bm25" in strategies or "hybrid" in strategies:
+        await run_in_threadpool(_ensure_bm25_index, services)
+        bm25_results = await run_in_threadpool(
+            services.bm25.query, body.question, body.top_k * 2, body.doc_ids
+        )
+
+    # 组装各策略结果
+    response: dict[str, Any] = {
         "question": body.question,
-        "strategy": "vector",
         "top_k": body.top_k,
-        "result_count": len(detailed),
-        "results": detailed,
+        "strategies": {},
         "embedder": type(services.embedder).__name__,
     }
+
+    if "vector" in strategies:
+        response["strategies"]["vector"] = {
+            "label": "向量检索（Milvus cosine）",
+            "result_count": min(len(vector_results), body.top_k),
+            "results": _format_results(vector_results[:body.top_k]),
+        }
+
+    if "bm25" in strategies:
+        response["strategies"]["bm25"] = {
+            "label": "关键词检索（BM25）",
+            "result_count": min(len(bm25_results), body.top_k),
+            "results": _format_results(bm25_results[:body.top_k]),
+        }
+
+    if "hybrid" in strategies:
+        hybrid_results = _hybrid_fusion(vector_results, bm25_results, body.top_k)
+        response["strategies"]["hybrid"] = {
+            "label": "混合检索（RRF 融合）",
+            "result_count": len(hybrid_results),
+            "results": _format_results(hybrid_results),
+        }
+
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +367,82 @@ def _compute_evidence_score(sentence: str, context_text: str) -> float:
 
     hits = sum(1 for token in tokens if token in context_text)
     return hits / len(tokens)
+
+
+# ---------------------------------------------------------------------------
+# 知识健康度仪表盘
+# ---------------------------------------------------------------------------
+
+@router.get("/health")
+async def knowledge_health(request: Request) -> dict:
+    """知识健康度五维指标：规模、新鲜度、使用率、盲区、覆盖。"""
+    services = _guard(request)
+
+    # 从向量库获取所有记录
+    with services.vector_store.lock:
+        all_records = list(services.vector_store.records)
+
+    # 基础规模
+    doc_ids: set[str] = set()
+    filenames: dict[str, str] = {}
+    for record in all_records:
+        did = record.get("doc_id", "")
+        doc_ids.add(did)
+        meta = record.get("metadata", {})
+        if meta.get("filename"):
+            filenames[did] = meta["filename"]
+
+    total_chunks = len(all_records)
+    total_docs = len(doc_ids)
+
+    # 每文档 chunk 数分布
+    chunks_per_doc: dict[str, int] = {}
+    for record in all_records:
+        did = record.get("doc_id", "")
+        chunks_per_doc[did] = chunks_per_doc.get(did, 0) + 1
+
+    # 新鲜度：从任务存储获取处理时间
+    jobs = await run_in_threadpool(services.job_store.list_recent, 500)
+    completed_jobs = [j for j in jobs if j.status == "completed"]
+    processed_at_list = [j.finished_at for j in completed_jobs if j.finished_at]
+
+    # 使用率：从向量库 score 统计（简化版，后续接查询日志）
+    # 当前无法获取历史查询日志，返回占位
+    usage_stats = {
+        "note": "使用率统计需要查询日志支持，当前为占位",
+        "total_queries": 0,
+        "most_cited_docs": [],
+        "never_cited_docs": list(doc_ids)[:20],  # 暂列所有文档
+    }
+
+    # 覆盖：按文件扩展名分组
+    ext_coverage: dict[str, int] = {}
+    for fname in filenames.values():
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "unknown"
+        ext_coverage[ext] = ext_coverage.get(ext, 0) + 1
+
+    return {
+        "scale": {
+            "total_documents": total_docs,
+            "total_chunks": total_chunks,
+            "avg_chunks_per_doc": round(total_chunks / max(total_docs, 1), 1),
+            "documents": [
+                {"file_id": did, "filename": filenames.get(did, ""), "chunks": chunks_per_doc.get(did, 0)}
+                for did in sorted(doc_ids)
+            ],
+        },
+        "freshness": {
+            "total_processed": len(completed_jobs),
+            "latest_processed_at": max(processed_at_list) if processed_at_list else None,
+            "note": "新鲜度需要文档元数据（最后修改时间）支持，当前仅展示处理时间",
+        },
+        "coverage": {
+            "by_extension": ext_coverage,
+            "note": "业务领域覆盖需要人工标注或 LLM 分类，当前按文件格式统计",
+        },
+        "usage": usage_stats,
+        "blind_spots": {
+            "note": "盲区分析需要查询日志 + 低分结果统计，当前为占位",
+            "unanswered_queries": [],
+        },
+    }

@@ -152,10 +152,10 @@ async function doSearch() {
     const resp = await fetch("/debug/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, top_k: topK }),
+      body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid"] }),
     });
     const data = await resp.json();
-    renderSearchResults(data, question);
+    renderMultiStrategy(data, question);
   } catch (err) {
     $("#retrieve-results").innerHTML = `<div class="empty-state">检索失败: ${err.message}</div>`;
   } finally {
@@ -163,33 +163,42 @@ async function doSearch() {
   }
 }
 
-function renderSearchResults(data, question) {
+function renderMultiStrategy(data, question) {
   const container = $("#retrieve-results");
-  if (!data.results || data.results.length === 0) {
+  const strategies = data.strategies || {};
+  const keys = Object.keys(strategies);
+  if (keys.length === 0) {
     container.innerHTML = '<div class="empty-state">未检索到结果</div>';
     return;
   }
   const keywords = extractKeywords(question);
+
   container.innerHTML = `
-    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-      策略: ${data.strategy} · Embedder: ${data.embedder} · 命中 ${data.result_count} 条
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      Embedder: ${data.embedder} · 问题: "${escapeHtml(question)}"
     </div>
-    ${data.results
-      .map(
-        (r) => `
-      <div class="result-card">
-        <div class="result-header">
-          <span class="result-rank">#${r.rank}</span>
-          <span class="result-score">score: ${r.score}</span>
-        </div>
-        <div class="result-source">
-          ${escapeHtml(r.filename)} · ${r.file_id} · ${r.char_count} 字符
-          · 来源 ${formatLocations(r.source_locations)}
-        </div>
-        <div class="result-text">${highlightKeywords(escapeHtml(r.text), keywords)}</div>
-      </div>`
-      )
-      .join("")}
+    <div class="strategy-columns">
+      ${keys.map((key) => {
+        const s = strategies[key];
+        return `
+        <div class="strategy-col">
+          <div class="strategy-header">${s.label} <span class="strategy-count">${s.result_count} 条</span></div>
+          <div class="strategy-results">
+            ${s.results.map((r) => `
+              <div class="result-card compact">
+                <div class="result-header">
+                  <span class="result-rank">#${r.rank}</span>
+                  <span class="result-score">${r.score}</span>
+                </div>
+                <div class="result-source">${escapeHtml(r.filename)} · ${formatLocations(r.source_locations)}</div>
+                <div class="result-text">${highlightKeywords(escapeHtml(r.text.slice(0, 150)), keywords)}${r.text.length > 150 ? "…" : ""}</div>
+              </div>
+            `).join("")}
+            ${s.results.length === 0 ? '<div class="empty-state" style="padding:20px">无结果</div>' : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>
   `;
 }
 

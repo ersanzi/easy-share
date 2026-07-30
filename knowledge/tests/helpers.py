@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config import Settings
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
+from app.kb.bm25 import BM25Retriever
 from app.kb.embedder import HashEmbedder
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
@@ -75,6 +76,7 @@ def make_services(
         storage=resolved_storage,
         embedder=embedder,
         vector_store=vector_store,
+        bm25=BM25Retriever(),
         retriever=retriever,
         generator=None,
         job_store=job_store,
