@@ -16,6 +16,7 @@
     <button class="tab active" data-tab="inspect">单文档透视</button>
     <button class="tab" data-tab="retrieve">检索调试</button>
     <button class="tab" data-tab="generate">生成审计</button>
+    <button class="tab" data-tab="health">健康度</button>
   </nav>
 </header>
 
@@ -84,6 +85,15 @@
       </div>
     </div>
     <div id="gen-empty" class="empty-state">输入问题后点击生成</div>
+  </section>
+  <!-- ==================== Tab 4: 健康度仪表盘 ==================== -->
+  <section id="tab-health" class="panel">
+    <div class="toolbar">
+      <button id="btn-health" class="btn primary">刷新健康度</button>
+    </div>
+    <div id="health-content">
+      <div class="empty-state">点击刷新加载知识健康度指标</div>
+    </div>
   </section>
 </main>
 

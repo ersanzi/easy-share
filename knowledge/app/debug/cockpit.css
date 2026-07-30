@@ -287,3 +287,32 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   .gen-layout { grid-template-columns: 1fr; }
   .inspect-layout { grid-template-columns: 1fr; }
 }
+
+/* Health dashboard */
+.health-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.health-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.health-section h3 { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.health-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.health-row:hover { background: var(--bg); }
+.health-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--blue-light);
+  color: var(--blue);
+  font-weight: 500;
+}
+.health-badge.warn { background: var(--red-bg); color: var(--red); }

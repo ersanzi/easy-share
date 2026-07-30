@@ -337,6 +337,66 @@ function highlightKeywords(html, keywords) {
 }
 
 // ---------------------------------------------------------------------------
+// Tab 4: 健康度仪表盘
+// ---------------------------------------------------------------------------
+async function loadHealth() {
+  const container = $("#health-content");
+  container.innerHTML = '<div class="empty-state">加载中…</div>';
+  try {
+    const resp = await fetch("/debug/health");
+    const data = await resp.json();
+    renderHealth(data);
+  } catch (err) {
+    container.innerHTML = `<div class="empty-state">加载失败: ${err.message}</div>`;
+  }
+}
+
+function renderHealth(data) {
+  const container = $("#health-content");
+  const scale = data.scale || {};
+  const usage = data.usage || {};
+  const blind = data.blind_spots || {};
+  const coverage = data.coverage || {};
+  const freshness = data.freshness || {};
+  const gen = usage.generation || {};
+
+  container.innerHTML = `
+    <div class="stat-grid" style="margin-bottom:20px">
+      <div class="stat-card"><div class="stat-value">${scale.total_documents || 0}</div><div class="stat-label">文档总数</div></div>
+      <div class="stat-card"><div class="stat-value">${scale.total_chunks || 0}</div><div class="stat-label">切块总数</div></div>
+      <div class="stat-card"><div class="stat-value">${scale.avg_chunks_per_doc || 0}</div><div class="stat-label">平均块/文档</div></div>
+      <div class="stat-card"><div class="stat-value">${usage.total_queries || 0}</div><div class="stat-label">总查询数</div></div>
+      <div class="stat-card"><div class="stat-value">${usage.recent_queries_30d || 0}</div><div class="stat-label">近30天查询</div></div>
+      <div class="stat-card"><div class="stat-value">${gen.avg_faithfulness != null ? gen.avg_faithfulness : "—"}</div><div class="stat-label">平均忠实度</div></div>
+    </div>
+
+    <div class="health-sections">
+      <div class="health-section">
+        <h3>文档命中排行</h3>
+        ${(usage.most_cited_docs || []).length === 0 ? '<div class="empty-state" style="padding:12px">暂无查询记录</div>' :
+          (usage.most_cited_docs || []).map(d => `<div class="health-row"><span>${escapeHtml(d.file_id)}</span><span class="health-badge">${d.count} 次</span></div>`).join("")}
+      </div>
+      <div class="health-section">
+        <h3>从未命中文档（僵尸文档）</h3>
+        ${(usage.never_cited_docs || []).length === 0 ? '<div class="empty-state" style="padding:12px">全部文档均有命中</div>' :
+          (usage.never_cited_docs || []).map(d => `<div class="health-row"><span>${escapeHtml(d)}</span></div>`).join("")}
+      </div>
+      <div class="health-section">
+        <h3>盲区（零结果/低分查询）</h3>
+        ${blind.count === 0 ? '<div class="empty-state" style="padding:12px">暂无盲区</div>' :
+          (blind.unanswered_queries || []).slice(0, 10).map(q => `<div class="health-row"><span>${escapeHtml(q.question)}</span><span class="health-badge warn">${q.result_count} 条</span></div>`).join("")}
+      </div>
+      <div class="health-section">
+        <h3>文件格式覆盖</h3>
+        ${Object.entries(coverage.by_extension || {}).map(([ext, cnt]) => `<div class="health-row"><span>.${ext}</span><span class="health-badge">${cnt} 份</span></div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+$("#btn-health").addEventListener("click", loadHealth);
+
+// ---------------------------------------------------------------------------
 // 初始化
 // ---------------------------------------------------------------------------
 loadDocuments();
