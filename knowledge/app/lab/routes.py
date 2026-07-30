@@ -79,6 +79,31 @@ def lab_js(request: Request) -> FileResponse:
     return FileResponse(ASSET_DIR / "lab.js", media_type="text/javascript; charset=utf-8")
 
 
+# ---------------------------------------------------------------------------
+# 知识质量驾驶舱（/lab/cockpit）
+# ---------------------------------------------------------------------------
+
+COCKPIT_DIR = Path(__file__).resolve().parent.parent / "debug"
+
+
+@router.get("/cockpit")
+def cockpit_page(request: Request) -> FileResponse:
+    _guard_local_lab(request)
+    return FileResponse(COCKPIT_DIR / "cockpit.html", media_type="text/html; charset=utf-8")
+
+
+@router.get("/cockpit/cockpit.css")
+def cockpit_css(request: Request) -> FileResponse:
+    _guard_local_lab(request)
+    return FileResponse(COCKPIT_DIR / "cockpit.css", media_type="text/css; charset=utf-8")
+
+
+@router.get("/cockpit/cockpit.js")
+def cockpit_js(request: Request) -> FileResponse:
+    _guard_local_lab(request)
+    return FileResponse(COCKPIT_DIR / "cockpit.js", media_type="text/javascript; charset=utf-8")
+
+
 @router.get("/api/jobs", response_model=list[ProcessingJobResponse])
 def list_jobs(
     request: Request,

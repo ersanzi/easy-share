@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识质量驾驶舱 — EasyShare</title>
+<link rel="stylesheet" href="/lab/cockpit/cockpit.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-left">
+    <a href="/lab" class="back-link">← Lab</a>
+    <h1>知识质量驾驶舱</h1>
+  </div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="inspect">单文档透视</button>
+    <button class="tab" data-tab="retrieve">检索调试</button>
+    <button class="tab" data-tab="generate">生成审计</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ==================== Tab 1: 单文档透视 ==================== -->
+  <section id="tab-inspect" class="panel active">
+    <div class="toolbar">
+      <select id="doc-select"><option value="">选择已入库文档…</option></select>
+      <button id="btn-refresh-docs" class="btn">刷新列表</button>
+    </div>
+    <div class="inspect-layout" id="inspect-content" style="display:none">
+      <div class="inspect-left">
+        <h3>清洗后 Markdown</h3>
+        <pre id="clean-md" class="code-block"></pre>
+      </div>
+      <div class="inspect-right">
+        <div class="sub-tabs">
+          <button class="sub-tab active" data-sub="chunks">切块地图</button>
+          <button class="sub-tab" data-sub="blocks">结构化块</button>
+          <button class="sub-tab" data-sub="stats">管线统计</button>
+        </div>
+        <div id="sub-chunks" class="sub-panel active"></div>
+        <div id="sub-blocks" class="sub-panel"></div>
+        <div id="sub-stats" class="sub-panel"></div>
+      </div>
+    </div>
+    <div id="inspect-empty" class="empty-state">选择一份文档查看管线产物</div>
+  </section>
+
+  <!-- ==================== Tab 2: 检索调试 ==================== -->
+  <section id="tab-retrieve" class="panel">
+    <div class="query-bar">
+      <input id="query-input" type="text" placeholder="输入业务问题，如：住宿报销上限是多少？" />
+      <input id="query-topk" type="number" value="5" min="1" max="20" title="Top-K" />
+      <button id="btn-search" class="btn primary">检索</button>
+    </div>
+    <div id="retrieve-results" class="results-list"></div>
+    <div id="retrieve-empty" class="empty-state">输入问题后点击检索</div>
+  </section>
+
+  <!-- ==================== Tab 3: 生成审计 ==================== -->
+  <section id="tab-generate" class="panel">
+    <div class="query-bar">
+      <input id="gen-input" type="text" placeholder="输入业务问题，验证 AI 回答质量" />
+      <input id="gen-topk" type="number" value="5" min="1" max="20" title="Top-K" />
+      <button id="btn-generate" class="btn primary">生成 + 审计</button>
+    </div>
+    <div id="gen-content" style="display:none">
+      <div class="gen-layout">
+        <div class="gen-col">
+          <h3>Prompt 透视</h3>
+          <pre id="gen-prompt" class="code-block small"></pre>
+        </div>
+        <div class="gen-col">
+          <h3>AI 回答</h3>
+          <div id="gen-answer" class="answer-block"></div>
+        </div>
+        <div class="gen-col">
+          <h3>忠实度审计</h3>
+          <div id="gen-faith" class="faith-list"></div>
+        </div>
+      </div>
+      <div class="gen-contexts">
+        <h3>检索上下文（按 score 排序）</h3>
+        <div id="gen-contexts-list"></div>
+      </div>
+    </div>
+    <div id="gen-empty" class="empty-state">输入问题后点击生成</div>
+  </section>
+</main>
+
+<script src="/lab/cockpit/cockpit.js" defer></script>
+</body>
+</html>
