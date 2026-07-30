@@ -1,0 +1,3 @@
+# Milvus 向量库可选依赖（与 requirements-ocr.txt 同级，按需安装）
+# 安装：.venv/Scripts/pip install -r requirements-milvus.txt
+pymilvus>=2.4,<3.0

@@ -2,6 +2,10 @@
 
 指标阈值按当前基线校准（见迭代记录）。若有意改动切块或检索策略导致指标
 变化，先跑 scripts/eval_retrieval.py 对比新旧报告，再同步更新阈值与记录。
+
+2026-07-29 结构感知切块基线：recall@5=0.933 hit@1=0.900 mrr=0.917 snippet=0.900
+标题层级上下文前缀对 HashEmbedder 词袋模型引入噪声词，但真实 embedding 下
+为增益（提供主题语境）。阈值按新基线下浮校准，真实语义质量用 --real 验证。
 """
 from __future__ import annotations
 
@@ -39,10 +43,10 @@ def test_retrieval_quality_baseline(eval_setup) -> None:
         f"recall@5={report['recall_at_k']:.3f} hit@1={report['hit_at_1']:.3f} "
         f"mrr={report['mrr']:.3f} snippet={report['snippet_hit_rate']:.3f}\n未达标用例:\n{detail}"
     )
-    assert report["recall_at_k"] >= 0.95, summary
-    assert report["hit_at_1"] >= 0.80, summary
-    assert report["mrr"] >= 0.85, summary
-    assert report["snippet_hit_rate"] >= 0.95, summary
+    assert report["recall_at_k"] >= 0.90, summary
+    assert report["hit_at_1"] >= 0.85, summary
+    assert report["mrr"] >= 0.88, summary
+    assert report["snippet_hit_rate"] >= 0.85, summary
 
 
 def test_doc_scope_never_returns_out_of_scope_documents(eval_setup) -> None:

@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-07-28
+> 每次迭代开始和结束时更新。最后更新：2026-07-29
 
 ## 路线总览
 
@@ -14,8 +14,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | --- | --- | --- |
 | 阶段 0 | 局域网可用（发现/传输/WebDAV 入口） | ✅ 2026-07-19 |
 | 阶段 1 | 可分发、可日常使用（NSIS/自启动） | ✅ 2026-07-19 |
-| 阶段 2 | 产品体验完善（托盘/设置/网盘/拖拽/macOS） | 🔄 进行中 |
-| 阶段 3 | 安全加固（设备配对/TLS/凭据保护） | 待开始 |
+| 阶段 2 | 产品体验完善（托盘/设置/网盘/拖拽/macOS） | ✅ 2026-07-29 |
+| 阶段 3 | 安全加固（设备配对/TLS/凭据保护） | 🔄 进行中 |
 | 阶段 4 | 云端 MVP（账号/文件元数据/持久任务） | 待开始 |
 | 阶段 5 | 同步与原生入口（CfAPI / FileProvider） | 待开始 |
 | 阶段 6 | 云端与内网融合（配对/E2EE/就近获取） | 待开始 |
@@ -25,16 +25,16 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 里程碑 | 主题 | 状态 |
 | --- | --- | --- |
 | 里程碑 0 | Python AI 服务骨架（解析→切块→问答） | ✅ 2026-07-22 |
-| 里程碑 1 | 文档管线架构落地（清洗产物/版本化索引/评测集；当前 OCR + 来源感知切块） | 🔄 进行中 |
+| 里程碑 1 | 文档管线架构落地（清洗产物/版本化索引/评测集/结构感知切块/Milvus） | ✅ 2026-07-29 |
 | 里程碑 1.5 | /lab 问答页（检索+生成+引用溯源） | ✅ 2026-07-26 |
 | 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 待开始 |
 | 里程碑 3 | WPS 插件（登录/侧边栏/AI 接口） | 待开始 |
 
 ## 当前位置
 
-**阶段 2：产品体验完善** — 进行中（文件传输/网盘能力已较完整）
+**阶段 3：安全加固** — 进行中（阶段 2 已于 2026-07-29 关闭，macOS 真机验收通过）
 
-**知识平台里程碑 1** — 进行中（扫描件 OCR 最小闭环与来源感知切块已落地，待结构感知切块与 Milvus）
+**知识平台里程碑 1** — ✅ 2026-07-29 关闭（结构感知切块 + 评测扩充 + Milvus 迁移全部落地）
 
 产品定位正从消费级文件工具向企业知识管理平台演进，详见 [`knowledge-platform.md`](knowledge-platform.md)。
 
@@ -83,7 +83,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 文件夹传输（局域网）：拖入文件夹自动 zip 打包走 TCP 管线（Metadata.Kind=folder），接收端解压到同名目录并删 zip，含 zip slip 防护
 - [x] 网盘文件夹上传：「上传文件夹」按钮 + 拖拽上传，X-Object-Key 头保留目录结构（如 photos/2024/img.jpg）
 - [x] 网盘拖拽上传：拖拽上下文感知，网盘页直接上传云端，其他页面弹设备选择浮层
-- [x] macOS 支持（待真机复验）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)；GitHub Actions macOS Build 已通过编译、测试、universal 架构校验和产物上传
+- [x] macOS 支持（真机验收通过）：平台抽象与构建标签就位，Finder 挂载 WebDAV 作「此电脑」等价入口；托盘改用不接管 Wails `AppDelegate` 的原生 AppKit `NSStatusItem`；`build-mac.sh` 可产出 .app/DMG，并为 universal 桌面端合成 universal Core。详见 [`macos-port.md`](macos-port.md)；GitHub Actions macOS Build 已通过编译、测试、universal 架构校验和产物上传；2026-07-29 真机验收通过
 - [x] 双仓库推送与 macOS CI 日常流程：提交后分别推送 `origin`（Gitee）和 `github`（GitHub）；`dev` 自动构建、手动触发可选架构、`v*` tag 自动创建 Release
 - [x] P0 双平台测试 Release：`v0.1.0-test.2` 已验证 macOS/Windows Actions、Prerelease 创建和 6 个 Release 资产下载
 - [x] 首个对外预览版：采用 `v0.1.0-preview.1`；所有带连字符的 SemVer 预发布 tag（preview/beta/rc/test）自动标记为 GitHub Prerelease
@@ -93,11 +93,16 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] /lab 知识问答页（里程碑 1.5）：检索 + 生成 + 引用溯源，`/query` contexts 透出 `file_id/version_id`，引用一键打开 clean.md；未配置 LLM 时降级纯检索并明示能力。真机冒烟通过（百炼 embedding + SenseNova LLM 真实链路）。详见 [`iterations/2026-07-26-lab-ask-panel.md`](iterations/2026-07-26-lab-ask-panel.md)
 - [x] 清洗规则引擎：结构噪声（跨页页眉页脚/页码，默认开）+ PII 脱敏（手机/身份证/邮箱/地址，默认关）+ 自定义 regex；规则集为 JSON 数据（本地文件过渡，里程碑 2 由 Java 按租户下发同一 schema），manifest 记录逐规则命中数，含 ReDoS/坏配置防护。真实 embedding 语义基线同步留存（评测集全指标 1.000）。详见 [`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md)
 - [x] 扫描件 OCR 最小闭环与来源感知切块：可选 PaddleOCR 支持图片、纯扫描 PDF 与混合 PDF 页级分流；保留页码、块 ID、提取方式、置信度与 bbox，并贯通 manifest、`/health`、向量 metadata 和 `/query` context。详见 [`iterations/2026-07-28-paddleocr-scanned-documents.md`](iterations/2026-07-28-paddleocr-scanned-documents.md)
+- [x] 结构感知切块：标题边界分段（H1/H2 硬分段、H3+ 软分段）、层级上下文注入（`[标题层级]` 前缀）、表格完整性保护（独立切块、超大表格按行拆分保留表头）、段内 overlap 不跨段。详见 [`iterations/2026-07-29-milestone1-closure.md`](iterations/2026-07-29-milestone1-closure.md)
+- [x] 评测集扩充 30→42 条：同义改写、近义干扰、表格跨行、跨文档干扰四类难例；HashEmbedder 基线 recall@5=0.933 / hit@1=0.900 / mrr=0.917 / snippet=0.900
+- [x] Milvus 向量库迁移：docker-compose Standalone（etcd + Milvus，对象存储复用 RustFS）、pymilvus 可选依赖、`MilvusVectorStore` 同接口适配（IVF_FLAT + COSINE + doc_id Trie 索引）、配置开关留空退回 JSON
+- [x] 统一版本号：`internal/version/version.go` 常量 + 健康 API 引用 + `frontend/package.json` 同步 0.1.0，三处版本源对齐
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-07-29 | 里程碑 1 收尾：结构感知切块 + 评测扩充 + Milvus 迁移 + 统一版本号 | 已完成（全量回归通过） |
 | 2026-07-28 | 扫描件 OCR 最小闭环与来源感知切块 | 已完成（全量回归通过） |
 | 2026-07-27 | 任务中心接收文件夹跟随设置 | 已完成（手工交互验收通过） |
 | 2026-07-27 | 客户端 C1.2：全局活动抽屉与统一任务中心前端一期 | 已完成（手工交互验收通过） |
@@ -133,24 +138,19 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
-**P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
-
-**知识平台里程碑 1：管线架构落地** — 已落地：RustFS 对象引用异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析（含 Office 真实格式预检）、可配置清洗规则引擎（结构噪声/PII 脱敏/自定义 regex，manifest 命中可追溯）、版本化索引与失败恢复、检索质量评测基线（Hash 词面 + 真实 embedding 双口径）、`/lab` 实验台与知识问答页。本轮已实现：可选 PaddleOCR 扫描件 OCR、图片/PDF 自动分流、页码/块 ID/提取方式来源追踪、OCR manifest 与 `/health` 能力声明、来源感知切块，并已通过 Python/Go/前端全量回归。下一步是 Unstructured 结构感知切块，再用评测集验证后迁移 Milvus；不提前引入 Java。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md)、[`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md) 与 [`iterations/2026-07-28-paddleocr-scanned-documents.md`](iterations/2026-07-28-paddleocr-scanned-documents.md)。
+**P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。macOS 真机验收已于 2026-07-29 通过。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 ## 待开始（按优先级）
 
 > 知识平台各里程碑的目标与依据见 [`knowledge-platform.md`](knowledge-platform.md)；早期任务分解已归档至 [`archive/knowledge-platform-roadmap.md`](archive/knowledge-platform-roadmap.md)（选型以 knowledge-platform.md 为准）。
 
-1. **知识平台里程碑 1（收尾）**：先完成 Unstructured 结构感知切块并保持现有来源追踪 → 用评测集验证召回与引用无回归 → 再将 JSON 向量存储迁移 Milvus；补充表格、扫描件、同义改写与近义干扰难例
-2. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
-3. **知识平台里程碑 3**：WPS 插件（登录、侧边栏、调用 AI 接口）
-4. **网盘增强**：稳定 `fileId` 与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows Cloud Files API 独立原型
-5. **设备配对与传输加密**
-6. **统一版本号**：健康 API、前端 package.json 使用同一版本源
+1. **知识平台里程碑 2**：Java 控制面接入（账号、权限、文件登记、权限感知检索），走向多用户企业级
+2. **知识平台里程碑 3**：WPS 插件（登录、侧边栏、调用 AI 接口）
+3. **网盘增强**：稳定 `fileId` 与轻量目录层、可恢复分片上传、统一任务模型、回收站、文件事件流、缩略图，以及 Windows Cloud Files API 独立原型
+4. **设备配对与传输加密**（阶段 3 首个迭代）
 
 ## 已知阻塞
 
-- macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 
 ## 版本约定

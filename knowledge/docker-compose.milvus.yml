@@ -1,0 +1,56 @@
+# Milvus Standalone 部署（知识平台向量库）
+# 对象存储复用已有 RustFS（127.0.0.1:9000），不额外跑 MinIO。
+# 启动：docker compose -f docker-compose.milvus.yml up -d
+# 停止：docker compose -f docker-compose.milvus.yml down
+# 数据卷：etcd_data + milvus_data 持久化，RustFS 数据在 easyshare bucket。
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: milvus-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus:v2.4.15
+    container_name: milvus-standalone
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      # 对象存储指向已有 RustFS
+      MINIO_ADDRESS: host.docker.internal:9000
+      MINIO_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-minioadmin}
+      MINIO_USE_SSL: "false"
+      MINIO_BUCKET_NAME: ${RUSTFS_BUCKET:-easyshare}
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "19530:19530"   # gRPC
+      - "9091:9091"     # 健康检查 / 指标
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+volumes:
+  etcd_data:
+  milvus_data:

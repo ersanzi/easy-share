@@ -21,6 +21,7 @@ import (
 	"easyshare/internal/discovery"
 	"easyshare/internal/task"
 	"easyshare/internal/transfer"
+	"easyshare/internal/version"
 	"github.com/coder/websocket"
 )
 
@@ -81,7 +82,7 @@ func (server *Server) routes() http.Handler {
 		}
 		mac := hmac.New(sha256.New, []byte(server.config.APIToken))
 		_, _ = mac.Write([]byte(nonce))
-		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "version": "0.1.0", "deviceId": server.config.DeviceID, "proof": hex.EncodeToString(mac.Sum(nil))})
+		writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "version": version.Version, "deviceId": server.config.DeviceID, "proof": hex.EncodeToString(mac.Sum(nil))})
 	})
 	mux.Handle("GET /api/status", server.auth(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		server.statusMutex.RLock()

@@ -1,6 +1,7 @@
 """服务组件容器：集中组装依赖，避免路由模块级单例并便于测试注入。"""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.config import Settings, settings
@@ -14,6 +15,8 @@ from app.rag.generator import Generator, build_generator
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
 from app.storage.rustfs import RustFSStorage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -37,6 +40,21 @@ class AppServices:
         self.job_store.close()
 
 
+def build_vector_store(config: Settings) -> VectorStore:
+    """根据配置选择向量库实现：Milvus（生产）或 JSON 文件（开发/测试）。"""
+    if config.milvus_uri:
+        from app.kb.milvus_store import MilvusVectorStore
+
+        logger.info("向量库：Milvus（%s, collection=%s）", config.milvus_uri, config.milvus_collection)
+        return MilvusVectorStore(
+            uri=config.milvus_uri,
+            dim=config.embedding_dim,
+            collection_name=config.milvus_collection,
+        )
+    logger.info("向量库：JSON 文件（%s）", config.vector_store_path)
+    return VectorStore(config.vector_store_path)
+
+
 def build_services(config: Settings = settings) -> AppServices:
     storage = RustFSStorage(
         endpoint=config.rustfs_endpoint,
@@ -46,7 +64,7 @@ def build_services(config: Settings = settings) -> AppServices:
     )
     embedder = build_embedder(config)
     ocr = build_paddle_provider(enabled=config.ocr_enabled, lang=config.ocr_lang)
-    vector_store = VectorStore(config.vector_store_path)
+    vector_store = build_vector_store(config)
     retriever = Retriever(embedder, vector_store)
     generator = build_generator(config)
     job_store = JobStore(config.job_store_path)

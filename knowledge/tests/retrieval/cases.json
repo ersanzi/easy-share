@@ -28,5 +28,21 @@
   {"id": "review-source-target", "question": "来源定位指标的目标是多少？", "expected_file_id": "golden-pptx-review", "expected_snippet": "100%"},
   {"id": "pdf-first-page", "question": "EasyShare PDF Golden 样本第一页的内容是什么？", "expected_file_id": "golden-pdf-blank", "expected_snippet": "Page One"},
   {"id": "scoped-reimburse", "question": "住宿报销的上限标准是多少？", "expected_file_id": "travel-reimburse", "expected_snippet": "400 元", "doc_ids": ["travel-reimburse", "vpn-remote"]},
-  {"id": "scoped-projects", "question": "扫描件 OCR 的负责人是谁？", "expected_file_id": "golden-xlsx-projects", "expected_snippet": "Bob", "doc_ids": ["golden-xlsx-projects", "golden-docx-policy"]}
+  {"id": "scoped-projects", "question": "扫描件 OCR 的负责人是谁？", "expected_file_id": "golden-xlsx-projects", "expected_snippet": "Bob", "doc_ids": ["golden-xlsx-projects", "golden-docx-policy"]},
+
+  {"id": "paraphrase-hotel-expense", "question": "员工差旅期间酒店费用的报销上限是多少？", "expected_file_id": "travel-reimburse", "expected_snippet": "400 元"},
+  {"id": "paraphrase-vpn-auth", "question": "远程接入公司网络需要什么身份验证手段？", "expected_file_id": "vpn-remote", "expected_snippet": "双因素认证"},
+  {"id": "paraphrase-probation", "question": "刚入职的员工要经过多久的考察期？", "expected_file_id": "onboarding", "expected_snippet": "6 个月"},
+  {"id": "paraphrase-backup-freq", "question": "数据库的完整备份频率是怎样的？", "expected_file_id": "backup-policy", "expected_snippet": "每周日"},
+
+  {"id": "distractor-sync-delay", "question": "主机房和容灾机房之间的数据同步延迟要求是多少？", "expected_file_id": "backup-policy", "expected_snippet": "10 分钟"},
+  {"id": "distractor-badge-cost", "question": "补办工卡需要多少费用？", "expected_file_id": "onboarding", "expected_snippet": "20 元"},
+  {"id": "distractor-otp-refresh", "question": "VPN 动态口令多久刷新一次？", "expected_file_id": "vpn-remote", "expected_snippet": "30 秒"},
+  {"id": "distractor-overseas-vpn", "question": "出差在海外使用 VPN 前需要做什么？", "expected_file_id": "vpn-remote", "expected_snippet": "报备"},
+
+  {"id": "table-projects-owners", "question": "项目清单里有哪些负责人？", "expected_file_id": "golden-xlsx-projects", "expected_snippet": "Alice"},
+  {"id": "table-review-metrics", "question": "质量指标中派生产物的目标数量是多少？", "expected_file_id": "golden-pptx-review", "expected_snippet": "3 类"},
+
+  {"id": "crossdoc-training-time", "question": "入职培训在什么时候集中开展？", "expected_file_id": "onboarding", "expected_snippet": "每月第一周"},
+  {"id": "crossdoc-sla-target", "question": "SLA 达成率的目标是多少？", "expected_file_id": "service-sla", "expected_snippet": "99%"}
 ]

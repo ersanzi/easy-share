@@ -47,5 +47,10 @@ class Settings(BaseSettings):
     job_workers: int = 2
     max_source_bytes: int = 100 * 1024 * 1024
 
+    # Milvus 向量库（可选；milvus_uri 为空时退回 JSON 文件存储）
+    # 本地 Standalone 默认 http://127.0.0.1:19530
+    milvus_uri: str = ""
+    milvus_collection: str = "easyshare_chunks"
+
 
 settings = Settings()
