@@ -236,6 +236,18 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
             "results": _format_results(hybrid_results),
         }
 
+    # 记录查询日志（取混合或向量策略的结果）
+    best_results = hybrid_results if "hybrid" in strategies else vector_results
+    if best_results:
+        services.query_log.log_retrieval(
+            question=body.question,
+            strategy="hybrid" if "hybrid" in strategies else "vector",
+            top_k=body.top_k,
+            result_count=len(best_results[:body.top_k]),
+            top_score=best_results[0].get("score", 0.0) if best_results else 0.0,
+            file_ids_hit=[r.get("file_id", "") for r in best_results[:body.top_k]],
+        )
+
     return response
 
 
@@ -303,6 +315,27 @@ async def debug_generate(body: DebugGenerateRequest, request: Request) -> dict:
             "text": ctx.get("text", ""),
             "source_locations": meta.get("source_locations", []),
         })
+
+    # 记录生成日志
+    faith_avg = (
+        sum(f["evidence_score"] for f in faithfulness) / len(faithfulness)
+        if faithfulness else 0.0
+    )
+    unsup_ratio = (
+        sum(1 for f in faithfulness if f["verdict"] == "unsupported") / len(faithfulness)
+        if faithfulness else 0.0
+    )
+    services.query_log.log_generation(
+        question=body.question,
+        strategy="vector",
+        top_k=body.top_k,
+        result_count=len(contexts),
+        top_score=contexts[0].get("score", 0.0) if contexts else 0.0,
+        file_ids_hit=[c.get("file_id", "") for c in contexts],
+        answer_length=len(answer),
+        faithfulness_avg=faith_avg,
+        unsupported_ratio=unsup_ratio,
+    )
 
     return {
         "question": body.question,
@@ -406,20 +439,18 @@ async def knowledge_health(request: Request) -> dict:
     completed_jobs = [j for j in jobs if j.status == "completed"]
     processed_at_list = [j.finished_at for j in completed_jobs if j.finished_at]
 
-    # 使用率：从向量库 score 统计（简化版，后续接查询日志）
-    # 当前无法获取历史查询日志，返回占位
-    usage_stats = {
-        "note": "使用率统计需要查询日志支持，当前为占位",
-        "total_queries": 0,
-        "most_cited_docs": [],
-        "never_cited_docs": list(doc_ids)[:20],  # 暂列所有文档
-    }
+    # 使用率与盲区：从查询日志获取真实数据
+    log_stats = services.query_log.stats(days=30)
 
     # 覆盖：按文件扩展名分组
     ext_coverage: dict[str, int] = {}
     for fname in filenames.values():
         ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else "unknown"
         ext_coverage[ext] = ext_coverage.get(ext, 0) + 1
+
+    # 从未被命中的文档
+    cited_ids = {item["file_id"] for item in log_stats["most_cited_docs"]}
+    never_cited = [did for did in doc_ids if did not in cited_ids]
 
     return {
         "scale": {
@@ -434,15 +465,19 @@ async def knowledge_health(request: Request) -> dict:
         "freshness": {
             "total_processed": len(completed_jobs),
             "latest_processed_at": max(processed_at_list) if processed_at_list else None,
-            "note": "新鲜度需要文档元数据（最后修改时间）支持，当前仅展示处理时间",
         },
         "coverage": {
             "by_extension": ext_coverage,
-            "note": "业务领域覆盖需要人工标注或 LLM 分类，当前按文件格式统计",
         },
-        "usage": usage_stats,
+        "usage": {
+            "total_queries": log_stats["total_queries"],
+            "recent_queries_30d": log_stats["recent_queries"],
+            "most_cited_docs": log_stats["most_cited_docs"],
+            "never_cited_docs": never_cited[:20],
+            "generation": log_stats["generation"],
+        },
         "blind_spots": {
-            "note": "盲区分析需要查询日志 + 低分结果统计，当前为占位",
-            "unanswered_queries": [],
+            "unanswered_queries": log_stats["blind_spots"],
+            "count": len(log_stats["blind_spots"]),
         },
     }

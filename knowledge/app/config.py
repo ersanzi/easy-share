@@ -52,5 +52,8 @@ class Settings(BaseSettings):
     milvus_uri: str = ""
     milvus_collection: str = "easyshare_chunks"
 
+    # 查询日志（支撑健康度仪表盘使用率与盲区分析）
+    query_log_path: str = "./data/query_log.db"
+
 
 settings = Settings()

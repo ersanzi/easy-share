@@ -8,6 +8,7 @@ from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.kb.bm25 import BM25Retriever
 from app.kb.embedder import HashEmbedder
+from app.kb.query_log import QueryLog
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, UnavailableOCRProvider
@@ -77,6 +78,7 @@ def make_services(
         embedder=embedder,
         vector_store=vector_store,
         bm25=BM25Retriever(),
+        query_log=QueryLog(str(tmp_path / "query_log.db")),
         retriever=retriever,
         generator=None,
         job_store=job_store,
