@@ -152,7 +152,7 @@ async function doSearch() {
     const resp = await fetch("/debug/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid"] }),
+      body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid", "reranked"] }),
     });
     const data = await resp.json();
     renderMultiStrategy(data, question);

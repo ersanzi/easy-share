@@ -236,6 +236,31 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
             "results": _format_results(hybrid_results),
         }
 
+    if "reranked" in strategies:
+        # 取混合结果（扩大范围）后用 Reranker 精排
+        pool = _hybrid_fusion(vector_results, bm25_results, body.top_k * 3)
+        if pool:
+            documents = [r.get("text", "") for r in pool]
+            rerank_scores = await run_in_threadpool(
+                services.reranker.rerank, body.question, documents, body.top_k
+            )
+            reranked = []
+            for item in rerank_scores:
+                record = dict(pool[item["index"]])
+                record["score"] = item["score"]
+                reranked.append(record)
+            response["strategies"]["reranked"] = {
+                "label": "混合 + Reranker 精排",
+                "result_count": len(reranked),
+                "results": _format_results(reranked),
+            }
+        else:
+            response["strategies"]["reranked"] = {
+                "label": "混合 + Reranker 精排",
+                "result_count": 0,
+                "results": [],
+            }
+
     # 记录查询日志（取混合或向量策略的结果）
     best_results = hybrid_results if "hybrid" in strategies else vector_results
     if best_results:

@@ -263,7 +263,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
 .loading { opacity: 0.5; pointer-events: none; }
 
 /* Strategy columns (multi-strategy comparison) */
-.strategy-columns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.strategy-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .strategy-col {
   background: var(--surface);
   border: 1px solid var(--border);

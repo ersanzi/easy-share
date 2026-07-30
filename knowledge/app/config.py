@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     embedding_dim: int = 1024
 
+    # Reranker（OpenAI 兼容 rerank API；未配置时保持原始排序）
+    rerank_base_url: str = ""
+    rerank_api_key: str = ""
+    rerank_model: str = ""
+
     # OCR 为可选运行时，重量级依赖单独安装。
     ocr_enabled: bool = True
     ocr_lang: str = "ch"

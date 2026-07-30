@@ -10,6 +10,7 @@ from app.jobs.store import JobStore
 from app.kb.bm25 import BM25Retriever
 from app.kb.embedder import Embedder, build_embedder
 from app.kb.query_log import QueryLog
+from app.kb.reranker import Reranker, NoopReranker, build_reranker
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, build_paddle_provider
@@ -29,6 +30,7 @@ class AppServices:
     vector_store: VectorStore
     bm25: BM25Retriever
     query_log: QueryLog
+    reranker: Reranker | NoopReranker
     retriever: Retriever
     generator: Generator | None
     job_store: JobStore
@@ -71,6 +73,7 @@ def build_services(config: Settings = settings) -> AppServices:
     vector_store = build_vector_store(config)
     bm25 = BM25Retriever()
     query_log = QueryLog(config.query_log_path)
+    reranker = build_reranker(config)
     retriever = Retriever(embedder, vector_store)
     generator = build_generator(config)
     job_store = JobStore(config.job_store_path)
@@ -93,6 +96,7 @@ def build_services(config: Settings = settings) -> AppServices:
         vector_store=vector_store,
         bm25=bm25,
         query_log=query_log,
+        reranker=reranker,
         retriever=retriever,
         generator=generator,
         job_store=job_store,

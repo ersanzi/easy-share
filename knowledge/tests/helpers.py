@@ -9,6 +9,7 @@ from app.jobs.store import JobStore
 from app.kb.bm25 import BM25Retriever
 from app.kb.embedder import HashEmbedder
 from app.kb.query_log import QueryLog
+from app.kb.reranker import NoopReranker
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, UnavailableOCRProvider
@@ -79,6 +80,7 @@ def make_services(
         vector_store=vector_store,
         bm25=BM25Retriever(),
         query_log=QueryLog(str(tmp_path / "query_log.db")),
+        reranker=NoopReranker(),
         retriever=retriever,
         generator=None,
         job_store=job_store,
