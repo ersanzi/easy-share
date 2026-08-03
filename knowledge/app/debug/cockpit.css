@@ -288,6 +288,64 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   .inspect-layout { grid-template-columns: 1fr; }
 }
 
+/* Cleaning diff */
+.diff-summary {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.diff-rule-chip {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.diff-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.diff-item-removed { background: var(--red-bg); border-color: #fecaca; }
+.diff-meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.diff-rule { font-weight: 500; color: var(--red); }
+.diff-kind {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+}
+.diff-block { font-size: 11px; color: var(--muted); }
+.diff-before {
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--ink);
+  line-height: 1.6;
+  text-decoration: line-through;
+  text-decoration-color: var(--red);
+  opacity: 0.9;
+}
+.diff-after {
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+  color: var(--green);
+}
+.diff-hidden { font-size: 11px; color: var(--muted); text-align: center; padding: 6px; }
+
 /* Health dashboard */
 .health-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .health-section {

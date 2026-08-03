@@ -54,6 +54,7 @@ async function inspectDocument(fileId) {
     renderCleanMarkdown(data.clean_markdown);
     renderChunks(data.chunks);
     renderBlocks(data.document);
+    renderDiff(data.cleaning_actions);
     renderStats(data.stats, data.manifest);
   } catch (err) {
     console.error("inspect failed:", err);
@@ -109,6 +110,56 @@ function renderBlocks(document) {
       </div>`;
     })
     .join("");
+}
+
+function renderDiff(actions) {
+  const container = $("#sub-diff");
+  if (!actions || actions.length === 0) {
+    container.innerHTML = '<div class="empty-state">无清洗动作（本次处理未命中规则）</div>';
+    return;
+  }
+
+  // 按规则分组统计
+  const byRule = {};
+  for (const a of actions) {
+    const key = a.rule_name || a.rule_id || "unknown";
+    byRule[key] = (byRule[key] || 0) + 1;
+  }
+  const summary = Object.entries(byRule)
+    .map(([name, count]) => `<span class="diff-rule-chip">${escapeHtml(name)} × ${count}</span>`)
+    .join("");
+
+  // 去除动作中的重复文本（同规则同文本多次命中只展示一次）
+  const seen = new Set();
+  const unique = actions.filter((a) => {
+    const key = `${a.rule_id || ""}|${a.kind}|${a.before}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const MAX_ITEMS = 100;
+  const shown = unique.slice(0, MAX_ITEMS);
+  const hidden = unique.length - shown.length;
+
+  container.innerHTML = `
+    <div class="diff-summary">清洗动作 ${actions.length} 条 · ${summary}</div>
+    ${shown
+      .map(
+        (a) => `
+    <div class="diff-item ${a.kind === "remove_block" ? "diff-item-removed" : ""}">
+      <div class="diff-meta">
+        <span class="diff-rule">${escapeHtml(a.rule_name || a.rule_id || "未知规则")}</span>
+        <span class="diff-kind">${a.kind === "remove_block" ? "整块删除" : "文本改写"}</span>
+        <span class="diff-block">块 ${escapeHtml(a.block_id || "—")}</span>
+      </div>
+      <div class="diff-before">${escapeHtml(a.before)}</div>
+      ${a.kind !== "remove_block" && a.after ? `<div class="diff-after">→ ${escapeHtml(a.after)}</div>` : ""}
+    </div>`
+      )
+      .join("")}
+    ${hidden > 0 ? `<div class="diff-hidden">… 另有 ${hidden} 条同类动作未展开</div>` : ""}
+  `;
 }
 
 function renderStats(stats, manifest) {

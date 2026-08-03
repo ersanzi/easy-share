@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-07-29
+> 每次迭代开始和结束时更新。最后更新：2026-08-04
 
 ## 路线总览
 
@@ -28,13 +28,12 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 里程碑 1 | 文档管线架构落地（清洗产物/版本化索引/评测集/结构感知切块/Milvus） | ✅ 2026-07-29 |
 | 里程碑 1.5 | /lab 问答页（检索+生成+引用溯源） | ✅ 2026-07-26 |
 | 里程碑 1.8 | 知识质量驾驶舱（单文档透视/策略对比/生成审计/健康度仪表盘） | 🔄 进行中 |
-| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳） | 待开始 |
-| 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 暂缓 |
+| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳） | 待开始 || 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 暂缓 |
 | 里程碑 3 | WPS 插件（知识副驾驶/主动推送） | 暂缓 |
 
 ## 当前位置
 
-**知识平台里程碑 1.8：知识质量驾驶舱** — 进行中（设计文档已定，待实现）
+**知识平台里程碑 1.8：知识质量驾驶舱** — 进行中（四个 Tab 已实现，余批量压测与人工验收）
 
 **桌面端阶段 3（安全加固）** — 暂缓，优先验证管线质量
 
@@ -99,11 +98,23 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 评测集扩充 30→42 条：同义改写、近义干扰、表格跨行、跨文档干扰四类难例；HashEmbedder 基线 recall@5=0.933 / hit@1=0.900 / mrr=0.917 / snippet=0.900
 - [x] Milvus 向量库迁移：docker-compose Standalone（etcd + Milvus，对象存储复用 RustFS）、pymilvus 可选依赖、`MilvusVectorStore` 同接口适配（IVF_FLAT + COSINE + doc_id Trie 索引）、配置开关留空退回 JSON
 - [x] 统一版本号：`internal/version/version.go` 常量 + 健康 API 引用 + `frontend/package.json` 同步 0.1.0，三处版本源对齐
+- [x] 知识质量驾驶舱第一期（里程碑 1.8）：单文档透视（结构化块 + 切块地图 + 清洗 Diff + 管线统计）+ 检索调试 + 生成审计（prompt 透视 + 逐句忠实度标注），`/debug/` API 仅回环可访问。详见 [`iterations/2026-08-04-cockpit-cleaning-diff.md`](iterations/2026-08-04-cockpit-cleaning-diff.md)（清洗 Diff 为第一期收尾，与驾驶舱同批次）
+- [x] 驾驶舱第二期：BM25 混合检索对比（vector/bm25/hybrid 三列并排，RRF 融合）+ 知识健康度 API（规模/新鲜度/覆盖/使用率/盲区五维）
+- [x] 查询日志 + 健康度真实数据：`QueryLog` 记录检索/生成事件，使用率/盲区/生成质量（平均忠实度、无依据比例）可度量，非占位数据
+- [x] Reranker 精排接入：`app/kb/reranker.py`（OpenAI 兼容 rerank API + NoopReranker 回退），`/debug/query` 第四策略 "reranked"（混合 RRF → Cross-Encoder 精排），驾驶舱升级四列对比
+- [x] 驾驶舱第四 Tab 健康度仪表盘：六维指标卡片 + 文档命中排行/僵尸文档/盲区查询/格式覆盖四象限
+- [x] 清洗 Diff 视图（驾驶舱第一期收尾）：规则引擎记录逐动作明细（整块删除/文本改写，含 before/after），manifest 内嵌持久化，UI 删除线 + 红色背景标注规则名与命中计数。详见 [`iterations/2026-08-04-cockpit-cleaning-diff.md`](iterations/2026-08-04-cockpit-cleaning-diff.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-04 | 驾驶舱清洗 Diff：规则引擎动作明细 + Diff 视图 | 已完成（全量回归通过） |
+| 2026-07-31 | 驾驶舱第四 Tab：健康度仪表盘可视化 | 已完成 |
+| 2026-07-31 | Reranker 精排接入 — 混合检索后 Cross-Encoder 重排序 | 已完成 |
+| 2026-07-31 | 查询日志 + 健康度真实数据 — 使用率/盲区/生成质量可度量 | 已完成 |
+| 2026-07-30 | 驾驶舱第二期 — BM25 混合检索对比 + 知识健康度 API | 已完成 |
+| 2026-07-30 | 知识质量驾驶舱第一期 — 单文档透视 + 检索调试 + 生成审计 | 已完成 |
 | 2026-07-29 | 里程碑 1 收尾：结构感知切块 + 评测扩充 + Milvus 迁移 + 统一版本号 | 已完成（全量回归通过） |
 | 2026-07-28 | 扫描件 OCR 最小闭环与来源感知切块 | 已完成（全量回归通过） |
 | 2026-07-27 | 任务中心接收文件夹跟随设置 | 已完成（手工交互验收通过） |
@@ -140,14 +151,16 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**知识平台里程碑 1.8：知识质量驾驶舱** — 四个 Tab 均已落地；设计文档第一期（单文档透视/检索调试/生成审计）与第二期（策略对比/健康度仪表盘）已实现，尚余**批量压测**（文档类型 × 策略交叉矩阵）与驾驶舱成功标准的人工验收。
+
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。macOS 真机验收已于 2026-07-29 通过。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 ## 待开始（按优先级）
 
 > 知识平台各里程碑的目标与依据见 [`knowledge-platform.md`](knowledge-platform.md)；早期任务分解已归档至 [`archive/knowledge-platform-roadmap.md`](archive/knowledge-platform-roadmap.md)（选型以 knowledge-platform.md 为准）。
 
-1. **里程碑 1.8 知识质量驾驶舱**（当前）：单文档透视 → 检索策略对比 → 生成审计 → 健康度仪表盘，详见 [`knowledge-quality-cockpit.md`](knowledge-quality-cockpit.md)
-2. **里程碑 1.9 混合检索加固**：BM25 + Reranker + Agent 多跳，在驾驶舱中数据驱动验证增益
+1. **里程碑 1.8 批量压测**（当前）：文档类型 × 检索策略交叉矩阵，跑 42 条评测集识别短板，见 [`knowledge-quality-cockpit.md`](knowledge-quality-cockpit.md) 第二期第 6 项
+2. **里程碑 1.9 混合检索加固**：Agent 多跳检索（驾驶舱 D 列轮次可视化），在驾驶舱中数据驱动验证 Reranker/多跳增益
 3. **知识平台里程碑 2**（暂缓）：Java 控制面接入，待管线质量验证后启动
 4. **WPS 知识副驾驶**（暂缓）：主动推送式知识交付，非搜索框
 5. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善，优先级让位于管线质量

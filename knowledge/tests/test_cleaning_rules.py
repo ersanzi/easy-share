@@ -34,6 +34,56 @@ def test_header_footer_removed_when_repeated_across_pages() -> None:
     assert any("正文内容" in text for text in texts)
 
 
+def test_rule_engine_records_action_details() -> None:
+    """规则引擎记录清洗动作明细（整块删除 + 文本改写），供驾驶舱 Diff 视图使用。"""
+    engine = load_rules(None)
+    document = _paged_doc(pages=4)
+    engine.apply(document)
+
+    removed = [a for a in engine.actions if a["kind"] == "remove_block"]
+    assert len(removed) == 4  # 4 页页眉各记录一条
+    assert removed[0]["rule_id"] == "header-footer"
+    assert removed[0]["rule_name"] == "跨页重复页眉页脚"
+    assert removed[0]["before"] == "机密文件 请勿外传"
+    assert removed[0]["after"] == ""
+
+    # 页码行属于文本改写（行删除）
+    text_actions = [a for a in engine.actions if a["kind"] == "text"]
+    assert len(text_actions) == 4
+    page_number = next(a for a in text_actions if "- 2 -" in a["before"])
+    assert page_number["rule_id"] == "page-number"
+    assert page_number["before"] == "- 2 -"
+    assert page_number["after"] == ""
+
+
+def test_rule_engine_records_mask_actions() -> None:
+    """PII 脱敏记录 before/after，便于 Diff 视图展示改写前后。"""
+    from app.parsing.rules import CleaningRule, RuleEngine
+
+    engine = RuleEngine([
+        CleaningRule(
+            id="phone-mask",
+            name="手机号脱敏",
+            kind="regex_mask",
+            pattern=r"(?<!\d)1[3-9]\d{9}(?!\d)",
+            keep_prefix=3,
+            keep_suffix=4,
+        )
+    ])
+    document = ParsedDocument(
+        filename="contact.txt",
+        media_type="text/plain",
+        blocks=[DocumentBlock(id="b1", type="paragraph", text="联系电话 13812345678。")],
+    )
+    engine.apply(document)
+    assert len(engine.actions) == 1
+    action = engine.actions[0]
+    assert action["kind"] == "text"
+    assert "13812345678" in action["before"]
+    assert "138****5678" in action["after"]
+    assert action["block_id"] == "b1"
+
+
 def test_header_footer_kept_when_too_few_pages() -> None:
     engine = load_rules(None)
     document = _paged_doc(pages=2)
@@ -166,6 +216,8 @@ def test_pipeline_records_cleaning_hits_in_manifest(tmp_path) -> None:
         manifest = client.get("/documents/file-c/versions/v1/artifacts").json()
         cleaning = manifest["cleaning"]
         assert {"id": "phone-mask", "name": "手机号脱敏", "hits": 1} in cleaning["rules"]
+        assert cleaning["actions"], "manifest 应包含清洗动作明细"
+        assert {"rule_id", "rule_name", "kind", "block_id", "before", "after"} <= set(cleaning["actions"][0])
 
         clean = client.get("/documents/file-c/versions/v1/artifacts/clean.md").text
         assert "13812345678" not in clean

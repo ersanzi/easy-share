@@ -97,6 +97,15 @@ async def inspect_document(file_id: str, request: Request, version_id: str = "v1
             "extraction_methods": meta.get("extraction_methods", []),
         })
 
+    # 清洗 Diff 明细：manifest 内嵌动作列表（旧文档无此数据时优雅降级）
+    cleaning = manifest.get("cleaning") or {}
+    rule_names = {rule.get("id", ""): rule.get("name", "") for rule in cleaning.get("rules", [])}
+    cleaning_actions = []
+    for action in cleaning.get("actions", []):
+        action = dict(action)
+        action.setdefault("rule_name", rule_names.get(action.get("rule_id", ""), ""))
+        cleaning_actions.append(action)
+
     return {
         "file_id": file_id,
         "version_id": version_id,
@@ -104,6 +113,7 @@ async def inspect_document(file_id: str, request: Request, version_id: str = "v1
         "document": document,
         "clean_markdown": clean_markdown,
         "chunks": chunk_summaries,
+        "cleaning_actions": cleaning_actions,
         "stats": {
             "blocks": manifest.get("blocks", 0),
             "characters": manifest.get("characters", 0),

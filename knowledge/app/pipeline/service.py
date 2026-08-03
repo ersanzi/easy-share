@@ -86,6 +86,7 @@ class DocumentPipeline:
                 {"id": rule.id, "name": rule.name, "hits": rule_hits.get(rule.id, 0)}
                 for rule in rules_engine.enabled_rules()
             ],
+            "actions": getattr(rules_engine, "actions", []),
             "warnings": rules_engine.load_warnings,
         }
 

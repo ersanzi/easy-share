@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 MAX_PATTERN_LENGTH = 200
 MAX_RULES = 100
 MASK_CHAR = "*"
+# 清洗动作明细上限：防止超大文档把 manifest 撑爆；文本截断保证单条明细可控
+MAX_ACTIONS = 1000
+ACTION_TEXT_LIMIT = 600
 
 # kind 取值：
 #   header_footer     跨页重复行检测（结构规则，无 pattern，params.min_pages/max_line_chars）
@@ -153,6 +156,7 @@ class RuleEngine:
 
     def apply(self, document: ParsedDocument) -> dict[str, int]:
         """就地清洗 document.blocks，返回 {rule_id: 命中次数}（含 0 命中的启用规则）。"""
+        self.actions: list[dict] = []  # 清洗动作明细，供驾驶舱 Diff 视图使用
         hits: dict[str, int] = {rule.id: 0 for rule in self.enabled_rules()}
         for rule in self.enabled_rules():
             if rule.kind == "header_footer":
@@ -165,6 +169,27 @@ class RuleEngine:
             block for block in document.blocks if block.text.strip() or any(any(row) for row in block.rows)
         ]
         return hits
+
+    def _record(
+        self,
+        rule_id: str,
+        rule_name: str,
+        block_id: str,
+        kind: str,
+        before: str,
+        after: str = "",
+    ) -> None:
+        """记录一次清洗动作（截断控制体积），供清洗 Diff 视图渲染。"""
+        if len(self.actions) >= MAX_ACTIONS:
+            return
+        self.actions.append({
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "kind": kind,
+            "block_id": block_id,
+            "before": before[:ACTION_TEXT_LIMIT],
+            "after": after[:ACTION_TEXT_LIMIT],
+        })
 
     # ---- 结构规则 ----
 
@@ -197,6 +222,7 @@ class RuleEngine:
         for block in document.blocks:
             if block.source.page is not None and not block.rows and block.text.strip() in noisy:
                 removed += 1
+                self._record(rule.id, rule.name, block.id, "remove_block", block.text)
                 continue
             kept.append(block)
         document.blocks = kept
@@ -213,6 +239,8 @@ class RuleEngine:
                 continue
             if block.text:
                 block.text, changed = self._apply_to_text(block.text, rule, pattern)
+                if changed:
+                    self._record(rule.id, rule.name, block.id, "text", self._preview_before, block.text)
                 count += changed
             if block.rows:
                 new_rows = []
@@ -220,6 +248,8 @@ class RuleEngine:
                     new_row = []
                     for cell in row:
                         cell_text, changed = self._apply_to_text(cell, rule, pattern, line_scope=False)
+                        if changed:
+                            self._record(rule.id, rule.name, block.id, "text", self._preview_before, cell_text)
                         count += changed
                         new_row.append(cell_text)
                     new_rows.append(new_row)
@@ -229,6 +259,7 @@ class RuleEngine:
     def _apply_to_text(
         self, text: str, rule: CleaningRule, pattern: re.Pattern, line_scope: bool = True
     ) -> tuple[str, int]:
+        self._preview_before = text  # 供动作明细记录修改前的文本
         if rule.kind == "regex_remove_line":
             if not line_scope:
                 return text, 0
