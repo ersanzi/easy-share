@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     ocr_lang: str = "ch"
     ocr_min_text_chars: int = 20
 
+    # MinerU 深度解析（可选远程服务；失败自动回退本地管线，默认关闭）
+    # backend 可选：pipeline（无 GPU、多语言）/ vlm-engine / vlm-http-client / hybrid-*（需配套 vllm 服务）
+    mineru_enabled: bool = False
+    mineru_base_url: str = "http://127.0.0.1:8779"
+    mineru_api_token: str = ""
+    mineru_backend: str = "pipeline"
+    mineru_timeout_seconds: int = 300
+    mineru_max_pages: int = 300
+
+    # pdf-inspector 快路由（可选本地依赖 pip install pdf-inspector；未安装自动退回启发式，默认关闭）
+    pdf_inspector_enabled: bool = False
+
     # 切块与检索
     chunk_size: int = 800
     chunk_overlap: int = 120

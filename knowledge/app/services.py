@@ -14,6 +14,9 @@ from app.kb.reranker import Reranker, NoopReranker, build_reranker
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, build_paddle_provider
+from app.parsing.mineru import build_mineru_provider
+from app.parsing.mineru.base import MinerUProvider
+from app.parsing.pdf_router import build_pdf_router
 from app.rag.generator import Generator, build_generator
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
@@ -37,6 +40,7 @@ class AppServices:
     pipeline: DocumentPipeline
     job_runner: JobRunner
     ocr: OCRProvider | None = None
+    mineru: MinerUProvider | None = None
 
     def start(self) -> None:
         self.job_runner.start()
@@ -70,6 +74,8 @@ def build_services(config: Settings = settings) -> AppServices:
     )
     embedder = build_embedder(config)
     ocr = build_paddle_provider(enabled=config.ocr_enabled, lang=config.ocr_lang)
+    mineru = build_mineru_provider(config)
+    pdf_router = build_pdf_router(config.pdf_inspector_enabled)
     vector_store = build_vector_store(config)
     bm25 = BM25Retriever()
     query_log = QueryLog(config.query_log_path)
@@ -87,6 +93,8 @@ def build_services(config: Settings = settings) -> AppServices:
         cleaning_rules_path=config.cleaning_rules_path,
         ocr_provider=ocr,
         ocr_min_text_chars=config.ocr_min_text_chars,
+        mineru_provider=mineru,
+        pdf_router=pdf_router,
     )
     job_runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     return AppServices(
@@ -103,4 +111,5 @@ def build_services(config: Settings = settings) -> AppServices:
         pipeline=pipeline,
         job_runner=job_runner,
         ocr=ocr,
+        mineru=mineru,
     )

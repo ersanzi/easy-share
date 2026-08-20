@@ -109,6 +109,9 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-20 | 三层解析路由实现 — pdf-inspector 路由 + MinerU 深度解析 + PaddleOCR 兜底 | 已完成（全量回归通过；MinerU 真实服务冒烟待部署） |
+| 2026-08-20 | pdf-inspector 路由层增补 — 三层解析路由定稿（快路由/深解析/页级兜底），三项业务想法获批入路线图 | 已完成（设计增补） |
+| 2026-08-20 | MinerU 解析集成设计 — PDF 专项可选 Provider（分流回退/配置/映射表定稿） | 已完成（纯设计，实现待排期） |
 | 2026-08-20 | Agent 开发基础设施 — 安装 5 个方法论技能（grilling/tdd/diagnosing-bugs/handoff/research）+ /iterate /verify 原生命令 | 已完成 |
 | 2026-08-20 | Matt Pocock Skills 评估 — 工程方法论技能包分级吸收结论（5 装戒 + 设计模式借鉴 + issue tracker 流派不装） | 已完成（纯调研，无代码变更） |
 | 2026-08-20 | TencentDB-Agent-Memory 对标学习 — 分层记忆/资产治理/按需知识，产出 1.9/里程碑 2/3 分级借鉴建议 | 已完成（纯调研，无代码变更） |
@@ -154,19 +157,26 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
-**知识平台里程碑 1.8：知识质量驾驶舱** — 四个 Tab 均已落地；设计文档第一期（单文档透视/检索调试/生成审计）与第二期（策略对比/健康度仪表盘）已实现，尚余**批量压测**（文档类型 × 策略交叉矩阵）与驾驶舱成功标准的人工验收。
+**知识平台主线：业务流跑通**（2026-08-20 用户指示）——压测统一后置，优先把解析→RAG→交付的端到端价值闭环跑通。三层解析路由（pdf-inspector 路由 + MinerU 深度解析 + PaddleOCR 兜底）代码已落地并通过全量回归，待真实 mineru-api 部署后冒烟；设计文档见 [`iterations/2026-08-20-mineru-parsing-provider-design.md`](iterations/2026-08-20-mineru-parsing-provider-design.md)（含 §4.8 pdf-inspector 增补），实现记录见 [`iterations/2026-08-20-three-tier-pdf-routing.md`](iterations/2026-08-20-three-tier-pdf-routing.md)。
+
+**知识平台里程碑 1.8：知识质量驾驶舱** — 四个 Tab 均已落地；**批量压测后置**（2026-08-20 决策：与其他测试统一做），驾驶舱人工验收待业务流跑通时一并执行。
 
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。macOS 真机验收已于 2026-07-29 通过。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 ## 待开始（按优先级）
 
 > 知识平台各里程碑的目标与依据见 [`knowledge-platform.md`](knowledge-platform.md)；早期任务分解已归档至 [`archive/knowledge-platform-roadmap.md`](archive/knowledge-platform-roadmap.md)（选型以 knowledge-platform.md 为准）。
+> 2026-08-20 调整：压测统一后置，主线改为业务流跑通；以下顺序按用户当日决策重排。
 
-1. **里程碑 1.8 批量压测**（当前）：文档类型 × 检索策略交叉矩阵，跑 42 条评测集识别短板，见 [`knowledge-quality-cockpit.md`](knowledge-quality-cockpit.md) 第二期第 6 项
-2. **里程碑 1.9 混合检索加固**：Agent 多跳检索（驾驶舱 D 列轮次可视化），在驾驶舱中数据驱动验证 Reranker/多跳增益
-3. **知识平台里程碑 2**（暂缓）：Java 控制面接入，待管线质量验证后启动
-4. **WPS 知识副驾驶**（暂缓）：主动推送式知识交付，非搜索框
-5. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善，优先级让位于管线质量
+1. **三层解析路由实现**（当前）：pdf-inspector Spike（Windows wheel + 中文语料）→ MinerU Provider 实现，按设计文档 §6 顺序
+2. **里程碑 1.9 混合检索加固**：Agent 多跳检索（驾驶舱 D 列轮次可视化），带上 TDB-AM 对标 P0 四条（召回预算控制/两步自发现/BM25 降级/hop 级日志）
+3. **知识时效最小闭环**（2026-08-20 批准）：chunk 入库时间 + 检索结果标注新旧 + 生成时提示"存在更新版本"，消灭新旧知识混答
+4. **解析即验收（上传即可视化）**（2026-08-20 批准）：处理完成页内嵌单文档透视（切块地图+清洗 Diff），黑盒变白盒
+5. **质量体检报告获客入口**（2026-08-20 批准，后置于 WPS 前）：上传 10 份文档出质量体检报告，驾驶舱能力产品化
+6. **WPS 最小闭环**：选中段落查知识引用的最小插件，验证真实使用（walking skeleton 用在交付端）
+7. **1.8 批量压测**（后置）：与其他测试统一做，暂不单列冲刺
+8. **知识平台里程碑 2**（暂缓）：Java 控制面接入
+9. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善
 
 ## 已知阻塞
 

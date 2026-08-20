@@ -5,14 +5,19 @@ import hashlib
 import json
 import threading
 from datetime import UTC, datetime
-from typing import Callable
+from typing import Any, Callable
 
 from app.jobs.store import ProcessingJob
 from app.ocr import OCRProvider
 from app.kb.chunker import chunk_document
 from app.kb.embedder import Embedder
 from app.kb.store import VectorStore
-from app.parsing.extractor import parse_document
+from app.parsing.extractor import _parse_markdown, parse_document
+from app.parsing.mineru import MinerUError
+from app.parsing.mineru.adapter import document_from_mineru
+from app.parsing.mineru.base import MinerUProvider
+from app.parsing.models import ParsedDocument
+from app.parsing.pdf_router import PdfInspectorRouter
 from app.parsing.renderer import render_markdown
 from app.parsing.rules import load_rules
 from app.storage.base import ObjectStorage
@@ -43,6 +48,8 @@ class DocumentPipeline:
         cleaning_rules_path: str | None = None,
         ocr_provider: OCRProvider | None = None,
         ocr_min_text_chars: int = 20,
+        mineru_provider: MinerUProvider | None = None,
+        pdf_router: PdfInspectorRouter | None = None,
     ) -> None:
         self.storage = storage
         self.embedder = embedder
@@ -53,6 +60,8 @@ class DocumentPipeline:
         self.cleaning_rules_path = cleaning_rules_path
         self.ocr_provider = ocr_provider
         self.ocr_min_text_chars = ocr_min_text_chars
+        self.mineru_provider = mineru_provider
+        self.pdf_router = pdf_router
         self._document_locks_guard = threading.Lock()
         self._document_locks: dict[str, threading.Lock] = {}
 
@@ -70,12 +79,7 @@ class DocumentPipeline:
         source_sha256 = hashlib.sha256(content).hexdigest()
 
         report("parsing", 30)
-        document = parse_document(
-            job.filename,
-            content,
-            ocr_provider=self.ocr_provider,
-            ocr_min_text_chars=self.ocr_min_text_chars,
-        )
+        document, parsing_meta = self._parse_routed(job.filename, content)
 
         # 规则引擎清洗：解析后的独立阶段，命中统计写入 manifest 保证可追溯
         rules_engine = load_rules(self.cleaning_rules_path)
@@ -166,6 +170,7 @@ class DocumentPipeline:
             "chunks": len(chunks),
             "warnings": document.warnings,
             "ocr": document.metadata.get("ocr"),
+            "parsing": parsing_meta,
             "cleaning": cleaning_report,
             "artifacts": keys,
             "processed_at": datetime.now(UTC).isoformat(),
@@ -181,6 +186,56 @@ class DocumentPipeline:
             self.vector_store.replace_doc(job.file_id, previous_items)
             raise
         return manifest
+
+    def _parse_routed(self, filename: str, content: bytes) -> tuple[ParsedDocument, dict[str, Any]]:
+        """三层解析路由：pdf-inspector 快路由 → MinerU 深度解析 → 本地管线兜底。
+
+        任何一层失败都向下降级并在 meta 留痕（进 manifest），保证文档处理
+        永不因可选解析器不可用而失败。仅 PDF 走路由，其余格式直达本地解析。
+        """
+        meta: dict[str, Any] = {"provider": "local"}
+        is_pdf = filename.lower().endswith(".pdf")
+
+        route = None
+        if is_pdf and self.pdf_router is not None:
+            try:
+                route = self.pdf_router.analyze(content)
+                meta["router"] = {"provider": self.pdf_router.name, **route.to_dict()}
+            except Exception as exc:  # 路由器故障不阻塞，直接走下层
+                meta["router_error"] = f"{type(exc).__name__}: {exc}"
+
+        # 第一层：文本型 PDF 本地快速提取（markdown 足够成文且无编码问题）
+        if route is not None and route.kind == "text_based" and not route.has_encoding_issues:
+            markdown = route.markdown or ""
+            if len(markdown.strip()) >= self.ocr_min_text_chars:
+                document = _parse_markdown(filename, markdown)
+                document.media_type = "application/pdf"
+                meta["provider"] = "pdf-inspector"
+                return document, meta
+
+        # 第二层：MinerU 深度解析（扫描/图片/混合/编码破损；路由器缺失时对全部 PDF 生效）
+        mineru_ready = (
+            is_pdf
+            and self.mineru_provider is not None
+            and self.mineru_provider.capability().available
+        )
+        if mineru_ready and (route is None or route.kind != "text_based" or route.has_encoding_issues):
+            try:
+                result = self.mineru_provider.parse_pdf(content, filename=filename)
+                document = document_from_mineru(filename, result)
+                meta.update(provider="mineru", backend=result.backend, duration_ms=result.duration_ms)
+                return document, meta
+            except (MinerUError, ValueError) as exc:
+                meta["fallback_reason"] = f"mineru: {exc}"
+
+        # 第三层：现有本地管线（pypdf 文本提取 + OCR 页级分流启发式）
+        document = parse_document(
+            filename,
+            content,
+            ocr_provider=self.ocr_provider,
+            ocr_min_text_chars=self.ocr_min_text_chars,
+        )
+        return document, meta
 
     def read_artifact(self, file_id: str, version_id: str, name: str) -> tuple[bytes, str]:
         keys = artifact_keys(file_id, version_id)
