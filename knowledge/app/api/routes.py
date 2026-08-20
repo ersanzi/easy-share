@@ -47,6 +47,8 @@ def health(request: Request) -> dict:
         "status": "ok",
         "embedder": type(services.embedder).__name__,
         "llm": "configured" if services.generator else "absent",
+        "auth": bool(services.config.auth_enabled),
+        "watch_dirs": len(services.watcher.directories) if services.watcher else 0,
         "ocr": services.ocr.capability().to_dict() if services.ocr else {"available": False, "provider": "unknown", "reason": "OCR 服务未配置"},
         "records": len(services.vector_store.records),
         "jobs": services.job_store.counts(),

@@ -23,6 +23,7 @@
 | 文档 | 用途 | 维护时机 |
 | --- | --- | --- |
 | [`product-vision.md`](product-vision.md) | 主线一：桌面文件产品 → 网络云盘与内网协同 | 产品边界或路线变化时 |
+| [`product-positioning.md`](product-positioning.md) | 知识平台定位与破局：市场判断、目标客群、发芽路线 | 定位假设变化或种子验证有新事实时 |
 | [`knowledge-platform.md`](knowledge-platform.md) | 主线二：企业知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
 | [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计 | 对标基线或优先级变化时 |
 | [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线与阶段门禁 | 技术路线或首选方案变化时 |

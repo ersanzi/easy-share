@@ -78,5 +78,15 @@ class Settings(BaseSettings):
     # 查询日志（支撑健康度仪表盘使用率与盲区分析）
     query_log_path: str = "./data/query_log.db"
 
+    # 薄控制面 2a：账号与登录（默认关闭；关闭时全部行为与现状一致）
+    auth_enabled: bool = False
+    auth_db_path: str = "./data/auth.db"
+    auth_token_expiry_hours: int = 168
+
+    # 目录监听自动入库（分号分隔目录，空=关闭；指向共享盘/钉盘同步夹即"文件沼泽一键变知识"）
+    watch_dirs: str = ""
+    watch_interval_seconds: int = 30
+    watch_stable_seconds: int = 5
+
 
 settings = Settings()

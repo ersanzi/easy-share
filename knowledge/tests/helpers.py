@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.auth.store import UserStore
 from app.config import Settings
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
@@ -42,8 +43,9 @@ def make_services(
     tmp_path: Path,
     storage: FakeStorage | None = None,
     ocr_provider: OCRProvider | None = None,
+    config_overrides: dict | None = None,
 ) -> AppServices:
-    config = Settings(
+    overrides = dict(
         _env_file=None,
         vector_store_path=str(tmp_path / "vectors.json"),
         job_store_path=str(tmp_path / "jobs.db"),
@@ -55,6 +57,9 @@ def make_services(
         max_source_bytes=1024 * 1024,
         job_workers=1,
     )
+    if config_overrides:
+        overrides.update(config_overrides)
+    config = Settings(**overrides)
     resolved_storage = storage or FakeStorage()
     resolved_ocr = ocr_provider or UnavailableOCRProvider("OCR 已在测试配置中关闭")
     embedder = HashEmbedder(config.embedding_dim)
@@ -73,6 +78,7 @@ def make_services(
         ocr_min_text_chars=config.ocr_min_text_chars,
     )
     runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
+    users = UserStore(str(tmp_path / "auth.db"), token_expiry_hours=1)
     return AppServices(
         config=config,
         storage=resolved_storage,
@@ -87,4 +93,5 @@ def make_services(
         pipeline=pipeline,
         job_runner=runner,
         ocr=resolved_ocr,
+        users=users,
     )

@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from app.config import Settings, settings
+from app.auth.store import UserStore
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.kb.bm25 import BM25Retriever
@@ -22,6 +23,7 @@ from app.rag.multi_hop import MultiHopRetriever, build_multi_hop_retriever
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
 from app.storage.rustfs import RustFSStorage
+from app.watcher.service import DirectoryWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +45,17 @@ class AppServices:
     ocr: OCRProvider | None = None
     mineru: MinerUProvider | None = None
     multi_hop: MultiHopRetriever | None = None
+    users: UserStore | None = None
+    watcher: DirectoryWatcher | None = None
 
     def start(self) -> None:
         self.job_runner.start()
+        if self.watcher is not None:
+            self.watcher.start()
 
     def close(self) -> None:
+        if self.watcher is not None:
+            self.watcher.stop()
         self.job_runner.shutdown()
         self.job_store.close()
 
@@ -86,6 +94,7 @@ def build_services(config: Settings = settings) -> AppServices:
     generator = build_generator(config)
     multi_hop = build_multi_hop_retriever(config, retriever, bm25, query_log=query_log)
     job_store = JobStore(config.job_store_path)
+    users = UserStore(config.auth_db_path, token_expiry_hours=config.auth_token_expiry_hours)
     pipeline = DocumentPipeline(
         storage=storage,
         embedder=embedder,
@@ -100,7 +109,7 @@ def build_services(config: Settings = settings) -> AppServices:
         pdf_router=pdf_router,
     )
     job_runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
-    return AppServices(
+    app_services = AppServices(
         config=config,
         storage=storage,
         embedder=embedder,
@@ -116,4 +125,13 @@ def build_services(config: Settings = settings) -> AppServices:
         ocr=ocr,
         mineru=mineru,
         multi_hop=multi_hop,
+        users=users,
     )
+    if config.watch_dirs:
+        # 监听器持 services 引用，须在容器组装完成后创建
+        app_services.watcher = DirectoryWatcher(
+            app_services,
+            interval_seconds=config.watch_interval_seconds,
+            stable_seconds=config.watch_stable_seconds,
+        )
+    return app_services

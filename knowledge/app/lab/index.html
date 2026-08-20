@@ -16,6 +16,14 @@
     <span>此页面用于验证上传、清洗和索引链路，不是 EasyShare 客户端功能，也不代表最终产品界面。</span>
   </div>
 
+  <div class="login-bar" id="login-bar" hidden>
+    <strong>登录知识库</strong>
+    <input id="login-user" placeholder="用户名" autocomplete="username" maxlength="64">
+    <input id="login-pass" type="password" placeholder="口令" autocomplete="current-password" maxlength="256">
+    <button class="primary-button login-button" id="login-button" type="button"><span>登录</span></button>
+    <span class="login-status" id="login-status" role="status" aria-live="polite"></span>
+  </div>
+
   <main class="shell">
     <header class="hero">
       <div>

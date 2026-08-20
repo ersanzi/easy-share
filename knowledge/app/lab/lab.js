@@ -26,6 +26,11 @@ const elements = {
   artifactSummary: $("#artifact-summary"),
   cockpitLink: $("#cockpit-link"),
   artifactViewer: $("#artifact-viewer code"),
+  loginBar: $("#login-bar"),
+  loginUser: $("#login-user"),
+  loginPass: $("#login-pass"),
+  loginButton: $("#login-button"),
+  loginStatus: $("#login-status"),
   askForm: $("#ask-form"),
   askInput: $("#ask-input"),
   askButton: $("#ask-button"),
@@ -45,6 +50,62 @@ const stageLabels = {
   completed: "处理完成", failed: "处理失败",
 };
 const state = { jobs: [], selectedId: null, artifact: "clean.md", uploading: false, asking: false };
+
+// ---------------------------------------------------------------------------
+// 登录态：令牌存 localStorage；AUTH_ENABLED=true 时业务请求携带 Bearer
+// ---------------------------------------------------------------------------
+const auth = {
+  token: localStorage.getItem("es_token") || "",
+  username: localStorage.getItem("es_username") || "",
+};
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (auth.token) headers.set("Authorization", `Bearer ${auth.token}`);
+  return fetch(url, { ...options, headers });
+}
+
+function showLoginBar(message = "") {
+  elements.loginBar.hidden = false;
+  elements.loginStatus.textContent = message;
+}
+
+function handleAuthFailure() {
+  auth.token = "";
+  auth.username = "";
+  localStorage.removeItem("es_token");
+  localStorage.removeItem("es_username");
+  showLoginBar("请登录后使用");
+}
+
+async function doLogin() {
+  const username = elements.loginUser.value.trim();
+  const password = elements.loginPass.value;
+  if (!username || !password) return;
+  elements.loginButton.disabled = true;
+  elements.loginStatus.textContent = "登录中…";
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!response.ok) throw new Error((await parseError(response)) || "登录失败");
+    const payload = await response.json();
+    auth.token = payload.token;
+    auth.username = payload.username;
+    localStorage.setItem("es_token", payload.token);
+    localStorage.setItem("es_username", payload.username);
+    elements.loginBar.hidden = true;
+    elements.loginStatus.textContent = "";
+    setFormMessage(`已登录：${payload.username}`, false);
+    await refreshJobs();
+  } catch (error) {
+    elements.loginStatus.textContent = error.message || "登录失败";
+  } finally {
+    elements.loginButton.disabled = false;
+  }
+}
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return "";
@@ -97,7 +158,8 @@ async function uploadFile(file) {
   const body = new FormData();
   body.append("file", file);
   try {
-    const response = await fetch("/lab/api/uploads", { method: "POST", body });
+    const response = await apiFetch("/lab/api/uploads", { method: "POST", body });
+    if (response.status === 401) { handleAuthFailure(); throw new Error("请先登录"); }
     if (!response.ok) throw new Error(await parseError(response));
     const job = await response.json();
     state.selectedId = job.id;
@@ -251,7 +313,8 @@ async function loadArtifact(name) {
   elements.artifactViewer.textContent = `正在读取 ${name}…`;
   try {
     const url = `/documents/${encodeURIComponent(selected.file_id)}/versions/${encodeURIComponent(selected.version_id)}/artifacts/${encodeURIComponent(name)}`;
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await apiFetch(url, { cache: "no-store" });
+    if (response.status === 401) { handleAuthFailure(); throw new Error("请先登录"); }
     if (!response.ok) throw new Error(await parseError(response));
     const text = await response.text();
     if (name.endsWith(".json")) {
@@ -316,7 +379,8 @@ async function loadAcceptance(job) {
   elements.cockpitLink.href = `/lab/cockpit?doc=${encodeURIComponent(job.file_id)}`;
   try {
     const url = `/documents/${encodeURIComponent(job.file_id)}/versions/${encodeURIComponent(job.version_id)}/artifacts/manifest.json`;
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await apiFetch(url, { cache: "no-store" });
+    if (response.status === 401) { handleAuthFailure(); return; }
     if (!response.ok) throw new Error(await parseError(response));
     renderAcceptanceSummary(await response.json());
   } catch (_) {
@@ -349,10 +413,12 @@ async function detectAskMode() {
     const response = await fetch("/health", { cache: "no-store" });
     if (!response.ok) throw new Error();
     const health = await response.json();
+    if (health.auth && !auth.token) showLoginBar("服务已开启登录");
+    const watched = health.watch_dirs ? ` · 监听 ${health.watch_dirs} 个目录` : "";
     if (health.llm === "configured") {
-      elements.askMode.textContent = `生成模式 · ${health.embedder} · ${health.records} 条索引`;
+      elements.askMode.textContent = `生成模式 · ${health.embedder} · ${health.records} 条索引${watched}`;
     } else {
-      elements.askMode.textContent = `纯检索模式（未配置 LLM）· ${health.records} 条索引`;
+      elements.askMode.textContent = `纯检索模式（未配置 LLM）· ${health.records} 条索引${watched}`;
     }
   } catch (_) {
     elements.askMode.textContent = "服务能力未知";
@@ -387,7 +453,9 @@ function createCitationItem(context, index) {
   if (context.file_id && context.version_id) {
     const link = document.createElement("a");
     link.className = "citation-link";
-    link.href = `/documents/${encodeURIComponent(context.file_id)}/versions/${encodeURIComponent(context.version_id)}/artifacts/clean.md`;
+    // GET 引用链接支持 ?token= 直开（Authorization 头无法用于新标签页）
+    const tokenQuery = auth.token ? `?token=${encodeURIComponent(auth.token)}` : "";
+    link.href = `/documents/${encodeURIComponent(context.file_id)}/versions/${encodeURIComponent(context.version_id)}/artifacts/clean.md${tokenQuery}`;
     link.target = "_blank";
     link.rel = "noopener";
     link.textContent = `查看 clean.md（${context.file_id} / ${context.version_id}）↗`;
@@ -403,11 +471,12 @@ async function askQuestion(question) {
   elements.askButton.querySelector("span:first-child").textContent = "检索与生成中…";
   setAskMessage("正在检索知识库…", false);
   try {
-    const response = await fetch("/query", {
+    const response = await apiFetch("/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, top_k: 5 }),
     });
+    if (response.status === 401) { handleAuthFailure(); throw new Error("请先登录"); }
     if (!response.ok) throw new Error(await parseError(response));
     const payload = await response.json();
     elements.askAnswerText.textContent = payload.answer || "（无回答）";
@@ -446,6 +515,8 @@ elements.dropZone.addEventListener("drop", (event) => {
 });
 elements.refreshButton.addEventListener("click", refreshJobs);
 elements.retryButton.addEventListener("click", retrySelected);
+elements.loginButton.addEventListener("click", doLogin);
+elements.loginPass.addEventListener("keydown", (event) => { if (event.key === "Enter") doLogin(); });
 $$(".artifact-tab").forEach((tab) => tab.addEventListener("click", () => loadArtifact(tab.dataset.artifact)));
 elements.askInput.addEventListener("input", () => {
   elements.askButton.disabled = state.asking || !elements.askInput.value.trim();

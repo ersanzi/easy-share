@@ -34,6 +34,13 @@ button { color: inherit; }
 }
 .boundary-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 4px rgba(230,162,60,.16); }
 
+.login-bar { position: sticky; top: 42px; z-index: 19; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; min-height: 44px; padding: 8px 24px; background: #eef4ff; border-bottom: 1px solid #c9d9f6; font-size: 13px; }
+.login-bar strong { color: var(--ink); }
+.login-bar input { padding: 8px 11px; border: 1px solid #cfd8e6; border-radius: 9px; font-size: 13px; width: 150px; background: #fff; }
+.login-bar input:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px rgba(53,106,230,.12); }
+.login-button { padding: 9px 16px; }
+.login-status { color: var(--muted); font-size: 12px; }
+
 .shell { width: min(1480px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0 32px; }
 .hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 48px; align-items: end; margin-bottom: 42px; }
 .eyebrow, .panel-index { margin: 0 0 10px; color: var(--blue); font: 700 11px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .14em; }
