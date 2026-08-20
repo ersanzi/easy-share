@@ -207,7 +207,7 @@ desktop eventStream (Go 协程，指数退避重连)
 `knowledge/` 是 Python FastAPI 服务，独立于 Go 双进程运行（架构与运行说明见 [`../knowledge/README.md`](../knowledge/README.md)，方向见 [`knowledge-platform.md`](knowledge-platform.md)）：
 
 - 文档解析管线：TXT/Markdown/DOCX/PDF/XLSX/PPTX 与 PNG/JPEG/BMP/TIFF 统一解析（含 Office OLE/OOXML 真实格式预检、可选 PaddleOCR 页级识别）→ 结构化清洗 → Markdown 渲染 → 结构感知切块（标题边界 + 层级上下文 + 表格完整性）→ 版本化索引；PDF 走三层解析路由（pdf-inspector 快路由 → MinerU 深度解析 → 本地管线兜底，全部默认关闭、逐级回退，manifest `parsing` 字段留痕）
-- 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维），未配置时退回 HashEmbedder（仅跑通流程）；向量库支持 Milvus Standalone（docker-compose 部署，IVF_FLAT + COSINE）或 JSON 文件存储（开发/测试），由 `MILVUS_URI` 配置切换
+- 向量检索：阿里云百炼 DashScope qwen3.7-text-embedding（1024 维），未配置时退回 HashEmbedder（仅跑通流程），供应商故障时自动降级 BM25；向量库支持 Milvus Standalone（docker-compose 部署，IVF_FLAT + COSINE）或 JSON 文件存储（开发/测试），由 `MILVUS_URI` 配置切换
 - LLM 生成：SenseNova deepseek-v4-flash（推理模型），未配置时 /query 降级为纯检索；chunk 携带入库时间（`ingested_at`），prompt 注入文档时间并指示优先依据较新文档、对可能过时的内容提示时效
 - OCR 能力：`/health` 声明 provider/availability/reason/formats；manifest 记录 OCR 页、失败页、低置信度块和耗时；`/query` contexts 返回块 ID、来源位置、提取方式和入库时间
 - 检索质量评测：`tests/retrieval/` 标注集 + recall@5 / MRR 基线进入 pytest 回归

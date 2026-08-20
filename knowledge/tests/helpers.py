@@ -59,7 +59,7 @@ def make_services(
     resolved_ocr = ocr_provider or UnavailableOCRProvider("OCR 已在测试配置中关闭")
     embedder = HashEmbedder(config.embedding_dim)
     vector_store = VectorStore(config.vector_store_path)
-    retriever = Retriever(embedder, vector_store)
+    retriever = Retriever(embedder, vector_store, bm25=BM25Retriever())
     job_store = JobStore(config.job_store_path)
     pipeline = DocumentPipeline(
         storage=resolved_storage,

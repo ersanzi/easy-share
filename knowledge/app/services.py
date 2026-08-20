@@ -82,7 +82,7 @@ def build_services(config: Settings = settings) -> AppServices:
     bm25 = BM25Retriever()
     query_log = QueryLog(config.query_log_path)
     reranker = build_reranker(config)
-    retriever = Retriever(embedder, vector_store)
+    retriever = Retriever(embedder, vector_store, bm25=bm25)
     generator = build_generator(config)
     multi_hop = build_multi_hop_retriever(config, retriever, bm25, query_log=query_log)
     job_store = JobStore(config.job_store_path)
