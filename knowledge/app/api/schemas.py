@@ -32,6 +32,7 @@ class QueryRequest(BaseModel):
 class SourceRef(BaseModel):
     doc_id: str | None = None
     score: float | None = None
+    ingested_at: str | None = None
 
 
 class RetrievedChunk(BaseModel):
@@ -40,6 +41,7 @@ class RetrievedChunk(BaseModel):
     version_id: str | None = None
     filename: str | None = None
     score: float | None = None
+    ingested_at: str | None = None
     text: str
     block_ids: list[str] = Field(default_factory=list)
     source_locations: list[dict[str, Any]] = Field(default_factory=list)

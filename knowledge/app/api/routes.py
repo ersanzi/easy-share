@@ -193,6 +193,7 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
             version_id=context.get("version_id"),
             filename=(context.get("metadata") or {}).get("filename"),
             score=context.get("score"),
+            ingested_at=(context.get("metadata") or {}).get("ingested_at"),
             text=context["text"],
             block_ids=(context.get("metadata") or {}).get("block_ids", []),
             source_locations=(context.get("metadata") or {}).get("source_locations", []),

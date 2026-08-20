@@ -74,6 +74,8 @@ class DocumentPipeline:
             return self._document_locks.setdefault(file_id, threading.Lock())
 
     def _process_locked(self, job: ProcessingJob, report: ProgressReporter) -> dict:
+        # 入库时间：chunk metadata 与 manifest 使用同一时间戳，保证检索侧与产物侧一致
+        processed_at = datetime.now(UTC).isoformat()
         report("downloading", 10)
         content = self.storage.read(job.object_key, max_bytes=self.max_source_bytes)
         source_sha256 = hashlib.sha256(content).hexdigest()
@@ -143,6 +145,7 @@ class DocumentPipeline:
                     "filename": job.filename,
                     "object_key": job.object_key,
                     "pipeline_version": PIPELINE_VERSION,
+                    "ingested_at": processed_at,
                     **chunk.metadata(),
                 },
                 "embedding": embedding,
@@ -173,7 +176,7 @@ class DocumentPipeline:
             "parsing": parsing_meta,
             "cleaning": cleaning_report,
             "artifacts": keys,
-            "processed_at": datetime.now(UTC).isoformat(),
+            "processed_at": processed_at,
         }
         report("finalizing", 97)
         try:
