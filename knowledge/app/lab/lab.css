@@ -139,6 +139,14 @@ h2 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
 .citation-text { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .citation-link { display: inline-block; margin-top: 9px; color: var(--blue); font: 650 11px/1 ui-monospace, Consolas, monospace; text-decoration: none; }
 .citation-link:hover, .citation-link:focus-visible { text-decoration: underline; outline: none; }
+.citation-time { color: var(--muted); font: 650 10px/1 ui-monospace, Consolas, monospace; white-space: nowrap; }
+
+.artifact-heading-actions { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cockpit-link { padding: 8px 11px; border: 1px solid var(--line); border-radius: 999px; color: var(--blue); font: 650 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .05em; text-decoration: none; white-space: nowrap; }
+.cockpit-link:hover, .cockpit-link:focus-visible { border-color: var(--blue); outline: none; }
+.artifact-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.summary-chip { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; font: 650 11px/1 ui-monospace, Consolas, monospace; }
+.summary-chip em { color: var(--muted); font-style: normal; font-size: 10px; letter-spacing: .05em; }
 
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 26px 4px 0; color: #8a93a3; font: 10px/1.4 ui-monospace, Consolas, monospace; }
 

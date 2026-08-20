@@ -450,4 +450,13 @@ $("#btn-health").addEventListener("click", loadHealth);
 // ---------------------------------------------------------------------------
 // 初始化
 // ---------------------------------------------------------------------------
-loadDocuments();
+loadDocuments().then(() => {
+  // 支持 ?doc=<file_id> 预选（/lab 验收摘要的"驾驶舱透视"入口使用）
+  const doc = new URLSearchParams(location.search).get("doc");
+  if (!doc) return;
+  const select = $("#doc-select");
+  if (Array.from(select.options).some((option) => option.value === doc)) {
+    select.value = doc;
+    inspectDocument(doc);
+  }
+});

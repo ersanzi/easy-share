@@ -23,6 +23,8 @@ const elements = {
   refreshButton: $("#refresh-button"),
   jobList: $("#job-list"),
   artifactContext: $("#artifact-context"),
+  artifactSummary: $("#artifact-summary"),
+  cockpitLink: $("#cockpit-link"),
   artifactViewer: $("#artifact-viewer code"),
   askForm: $("#ask-form"),
   askInput: $("#ask-input"),
@@ -212,7 +214,7 @@ async function refreshJobs() {
     renderJobs();
     const selected = state.jobs.find((job) => job.id === state.selectedId);
     if (selected?.status === "completed" && elements.artifactViewer.dataset.jobId !== selected.id) {
-      await loadArtifact(state.artifact);
+      await Promise.all([loadArtifact(state.artifact), loadAcceptance(selected)]);
     }
   } catch (error) {
     elements.jobList.replaceChildren();
@@ -227,11 +229,13 @@ async function selectJob(jobId) {
   state.selectedId = jobId;
   renderJobs();
   const selected = state.jobs.find((job) => job.id === jobId);
-  if (selected?.status === "completed") await loadArtifact(state.artifact);
-  else {
+  if (selected?.status === "completed") {
+    await Promise.all([loadArtifact(state.artifact), loadAcceptance(selected)]);
+  } else {
     elements.artifactContext.textContent = selected ? "任务尚未完成" : "选择已完成任务";
     elements.artifactViewer.textContent = "派生产物将在任务完成后可用。";
     delete elements.artifactViewer.dataset.jobId;
+    renderAcceptanceSummary(null);
   }
 }
 
@@ -260,6 +264,63 @@ async function loadArtifact(name) {
     elements.artifactContext.textContent = `${selected.file_id} / ${selected.version_id}`;
   } catch (error) {
     elements.artifactViewer.textContent = `读取失败：${error.message}`;
+  }
+}
+
+function parserLabel(parsing) {
+  if (!parsing || typeof parsing !== "object") return null;
+  let label;
+  if (parsing.provider === "pdf-inspector") label = "pdf-inspector 本地";
+  else if (parsing.provider === "mineru") label = `MinerU（${parsing.backend || "pipeline"}）`;
+  else label = "本地管线";
+  if (parsing.fallback_reason) label += " · 有回退";
+  return label;
+}
+
+function renderAcceptanceSummary(manifest) {
+  const box = elements.artifactSummary;
+  if (!manifest) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  const chips = [];
+  const parser = parserLabel(manifest.parsing);
+  if (parser) chips.push(["解析器", parser]);
+  chips.push(["入库时间", formatTime(manifest.processed_at)]);
+  if (Number.isFinite(manifest.blocks)) chips.push(["结构块", `${manifest.blocks}`]);
+  if (Number.isFinite(manifest.chunks)) chips.push(["切块", `${manifest.chunks}`]);
+  if (Number.isFinite(manifest.characters)) chips.push(["字符", manifest.characters.toLocaleString("zh-CN")]);
+  if (Array.isArray(manifest.warnings) && manifest.warnings.length) chips.push(["警告", `${manifest.warnings.length} 条`]);
+
+  box.replaceChildren(...chips.map(([label, value]) => {
+    const chip = document.createElement("span");
+    chip.className = "summary-chip";
+    const key = document.createElement("em");
+    key.textContent = label;
+    const val = document.createElement("strong");
+    val.textContent = value;
+    chip.append(key, val);
+    return chip;
+  }));
+  box.hidden = false;
+}
+
+async function loadAcceptance(job) {
+  if (!job || job.status !== "completed") {
+    renderAcceptanceSummary(null);
+    elements.cockpitLink.hidden = true;
+    return;
+  }
+  elements.cockpitLink.hidden = false;
+  elements.cockpitLink.href = `/lab/cockpit?doc=${encodeURIComponent(job.file_id)}`;
+  try {
+    const url = `/documents/${encodeURIComponent(job.file_id)}/versions/${encodeURIComponent(job.version_id)}/artifacts/manifest.json`;
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(await parseError(response));
+    renderAcceptanceSummary(await response.json());
+  } catch (_) {
+    renderAcceptanceSummary(null);
   }
 }
 
@@ -310,6 +371,13 @@ function createCitationItem(context, index) {
   score.className = "citation-score";
   score.textContent = Number.isFinite(context.score) ? `score ${context.score.toFixed(3)}` : "";
   head.append(label, score);
+  if (context.ingested_at) {
+    const when = document.createElement("span");
+    when.className = "citation-time";
+    when.title = "文档入库时间（判断内容新旧）";
+    when.textContent = `文档时间 ${formatTime(context.ingested_at)}`;
+    head.append(when);
+  }
 
   const text = document.createElement("p");
   text.className = "citation-text";
