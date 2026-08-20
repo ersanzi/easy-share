@@ -171,7 +171,37 @@ GET  /lab/api/jobs?limit=20
 - PPTX 必须包含 `ppt/presentation.xml`。
 
 遇到格式不一致时，请用 Word/WPS 打开原文件并通过“另存为”生成真正的 `.docx/.xlsx/.pptx`；只重命名扩展名不会转换格式。
+
+## MCP Server
+
+知识库可暴露为 [Model Context Protocol](https://modelcontextprotocol.io) 服务，供 Claude Code、Cursor、内部 OA 助手等任何 AI 工具直接检索企业知识（stdio 薄桥，转发到本服务的 `/query` 与 `/health`，业务逻辑零复制）。
+
+```powershell
+pip install mcp   # 可选依赖
+cd knowledge
+python -m app.mcp_server
+# 环境变量 KNOWLEDGE_BASE_URL 可覆盖服务地址（默认 http://127.0.0.1:8000）
+```
+
+工具集：`knowledge_query`（检索 + 生成，返回答案与引用来源，含文档时间可判断新旧）、`knowledge_health`（索引规模与模型配置状态）。客户端配置示例（Claude Code / Cursor 等，按各工具的 MCP 配置格式填入）：
+
+```json
+{
+  "mcpServers": {
+    "easyshare-knowledge": {
+      "command": "E:/myProgrom/有趣项目/easyShare/knowledge/.venv/Scripts/python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "E:/myProgrom/有趣项目/easyShare/knowledge"
+    }
+  }
+}
+```
+
+> 注意：部分客户端拉起子进程时不透传父进程环境变量，需要显式在服务器配置的 `env` 里写 `KNOWLEDGE_BASE_URL`。
+
 ## 快速开始
+
+> 面向公司内部部署（非开发者）请直接看 [`../docs/company-rollout-guide.md`](../docs/company-rollout-guide.md)（含 30 分钟部署流程与同事使用一页纸）。
 
 ```powershell
 cd knowledge
@@ -182,7 +212,13 @@ pip install -r requirements.txt
 pip install -r requirements-ocr.txt
 Copy-Item .env.example .env
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+# 或用启动脚本（公司部署）：powershell -File scripts\start_server.ps1；开机自启：scripts\install_autostart.ps1
 ```
+
+多人与共享盘（公司使用要点，详见部署手册）：
+
+- `AUTH_ENABLED=true` 开启账号登录（首管理员 `/auth/bootstrap`，之后管理员建同事账号）；/lab 内置登录条。
+- `WATCH_DIRS=D:\共享盘\知识库入库` 开启目录监听自动入库：新文件/改动自动入知识库，同内容不重复入库，失败自动重试。
 
 Swagger：`http://127.0.0.1:8000/docs`
 
