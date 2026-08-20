@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     retrieval_top_k: int = 5
 
+    # Agent 多跳检索（需配置 LLM 做充分性裁判；预算控制防多跳上下文雪崩）
+    multi_hop_max_hops: int = 3
+    multi_hop_hop_top_k: int = 5
+    multi_hop_max_contexts: int = 10
+    multi_hop_max_chars: int = 12000
+
     # 清洗规则引擎：JSON 规则集路径（不存在则用内置默认；里程碑 2 起由 Java 下发同一 schema）
     cleaning_rules_path: str = "./data/cleaning_rules.json"
 

@@ -203,7 +203,7 @@ async function doSearch() {
     const resp = await fetch("/debug/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid", "reranked"] }),
+      body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid", "reranked", "multi_hop"] }),
     });
     const data = await resp.json();
     renderMultiStrategy(data, question);
@@ -231,9 +231,19 @@ function renderMultiStrategy(data, question) {
     <div class="strategy-columns">
       ${keys.map((key) => {
         const s = strategies[key];
+        const hopsStrip = (s.hops && s.hops.length)
+          ? `<div class="hops-strip">${s.hops.map((h) => `
+              <div class="hop-item ${h.converged ? "is-converged" : ""}" title="${escapeHtml(h.query)}">
+                <span class="hop-no">第${h.hop}跳</span>
+                <span class="hop-query">${escapeHtml(h.query.length > 24 ? h.query.slice(0, 24) + "…" : h.query)}</span>
+                <span class="hop-count">${h.result_count} 条</span>
+              </div>
+            `).join("")}</div>`
+          : "";
         return `
         <div class="strategy-col">
           <div class="strategy-header">${s.label} <span class="strategy-count">${s.result_count} 条</span></div>
+          ${s.available === false ? '<div class="empty-state" style="padding:12px">未配置 LLM，多跳不可用</div>' : hopsStrip}
           <div class="strategy-results">
             ${s.results.map((r) => `
               <div class="result-card compact">
@@ -245,7 +255,7 @@ function renderMultiStrategy(data, question) {
                 <div class="result-text">${highlightKeywords(escapeHtml(r.text.slice(0, 150)), keywords)}${r.text.length > 150 ? "…" : ""}</div>
               </div>
             `).join("")}
-            ${s.results.length === 0 ? '<div class="empty-state" style="padding:20px">无结果</div>' : ""}
+            ${s.results.length === 0 && s.available !== false ? '<div class="empty-state" style="padding:20px">无结果</div>' : ""}
           </div>
         </div>`;
       }).join("")}

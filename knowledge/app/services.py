@@ -18,6 +18,7 @@ from app.parsing.mineru import build_mineru_provider
 from app.parsing.mineru.base import MinerUProvider
 from app.parsing.pdf_router import build_pdf_router
 from app.rag.generator import Generator, build_generator
+from app.rag.multi_hop import MultiHopRetriever, build_multi_hop_retriever
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
 from app.storage.rustfs import RustFSStorage
@@ -41,6 +42,7 @@ class AppServices:
     job_runner: JobRunner
     ocr: OCRProvider | None = None
     mineru: MinerUProvider | None = None
+    multi_hop: MultiHopRetriever | None = None
 
     def start(self) -> None:
         self.job_runner.start()
@@ -82,6 +84,7 @@ def build_services(config: Settings = settings) -> AppServices:
     reranker = build_reranker(config)
     retriever = Retriever(embedder, vector_store)
     generator = build_generator(config)
+    multi_hop = build_multi_hop_retriever(config, retriever, bm25, query_log=query_log)
     job_store = JobStore(config.job_store_path)
     pipeline = DocumentPipeline(
         storage=storage,
@@ -112,4 +115,5 @@ def build_services(config: Settings = settings) -> AppServices:
         job_runner=job_runner,
         ocr=ocr,
         mineru=mineru,
+        multi_hop=multi_hop,
     )

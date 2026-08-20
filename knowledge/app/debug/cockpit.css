@@ -374,3 +374,11 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   font-weight: 500;
 }
 .health-badge.warn { background: var(--red-bg); color: var(--red); }
+
+/* Agent 多跳：轮次可视化 */
+.hops-strip { display: grid; gap: 6px; margin: 8px 0; }
+.hop-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border: 1px dashed var(--border); border-radius: 8px; font-size: 11px; color: var(--muted); }
+.hop-item.is-converged { border-style: solid; color: var(--ink); }
+.hop-no { flex-shrink: 0; font-weight: 650; }
+.hop-query { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hop-count { flex-shrink: 0; }

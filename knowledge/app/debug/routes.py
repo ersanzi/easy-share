@@ -143,6 +143,9 @@ def _ensure_bm25_index(services: AppServices) -> None:
         services.bm25.rebuild(records)
 
 
+from app.kb.fusion import hybrid_fusion
+
+
 def _format_results(results: list[dict]) -> list[dict]:
     """统一格式化检索结果。"""
     detailed = []
@@ -162,37 +165,6 @@ def _format_results(results: list[dict]) -> list[dict]:
             "extraction_methods": meta.get("extraction_methods", []),
         })
     return detailed
-
-
-def _hybrid_fusion(
-    vector_results: list[dict],
-    bm25_results: list[dict],
-    top_k: int,
-    alpha: float = 0.6,
-) -> list[dict]:
-    """RRF（Reciprocal Rank Fusion）混合排序。alpha 为向量权重。"""
-    k = 60  # RRF 常数
-    scores: dict[str, float] = {}
-    records_map: dict[str, dict] = {}
-
-    for rank, record in enumerate(vector_results, start=1):
-        rid = record.get("id", "")
-        scores[rid] = scores.get(rid, 0.0) + alpha / (k + rank)
-        records_map[rid] = record
-
-    for rank, record in enumerate(bm25_results, start=1):
-        rid = record.get("id", "")
-        scores[rid] = scores.get(rid, 0.0) + (1 - alpha) / (k + rank)
-        if rid not in records_map:
-            records_map[rid] = record
-
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-    results = []
-    for rid, score in ranked:
-        record = dict(records_map[rid])
-        record["score"] = round(score, 6)
-        results.append(record)
-    return results
 
 
 @router.post("/query")
@@ -239,7 +211,7 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
         }
 
     if "hybrid" in strategies:
-        hybrid_results = _hybrid_fusion(vector_results, bm25_results, body.top_k)
+        hybrid_results = hybrid_fusion(vector_results, bm25_results, body.top_k)
         response["strategies"]["hybrid"] = {
             "label": "混合检索（RRF 融合）",
             "result_count": len(hybrid_results),
@@ -248,7 +220,7 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
 
     if "reranked" in strategies:
         # 取混合结果（扩大范围）后用 Reranker 精排
-        pool = _hybrid_fusion(vector_results, bm25_results, body.top_k * 3)
+        pool = hybrid_fusion(vector_results, bm25_results, body.top_k * 3)
         if pool:
             documents = [r.get("text", "") for r in pool]
             rerank_scores = await run_in_threadpool(
@@ -269,6 +241,30 @@ async def debug_query(body: DebugQueryRequest, request: Request) -> dict:
                 "label": "混合 + Reranker 精排",
                 "result_count": 0,
                 "results": [],
+            }
+
+    # Agent 多跳：分轮检索 + LLM 充分性裁判（需配置 LLM；BM25 索引同上懒加载）
+    if "multi_hop" in strategies:
+        if services.multi_hop is None:
+            response["strategies"]["multi_hop"] = {
+                "label": "Agent 多跳（未配置 LLM）",
+                "available": False,
+                "result_count": 0,
+                "results": [],
+                "hops": [],
+            }
+        else:
+            await run_in_threadpool(_ensure_bm25_index, services)
+            multi_hop_result = await run_in_threadpool(
+                services.multi_hop.retrieve, body.question, body.doc_ids
+            )
+            response["strategies"]["multi_hop"] = {
+                "label": "Agent 多跳（分轮混合检索）",
+                "available": True,
+                "result_count": len(multi_hop_result.contexts),
+                "results": _format_results(multi_hop_result.contexts),
+                "hops": [hop.to_dict() for hop in multi_hop_result.hops],
+                "total_candidates": multi_hop_result.total_candidates,
             }
 
     # 记录查询日志（取混合或向量策略的结果）
