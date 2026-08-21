@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EasyShare 知识</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      font-size: 13px; color: #1f1f24; background: #f7f7f8;
+      padding: 12px; line-height: 1.6;
+    }
+    h1 { font-size: 15px; margin-bottom: 4px; }
+    .muted { color: #6e6e73; font-size: 11px; }
+    .card { background: #fff; border: 1px solid rgba(60,60,67,.12); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    label { display: block; font-size: 12px; margin: 8px 0 3px; color: #3a3a3c; }
+    input {
+      width: 100%; height: 32px; padding: 0 10px; font-size: 13px;
+      border: 1px solid rgba(60,60,67,.2); border-radius: 8px; outline: none;
+    }
+    input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,.15); }
+    button {
+      height: 32px; padding: 0 14px; font-size: 13px; cursor: pointer;
+      color: #fff; background: linear-gradient(#1689fa,#0878e8);
+      border: 1px solid #006bd3; border-radius: 8px;
+    }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    button.secondary {
+      color: #3a3a3c; background: #fff; border: 1px solid rgba(60,60,67,.2);
+    }
+    .btn-block { width: 100%; margin-top: 12px; height: 36px; }
+    .error { color: #a7241e; background: #fff3f2; border: 1px solid rgba(255,59,48,.2); border-radius: 8px; padding: 8px 10px; margin: 8px 0; font-size: 12px; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    textarea {
+      width: 100%; height: 72px; padding: 8px 10px; font-size: 13px; resize: vertical;
+      border: 1px solid rgba(60,60,67,.2); border-radius: 8px; outline: none; font-family: inherit;
+    }
+    textarea:focus { border-color: #007aff; }
+    .answer { white-space: pre-wrap; word-break: break-word; }
+    .sources { margin-top: 10px; font-size: 11px; color: #6e6e73; }
+    .sources summary { cursor: pointer; color: #007aff; margin-bottom: 6px; }
+    .sources ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .sources li { background: rgba(120,120,128,.05); border-radius: 6px; padding: 7px 9px; }
+    .src-head { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+    .src-head strong { color: #1f1f24; font-size: 11px; }
+    .src-score { color: #007aff; font-size: 10px; }
+    .src-date { font-size: 10px; margin-left: auto; }
+    .src-text { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+    .loading { color: #6e6e73; font-size: 12px; }
+    .spinner {
+      display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px;
+      border: 2px solid rgba(0,122,255,.2); border-top-color: #007aff; border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .ask-row { display: flex; gap: 8px; margin-top: 8px; }
+    .ask-row textarea { flex: 1; }
+    .ask-row button { height: auto; min-height: 36px; }
+    .pick-btn { width: 100%; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <!-- 登录视图 -->
+  <div id="loginView" style="display:none">
+    <div class="card">
+      <h1>EasyShare 知识</h1>
+      <p class="muted" id="serverHint"></p>
+      <label for="username">账号</label>
+      <input id="username" type="text" autocomplete="username" placeholder="你的账号">
+      <label for="password">密码</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="你的密码">
+      <div id="loginError" class="error" style="display:none"></div>
+      <button id="loginBtn" class="btn-block" type="button">登录</button>
+    </div>
+  </div>
+
+  <!-- 问答视图 -->
+  <div id="mainView" style="display:none">
+    <div class="toolbar">
+      <div>
+        <strong id="whoami"></strong>
+        <div class="muted" id="serverHint2"></div>
+      </div>
+      <button id="logoutBtn" class="secondary" type="button" style="height:26px;font-size:11px">退出</button>
+    </div>
+
+    <button id="pickBtn" class="pick-btn" type="button">读取选中段落 ↓</button>
+    <textarea id="question" placeholder="点上方按钮取选中文字，或直接输入问题"></textarea>
+    <div class="ask-row">
+      <button id="askBtn" type="button">查知识</button>
+    </div>
+    <div id="askError" class="error" style="display:none"></div>
+    <div id="result" class="card" style="display:none">
+      <div id="answerText" class="answer"></div>
+      <details id="sourcesBox" class="sources" style="display:none">
+        <summary id="sourcesSummary">引用来源</summary>
+        <ul id="sourcesList"></ul>
+      </details>
+    </div>
+  </div>
+
+<script>
+  // ---- 状态与工具（ES5：兼容老版 WPS 内嵌浏览器，不用 fetch/箭头函数/模板串） ----
+  var TOKEN_KEY = 'es_wps_token'
+  var USER_KEY = 'es_wps_user'
+
+  function $(id) { return document.getElementById(id) }
+  function getToken() { try { return window.localStorage.getItem(TOKEN_KEY) || '' } catch (e) { return '' } }
+  function setSession(token, username) {
+    try {
+      window.localStorage.setItem(TOKEN_KEY, token)
+      window.localStorage.setItem(USER_KEY, username)
+    } catch (e) {}
+  }
+  function clearSession() {
+    try {
+      window.localStorage.removeItem(TOKEN_KEY)
+      window.localStorage.removeItem(USER_KEY)
+    } catch (e) {}
+  }
+  function getSavedUser() { try { return window.localStorage.getItem(USER_KEY) || '' } catch (e) { return '' } }
+
+  function postJSON(path, body, token, onDone) {
+    var xhr = new XMLHttpRequest()
+    xhr.open('POST', path, true)
+    xhr.setRequestHeader('Content-Type', 'application/json')
+    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token)
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return
+      var payload = null
+      try { payload = JSON.parse(xhr.responseText) } catch (e) {}
+      onDone(xhr.status, payload)
+    }
+    xhr.send(JSON.stringify(body))
+  }
+
+  function showError(id, message) {
+    var el = $(id)
+    if (!message) { el.style.display = 'none'; return }
+    el.textContent = message
+    el.style.display = ''
+  }
+
+  // ---- 读取 WPS 文字选区：任务窗格内可能通过 window.Application 或 wps.WpsApplication() 访问 ----
+  function getSelectionText() {
+    try {
+      var app = null
+      if (window.Application) app = window.Application
+      else if (window.wps && window.wps.WpsApplication) app = window.wps.WpsApplication()
+      if (app && app.Selection && typeof app.Selection.Text === 'string') {
+        // WPS 文字段落分隔符是 \r，统一为换行并压缩空白
+        var text = app.Selection.Text.replace(/\r/g, '\n').replace(/[ \t\u3000]+/g, ' ')
+        return trim(text)
+      }
+    } catch (e) {}
+    return ''
+  }
+
+  function trim(text) {
+    return text.replace(/^\s+|\s+$/g, '')
+  }
+
+  // ---- 视图切换 ----
+  function showLogin() {
+    $('loginView').style.display = ''
+    $('mainView').style.display = 'none'
+    $('serverHint').textContent = '服务器：' + location.origin
+  }
+
+  function showMain() {
+    $('loginView').style.display = 'none'
+    $('mainView').style.display = ''
+    $('whoami').textContent = getSavedUser() || '已登录'
+    $('serverHint2').textContent = location.origin
+  }
+
+  // ---- 登录 ----
+  function doLogin() {
+    var username = trim($('username').value)
+    var password = $('password').value
+    if (!username || !password) { showError('loginError', '请填写账号与密码'); return }
+    $('loginBtn').disabled = true
+    showError('loginError', '')
+    postJSON('/auth/login', { username: username, password: password }, '', function (status, payload) {
+      $('loginBtn').disabled = false
+      if (status === 200 && payload && payload.token) {
+        setSession(payload.token, payload.username || username)
+        showMain()
+      } else {
+        showError('loginError', (payload && payload.detail) ? payload.detail : ('登录失败（' + status + '）'))
+      }
+    })
+  }
+
+  function doLogout() {
+    clearSession()
+    showLogin()
+  }
+
+  // ---- 读取选区 → 填入输入框 ----
+  function pickSelection() {
+    var text = getSelectionText()
+    if (!text) {
+      $('question').value = ''
+      $('question').placeholder = '没有读到选中文字，请直接输入问题（或先在文档中选中段落再点此按钮）'
+      return
+    }
+    if (text.length > 800) text = text.slice(0, 800)
+    $('question').value = text
+  }
+
+  // ---- 提问 ----
+  function doAsk() {
+    var question = trim($('question').value)
+    if (!question) { showError('askError', '请先输入或选取要查询的内容'); return }
+    showError('askError', '')
+    $('result').style.display = ''
+    $('answerText').innerHTML = '<span class="spinner"></span><span class="loading">正在检索知识库…</span>'
+    $('sourcesBox').style.display = 'none'
+    $('askBtn').disabled = true
+    postJSON('/query', { question: question }, getToken(), function (status, payload) {
+      $('askBtn').disabled = false
+      if (status === 401) {
+        clearSession()
+        showLogin()
+        showError('loginError', '登录已失效，请重新登录')
+        return
+      }
+      if (status !== 200 || !payload) {
+        $('result').style.display = 'none'
+        showError('askError', (payload && payload.detail) ? payload.detail : ('查询失败（' + status + '），请检查服务与网络'))
+        return
+      }
+      $('answerText').textContent = payload.answer || '（无回答）'
+      renderSources(payload.contexts || [])
+    })
+  }
+
+  function renderSources(contexts) {
+    var list = $('sourcesList')
+    list.innerHTML = ''
+    if (!contexts.length) { $('sourcesBox').style.display = 'none'; return }
+    for (var i = 0; i < contexts.length; i++) {
+      var c = contexts[i]
+      var li = document.createElement('li')
+      var head = document.createElement('div')
+      head.className = 'src-head'
+      var name = document.createElement('strong')
+      name.textContent = (c.filename || c.doc_id || ('片段 ' + (i + 1)))
+      head.appendChild(name)
+      if (typeof c.score === 'number') {
+        var score = document.createElement('span')
+        score.className = 'src-score'
+        score.textContent = Math.round(c.score * 100) + '%'
+        head.appendChild(score)
+      }
+      if (c.ingested_at) {
+        var date = document.createElement('span')
+        date.className = 'src-date'
+        date.textContent = String(c.ingested_at).replace('T', ' ').slice(0, 16)
+        head.appendChild(date)
+      }
+      li.appendChild(head)
+      if (c.text) {
+        var snippet = document.createElement('p')
+        snippet.className = 'src-text'
+        var text = c.text
+        snippet.textContent = text.length > 140 ? text.slice(0, 140) + '…' : text
+        li.appendChild(snippet)
+      }
+      list.appendChild(li)
+    }
+    $('sourcesSummary').textContent = '引用 ' + contexts.length + ' 条来源'
+    $('sourcesBox').style.display = ''
+    $('sourcesBox').open = false
+  }
+
+  // ---- 事件绑定与初始化 ----
+  $('loginBtn').onclick = doLogin
+  $('password').onkeydown = function (e) { if (e.keyCode === 13) doLogin() }
+  $('logoutBtn').onclick = doLogout
+  $('pickBtn').onclick = pickSelection
+  $('askBtn').onclick = doAsk
+  $('question').onkeydown = function (e) { if (e.keyCode === 13 && (e.ctrlKey || e.metaKey)) doAsk() }
+
+  // 免登录模式（服务端 AUTH_ENABLED=false，如本地演示）：直接进入问答视图
+  function initByAuthMode() {
+    var xhr = new XMLHttpRequest()
+    xhr.open('GET', '/health', true)
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return
+      var health = null
+      try { health = JSON.parse(xhr.responseText) } catch (e) {}
+      if (xhr.status === 200 && health && health.auth === false) {
+        showMain()
+        $('whoami').textContent = '免登录模式'
+        $('logoutBtn').style.display = 'none'
+        pickSelection()
+        if (trim($('question').value)) doAsk()
+        return
+      }
+      if (getToken()) {
+        showMain()
+        // 打开即取选区；取到内容直接自动提问（"哇"时刻：选中 → 点按钮 → 答案自己出来）
+        pickSelection()
+        if (trim($('question').value)) doAsk()
+      } else {
+        showLogin()
+      }
+    }
+    xhr.send()
+  }
+
+  initByAuthMode()
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WPS 加载项功能区配置：一个「知识」页签 + 一个「查知识」按钮。
+     onAction 回调函数定义在加载项主页面 index.html 的 window 上。 -->
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="EasyShareKnowledgeTab" label="知识">
+        <group id="EasyShareKnowledgeGroup" label="EasyShare">
+          <button id="btnKnowledgeAsk"
+                  label="查知识"
+                  size="large"
+                  screentip="选中段落后点击，在公司知识库中查找依据"
+                  onAction="OnActionKnowledgeAsk"/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

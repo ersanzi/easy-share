@@ -14,6 +14,7 @@ from app.auth.routes import router as auth_router
 from app.debug.routes import router as debug_router
 from app.lab.routes import router as lab_router
 from app.services import AppServices, build_services
+from app.wps_addon.routes import router as wps_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -43,6 +44,7 @@ def create_app(services: AppServices | None = None) -> FastAPI:
     application.include_router(auth_router)
     application.include_router(lab_router)
     application.include_router(debug_router)
+    application.include_router(wps_router)
 
     @application.middleware("http")
     async def auth_middleware(request, call_next):
@@ -72,6 +74,7 @@ def create_app(services: AppServices | None = None) -> FastAPI:
             "health": "/health",
             "local_lab": "/lab" if resolved_services.config.local_lab_enabled else None,
             "cockpit": "/lab/cockpit" if resolved_services.config.local_lab_enabled else None,
+            "wps_addon": "/wps/ribbon.xml",
         }
 
     return application

@@ -59,13 +59,26 @@ curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json
 curl -X POST http://localhost:8000/auth/users -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"username":"xiaowang","password":"<初始口令>"}'
 ```
 
+### 6. 开通 WPS 知识查询（可选，每台需要用的电脑各跑一次）
+
+```powershell
+# 前提：能访问 knowledge\scripts\install_wps_addon.ps1（仓库任意位置改成相对/绝对路径均可）
+# 把 <服务器IP> 换成知识服务器地址；装完完全退出 WPS（含托盘）再打开
+powershell -ExecutionPolicy Bypass -File <仓库路径>\knowledge\scripts\install_wps_addon.ps1 -ServerUrl http://<服务器IP>:8000
+# 卸载：
+powershell -ExecutionPolicy Bypass -File <仓库路径>\knowledge\scripts\install_wps_addon.ps1 -Remove
+```
+
+装好后 WPS 文字功能区多一个「知识」页签：**选中一段话 → 点「查知识」**，右侧窗格自动给出答案和引用来源（首次需登录一次账号）。
+
 ## 二、同事使用指引（发群里的一页纸）
 
 > **公司知识库上线了：文件放进去，答案问出来。**
 
 1. **怎么问**：浏览器打开 `http://<服务器IP>:8000/lab`，登录后底部「知识问答」输入问题。回答带引用，点引用可看原文出处。
-2. **怎么贡献文件**：把文件放进共享盘的 `知识库入库` 文件夹（支持 Word/PDF/Excel/PPT/TXT/Markdown/图片），约 1 分钟后自动入库可被检索；文件更新后重新放入即可，答案会引用最新版。
-3. **注意**：从入库文件夹**删除**文件不会从知识库删除（需要管理员处理）；敏感文件先问 IT 再放；支持的格式见文件夹说明。
+2. **装了 WPS 插件的**：在 WPS 文字里选中一段话，点「知识」页签的「查知识」，答案直接出现在右侧（首次登录一次）。
+3. **怎么贡献文件**：把文件放进共享盘的 `知识库入库` 文件夹（支持 Word/PDF/Excel/PPT/TXT/Markdown/图片），约 1 分钟后自动入库可被检索；文件更新后重新放入即可，答案会引用最新版。
+4. **注意**：从入库文件夹**删除**文件不会从知识库删除（需要管理员处理）；敏感文件先问 IT 再放；支持的格式见文件夹说明。
 
 ## 三、日常维护
 
@@ -76,5 +89,5 @@ curl -X POST http://localhost:8000/auth/users -H "Authorization: Bearer <token>"
 ## 四、已知边界（部署前知悉）
 
 - 单 worker 运行（SQLite 状态），百人级团队足够；更大规模再演进。
-- 监听目录删除不同步（显式设计，防误删）；`AUTH_ENABLED=true` 下 API 需令牌，/lab 页面当前用浏览器登录态走 token（随桌面端集成完善）。
-- 桌面端（局域网直传/网盘）与知识服务尚在整合中，当前知识库独立使用。
+- 监听目录删除不同步（显式设计，防误删）；`AUTH_ENABLED=true` 下 API 需令牌，/lab 页面走登录令牌，桌面端「知识」页与 WPS 窗格登录态分别由 Core 与窗格本地保存。
+- 桌面端（v0.1.0 起）已有「知识」页：登录公司知识服务器即可问答；WPS 插件按需逐台安装（见一·6）。

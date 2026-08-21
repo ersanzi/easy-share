@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>EasyShare 知识加载项</title>
+</head>
+<body>
+<!-- 加载项主页面：WPS 启动时加载本页（不可见），ribbon.xml 的回调函数挂在 window 上。 -->
+<script>
+  // 任务窗格单例；重复点击「查知识」只做显示，不重复创建
+  var knowledgePane = null
+
+  // 加载项初始回调
+  function OnAddinLoad() {
+    return true
+  }
+
+  // 「查知识」按钮：打开（或唤起）任务窗格
+  function OnActionKnowledgeAsk() {
+    try {
+      if (!knowledgePane) {
+        knowledgePane = wps.CreateTaskPane(location.origin + '/wps/taskpane.html')
+        knowledgePane.Title = 'EasyShare 知识'
+        // 1 = 左侧，2 = 右侧（WPS 任务窗格停靠位置枚举）
+        knowledgePane.DockPosition = 2
+      }
+      knowledgePane.Visible = true
+    } catch (e) {
+      alert('打开知识任务窗格失败：' + (e && e.message ? e.message : e))
+    }
+  }
+</script>
+</body>
+</html>

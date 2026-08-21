@@ -57,6 +57,8 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | 拖放无反应 | 必须前端 JS `OnFileDrop(cb, false)` 注册 DOM 监听，Go 端 `runtime.OnFileDrop` 只订阅事件不注册监听器 |
 | 托盘图标不显示 | Windows SetIcon 需 ICO 字节，PNG 无效。用 `build/windows/icon.ico` |
 | NSIS "Bad text encoding" | project.nsi 需 UTF-8 BOM（`printf '\xEF\xBB\xBF'`） |
+| PowerShell .ps1 中文乱码/解析错误 | Windows PowerShell 5.1 按 GBK 读无 BOM 的 .ps1，含中文的脚本必须存 UTF-8 **带 BOM**（`printf '\xEF\xBB\xBF' \| cat - file > tmp && mv tmp file`） |
+| WPS 加载项登记不生效 | 新版个人版（≥12.1.0.16910）忽略手工 jsplugins.xml，读 jsaddons 的 publish.xml；**在线模式必须用 `<jspluginonline>` 标签**（`<jsplugin>` 是离线模式，url 应指 .7z 包）；改登记后必须 `taskkill /IM wps.exe /F` 彻底退出（常驻进程不重读登记）；曾误判离线会在 `jsaddons\jsaddinblockhost.ini` 留域名拦截、`authaddin.json` 留旧记录，需一并清理 |
 | wails build 文件锁定 | 先 `Stop-Process -Name easyshare` |
 | AWS SDK PutObject 非 seekable 流 | 须加 `v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware` |
 | 此电脑入口显示名异常 | 删除 CLSID 下 LocalizedString/System.Category/TileInfo 等劫持显示名的旧值 |
