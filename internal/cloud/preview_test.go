@@ -27,7 +27,9 @@ func TestPreviewInfoClassifiesAndReadsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Kind != PreviewText || preview.Text != "hello\nworld" || preview.ContentType != "text/plain" {
+	// ContentType 归一化会优先参考系统 mime 表（Windows 上 .md 可能是 text/markdown），
+	// 断言限定"文本类 + 内容可读"，不耦合具体子类型。
+	if preview.Kind != PreviewText || preview.Text != "hello\nworld" || !strings.HasPrefix(preview.ContentType, "text/") {
 		t.Fatalf("unexpected preview: %+v", preview)
 	}
 }
