@@ -1,6 +1,6 @@
 # EasyShare 当前架构
 
-> 更新基线：2026-07-26。
+> 更新基线：2026-08-21。
 
 ## 1. 进程模型
 
@@ -23,12 +23,13 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 │ internal/transfer：TCP 文件传输（含文件夹 zip 管线）            │
 │ internal/drive：WebDAV 共享服务                                 │
 │ internal/cloud：网盘 API（S3 对象存储）                         │
+│ internal/knowledge：知识网关（登录/问答代理，会话落盘）         │
 │ internal/namespace：系统文件入口（此电脑 / Finder 挂载）         │
-└───────┬────────────────────┬───────────────────────┬────────────┘
-        │ UDP 9527           │ TCP 9528              │ 127.0.0.1:19080
-        │ 设备发现           │ 文件传输              │ WebDAV 共享（无认证）
-        ▼                    ▼                       ▼
-   局域网设备             对端 EasyShare       资源管理器 / Finder
+└───────┬────────────────────┬───────────────┬────────────┬──────┘
+        │ UDP 9527           │ TCP 9528      │ 127.0.0.1:19080 │ HTTP（公司内网）
+        │ 设备发现           │ 文件传输      │ WebDAV 共享（无认证） │ 知识服务（FastAPI）
+        ▼                    ▼               ▼                ▼
+   局域网设备             对端 EasyShare  资源管理器 / Finder  知识服务器（各公司部署）
                                                    │ 127.0.0.1:19081
                                                    │ WebDAV 云盘驱动器
                                                    ▼
@@ -106,6 +107,11 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/cloud/download` | 网盘下载（返回预签名 URL） |
 | `DELETE` | `/api/cloud/files` | 网盘删除 |
 | `POST` | `/api/cloud/share` | 网盘分享链接 |
+| `GET` | `/api/knowledge/status` | 知识服务登录态（本地，无网络探测） |
+| `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话） |
+| `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
+| `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
+| `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底） |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
 
 ### WebSocket 事件类型
@@ -172,6 +178,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - 传输任务：运行中为内存状态；终态（completed/rejected/failed）持久化为 JSON 文件。
 - 网盘文件存储在 RustFS（S3 兼容），凭据编译期常量（`internal/cloud/defaults.go`），不暴露给前端。
 - peers 是内存状态，Core 退出后丢失。
+- 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
 
 ## 8. 云盘与对象存储
 
@@ -180,6 +187,11 @@ desktop eventStream (Go 协程，指数退避重连)
 - `internal/cloud/webdavfs` 将 S3 对象存储映射为 WebDAV FileSystem，供云盘驱动器使用。
 - 上传采用 multipart 流式（真实进度），AWS SDK 非 seekable 流需 `SwapComputePayloadSHA256ForUnsignedPayloadMiddleware`。
 - 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束。
+
+## 8a. 知识网关（桌面端 ↔ 知识服务）
+
+- `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
+- 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
 
 ## 9. 跨平台抽象
 

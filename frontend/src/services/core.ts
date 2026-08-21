@@ -14,6 +14,11 @@
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
+  KnowledgeAsk,
+  KnowledgeHealth,
+  KnowledgeLogin,
+  KnowledgeLogout,
+  KnowledgeStatus,
   OpenFile,
   OpenReceiveFolder,
   ProcessDroppedFiles,
@@ -30,7 +35,15 @@
   StartDrive,
   StopDrive,
 } from '../../wailsjs/go/main/App'
-import type { CloudFile, CloudPreview as CloudPreviewData, CoreSnapshot, DroppedFiles } from '../types/core'
+import type {
+  CloudFile,
+  CloudPreview as CloudPreviewData,
+  CoreSnapshot,
+  DroppedFiles,
+  KnowledgeAnswer,
+  KnowledgeHealth as KnowledgeHealthData,
+  KnowledgeStatus as KnowledgeStatusData,
+} from '../types/core'
 
 export interface SettingsData {
   deviceName: string
@@ -69,4 +82,10 @@ export const core = {
   cloudDownload: CloudDownload,
   cloudDelete: CloudDelete,
   cloudShare: CloudShare,
+  knowledgeStatus: () => KnowledgeStatus() as Promise<KnowledgeStatusData>,
+  knowledgeLogin: (serverUrl: string, username: string, password: string) =>
+    KnowledgeLogin(serverUrl, username, password) as Promise<KnowledgeStatusData>,
+  knowledgeLogout: KnowledgeLogout,
+  knowledgeHealth: () => KnowledgeHealth() as Promise<KnowledgeHealthData>,
+  knowledgeAsk: (question: string) => KnowledgeAsk(question) as Promise<KnowledgeAnswer>,
 }

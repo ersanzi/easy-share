@@ -18,6 +18,7 @@ import (
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/fsutil"
+	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
 	"easyshare/internal/namespace"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -638,6 +639,62 @@ func (a *App) CloudShare(key string, expiryHours int) (string, error) {
 	url, err := client.CloudShare(a.ctx, key, expiryHours)
 	a.reportError("cloud share", err)
 	return url, err
+}
+
+// --- 知识问答（Core 作网关，令牌不进前端） ---
+
+// KnowledgeStatus 获取知识登录态（是否配置/登录、服务器地址、用户名）。
+func (a *App) KnowledgeStatus() (knowledge.StatusView, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.StatusView{}, err
+	}
+	result, err := client.KnowledgeStatus(a.ctx)
+	a.reportError("knowledge status", err)
+	return result, err
+}
+
+// KnowledgeLogin 登录知识服务；服务器地址形如 http://192.168.1.10:8000。
+func (a *App) KnowledgeLogin(serverURL, username, password string) (knowledge.StatusView, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.StatusView{}, err
+	}
+	result, err := client.KnowledgeLogin(a.ctx, strings.TrimSpace(serverURL), username, password)
+	a.reportError("knowledge login", err)
+	return result, err
+}
+
+// KnowledgeLogout 退出知识服务登录。
+func (a *App) KnowledgeLogout() error {
+	client, err := a.coreClient()
+	if err == nil {
+		err = client.KnowledgeLogout(a.ctx)
+	}
+	a.reportError("knowledge logout", err)
+	return err
+}
+
+// KnowledgeHealth 探测知识服务健康度（文档规模/LLM 状态）。
+func (a *App) KnowledgeHealth() (knowledge.Health, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Health{}, err
+	}
+	result, err := client.KnowledgeHealth(a.ctx)
+	a.reportError("knowledge health", err)
+	return result, err
+}
+
+// KnowledgeAsk 向知识服务提问；多跳检索链路可能较慢，属预期行为。
+func (a *App) KnowledgeAsk(question string) (knowledge.Answer, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Answer{}, err
+	}
+	result, err := client.KnowledgeAsk(a.ctx, question)
+	a.reportError("knowledge ask", err)
+	return result, err
 }
 
 // --- Local file browser (我的电脑) ---

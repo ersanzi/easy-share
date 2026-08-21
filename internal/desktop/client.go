@@ -20,6 +20,7 @@ import (
 	"easyshare/internal/api"
 	"easyshare/internal/cloud"
 	"easyshare/internal/discovery"
+	"easyshare/internal/knowledge"
 	"easyshare/internal/task"
 )
 
@@ -31,12 +32,23 @@ type Snapshot struct {
 type Client struct {
 	baseURL, token string
 	http           *http.Client
+	// slowHTTP 无客户端级超时，供长链路调用（知识问答多跳 LLM）使用，由 Core 侧上下文兜底。
+	slowHTTP *http.Client
 }
 
 func NewClient(baseURL, token string) *Client {
-	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 10 * time.Second}}
+	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 10 * time.Second}, slowHTTP: &http.Client{}}
 }
 func (client *Client) request(ctx context.Context, method, path string, input, output any) error {
+	return client.do(ctx, client.http, method, path, input, output)
+}
+
+// slowRequest 与 request 同协议，但不受 10s 客户端超时约束。
+func (client *Client) slowRequest(ctx context.Context, method, path string, input, output any) error {
+	return client.do(ctx, client.slowHTTP, method, path, input, output)
+}
+
+func (client *Client) do(ctx context.Context, httpClient *http.Client, method, path string, input, output any) error {
 	var body *bytes.Reader
 	if input == nil {
 		body = bytes.NewReader(nil)
@@ -53,7 +65,7 @@ func (client *Client) request(ctx context.Context, method, path string, input, o
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
 	request.Header.Set("Content-Type", "application/json")
-	response, err := client.http.Do(request)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -244,6 +256,46 @@ func (client *Client) CloudShare(ctx context.Context, key string, expiryHours in
 	}
 	err := client.request(ctx, http.MethodPost, "/api/cloud/share", map[string]any{"key": key, "expiryHours": expiryHours}, &result)
 	return result.URL, err
+}
+
+// --- 知识网关代理（令牌全程留在 Core，前端只见登录态视图） ---
+
+// KnowledgeStatus 获取知识登录态。
+func (client *Client) KnowledgeStatus(ctx context.Context) (knowledge.StatusView, error) {
+	var result knowledge.StatusView
+	err := client.request(ctx, http.MethodGet, "/api/knowledge/status", nil, &result)
+	return result, err
+}
+
+// KnowledgeLogin 登录知识服务；成功后 Core 落盘会话。
+func (client *Client) KnowledgeLogin(ctx context.Context, serverURL, username, password string) (knowledge.StatusView, error) {
+	var result knowledge.StatusView
+	input := struct {
+		ServerURL string `json:"serverUrl"`
+		Username  string `json:"username"`
+		Password  string `json:"password"`
+	}{ServerURL: serverURL, Username: username, Password: password}
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/login", input, &result)
+	return result, err
+}
+
+// KnowledgeLogout 清空本地会话。
+func (client *Client) KnowledgeLogout(ctx context.Context) error {
+	return client.request(ctx, http.MethodPost, "/api/knowledge/logout", nil, nil)
+}
+
+// KnowledgeHealth 探测知识服务健康度（文档规模/LLM 状态）。
+func (client *Client) KnowledgeHealth(ctx context.Context) (knowledge.Health, error) {
+	var result knowledge.Health
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/health", nil, &result)
+	return result, err
+}
+
+// KnowledgeAsk 知识问答；长链路调用，走无客户端超时的 slowRequest。
+func (client *Client) KnowledgeAsk(ctx context.Context, question string) (knowledge.Answer, error) {
+	var result knowledge.Answer
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/query", map[string]string{"question": question}, &result)
+	return result, err
 }
 
 // SubscribeEvents 通过 WebSocket 订阅 Core 的实时事件流。

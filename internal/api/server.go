@@ -19,6 +19,7 @@ import (
 	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/discovery"
+	"easyshare/internal/knowledge"
 	"easyshare/internal/task"
 	"easyshare/internal/transfer"
 	"easyshare/internal/version"
@@ -55,6 +56,7 @@ type Server struct {
 	driveService driveService
 	cloudDrive   driveService
 	cloud        *cloud.Service
+	knowledge    *knowledge.Service
 	statusMutex  sync.RWMutex
 	status       Status
 	peers        func() []discovery.Peer
@@ -119,6 +121,11 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/cloud/download", server.auth(http.HandlerFunc(server.cloudDownload)))
 	mux.Handle("DELETE /api/cloud/files", server.auth(http.HandlerFunc(server.cloudDelete)))
 	mux.Handle("POST /api/cloud/share", server.auth(http.HandlerFunc(server.cloudShare)))
+	mux.Handle("GET /api/knowledge/status", server.auth(http.HandlerFunc(server.knowledgeStatus)))
+	mux.Handle("POST /api/knowledge/login", server.auth(http.HandlerFunc(server.knowledgeLogin)))
+	mux.Handle("POST /api/knowledge/logout", server.auth(http.HandlerFunc(server.knowledgeLogout)))
+	mux.Handle("POST /api/knowledge/health", server.auth(http.HandlerFunc(server.knowledgeHealth)))
+	mux.Handle("POST /api/knowledge/query", server.auth(http.HandlerFunc(server.knowledgeQuery)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, pattern := mux.Handler(request)
 		if pattern == "" {
@@ -202,6 +209,11 @@ func (server *Server) ConfigureCloud(service *cloud.Service) {
 
 func (server *Server) ConfigureCloudDrive(service driveService) {
 	server.cloudDrive = service
+}
+
+// ConfigureKnowledge 注入知识网关运行态（会话由 knowledge.json 持久化）。
+func (server *Server) ConfigureKnowledge(service *knowledge.Service) {
+	server.knowledge = service
 }
 
 // StartLANDrive 启动局域网共享 WebDAV 服务。

@@ -4,6 +4,7 @@ import ActivityDrawer from './components/ActivityDrawer.vue'
 import CloudPanel from './components/CloudPanel.vue'
 import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
+import KnowledgePanel from './components/KnowledgePanel.vue'
 import PeerList from './components/PeerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -12,7 +13,7 @@ import { useEasyShare } from './composables/useEasyShare'
 import { taskKind, taskSection } from './utils/tasks'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
-type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
+type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'settings'
 
 const app = useEasyShare()
 const view = ref<View>('overview')
@@ -136,6 +137,10 @@ const handleCloudDelete = async (key: string) => {
           <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
             文件
+          </button>
+          <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" type="button" @click="view = 'knowledge'">
+            <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
+            知识
           </button>
           <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
@@ -292,6 +297,9 @@ const handleCloudDelete = async (key: string) => {
           </header>
           <TransferList :tasks="app.snapshot.value.tasks" @accept="app.accept" @accept-as="app.acceptAs" @reject="app.reject" @clear="app.clearHistory" @delete="app.deleteTask" />
         </template>
+
+        <!-- ═══ 知识问答页 ═══ -->
+        <KnowledgePanel v-else-if="view === 'knowledge'" />
 
         <!-- ═══ 网盘详情页 ═══ -->
         <template v-else-if="view === 'cloud'">

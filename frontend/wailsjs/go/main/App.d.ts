@@ -3,6 +3,7 @@
 import {cloud} from '../models';
 import {main} from '../models';
 import {desktop} from '../models';
+import {knowledge} from '../models';
 import {fsutil} from '../models';
 import {context} from '../models';
 
@@ -37,6 +38,16 @@ export function GetSettings():Promise<main.Settings>;
 export function GetSnapshot():Promise<desktop.Snapshot>;
 
 export function Greet(arg1:string):Promise<string>;
+
+export function KnowledgeAsk(arg1:string):Promise<knowledge.Answer>;
+
+export function KnowledgeHealth():Promise<knowledge.Health>;
+
+export function KnowledgeLogin(arg1:string,arg2:string,arg3:string):Promise<knowledge.StatusView>;
+
+export function KnowledgeLogout():Promise<void>;
+
+export function KnowledgeStatus():Promise<knowledge.StatusView>;
 
 export function ListDir(arg1:string):Promise<Array<fsutil.FileEntry>>;
 

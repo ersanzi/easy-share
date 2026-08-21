@@ -246,6 +246,125 @@ export namespace fsutil {
 
 }
 
+export namespace knowledge {
+	
+	export class Context {
+	    doc_id?: string;
+	    file_id?: string;
+	    version_id?: string;
+	    filename?: string;
+	    score?: number;
+	    ingested_at?: string;
+	    text: string;
+	    block_ids: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Context(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.file_id = source["file_id"];
+	        this.version_id = source["version_id"];
+	        this.filename = source["filename"];
+	        this.score = source["score"];
+	        this.ingested_at = source["ingested_at"];
+	        this.text = source["text"];
+	        this.block_ids = source["block_ids"];
+	    }
+	}
+	export class SourceRef {
+	    doc_id?: string;
+	    score?: number;
+	    ingested_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SourceRef(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.score = source["score"];
+	        this.ingested_at = source["ingested_at"];
+	    }
+	}
+	export class Answer {
+	    answer: string;
+	    sources: SourceRef[];
+	    contexts: Context[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Answer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.answer = source["answer"];
+	        this.sources = this.convertValues(source["sources"], SourceRef);
+	        this.contexts = this.convertValues(source["contexts"], Context);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class Health {
+	    records: number;
+	    llm: string;
+	    watch_dirs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Health(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.records = source["records"];
+	        this.llm = source["llm"];
+	        this.watch_dirs = source["watch_dirs"];
+	    }
+	}
+	
+	export class StatusView {
+	    configured: boolean;
+	    loggedIn: boolean;
+	    serverUrl: string;
+	    username: string;
+	    role: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatusView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.loggedIn = source["loggedIn"];
+	        this.serverUrl = source["serverUrl"];
+	        this.username = source["username"];
+	        this.role = source["role"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
 	export class FilesDroppedEvent {

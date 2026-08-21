@@ -66,6 +66,26 @@ export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }
 
+export function KnowledgeAsk(arg1) {
+  return window['go']['main']['App']['KnowledgeAsk'](arg1);
+}
+
+export function KnowledgeHealth() {
+  return window['go']['main']['App']['KnowledgeHealth']();
+}
+
+export function KnowledgeLogin(arg1, arg2, arg3) {
+  return window['go']['main']['App']['KnowledgeLogin'](arg1, arg2, arg3);
+}
+
+export function KnowledgeLogout() {
+  return window['go']['main']['App']['KnowledgeLogout']();
+}
+
+export function KnowledgeStatus() {
+  return window['go']['main']['App']['KnowledgeStatus']();
+}
+
 export function ListDir(arg1) {
   return window['go']['main']['App']['ListDir'](arg1);
 }

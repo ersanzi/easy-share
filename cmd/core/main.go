@@ -19,6 +19,7 @@ import (
 	"easyshare/internal/desktop"
 	"easyshare/internal/discovery"
 	"easyshare/internal/drive"
+	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
 	"easyshare/internal/task"
 	"easyshare/internal/transfer"
@@ -58,6 +59,9 @@ func main() {
 	server.ConfigureDrive(drive.NewService(value.WebDAVRoot))
 	server.ConfigureShutdown(cancelCore)
 	server.ConfigureConfigPath(*configPath)
+	// 知识网关：会话（服务器地址/令牌）存同目录 knowledge.json，仅 Core 读写。
+	knowledgeStore := knowledge.NewStore(filepath.Join(filepath.Dir(*configPath), "knowledge.json"))
+	server.ConfigureKnowledge(knowledge.NewService(knowledgeStore))
 	// 局域网共享 WebDAV 随 Core 自动启动，"此电脑"入口始终可用。
 	server.StartLANDrive()
 	// Cloud drive uses fixed build-time parameters; no user configuration needed.
