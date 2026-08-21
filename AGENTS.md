@@ -60,6 +60,7 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | PowerShell .ps1 中文乱码/解析错误 | Windows PowerShell 5.1 按 GBK 读无 BOM 的 .ps1，含中文的脚本必须存 UTF-8 **带 BOM**（`printf '\xEF\xBB\xBF' \| cat - file > tmp && mv tmp file`） |
 | WPS 加载项登记不生效 | 新版个人版（≥12.1.0.16910）忽略手工 jsplugins.xml，读 jsaddons 的 publish.xml；**在线模式必须用 `<jspluginonline>` 标签**（`<jsplugin>` 是离线模式，url 应指 .7z 包）；改登记后必须 `taskkill /IM wps.exe /F` 彻底退出（常驻进程不重读登记）；曾误判离线会在 `jsaddons\jsaddinblockhost.ini` 留域名拦截、`authaddin.json` 留旧记录，需一并清理 |
 | wails build 文件锁定 | 先 `Stop-Process -Name easyshare` |
+| 只跑 wails build 后新 API 不生效 | `wails build` 只编桌面端壳，`build/bin/easyshare-core.exe` 不会重编——桌面端冒烟前必须 `go build -o build/bin/easyshare-core.exe ./cmd/core` 或直接跑 `scripts/build.ps1` |
 | AWS SDK PutObject 非 seekable 流 | 须加 `v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware` |
 | 此电脑入口显示名异常 | 删除 CLSID 下 LocalizedString/System.Category/TileInfo 等劫持显示名的旧值 |
 | WebClient 剥离 DavWWWRoot 前缀 | webdav.Handler 用 `Prefix:"/"` 即正确，不要设 `/DavWWWRoot` |
