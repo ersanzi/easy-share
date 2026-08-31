@@ -1,18 +1,29 @@
+// Package cloud 保留桌面端网盘视图所需的类型与预览辅助：File/Preview 是 Wails 绑定
+// 透传给前端的数据结构，ContentTypeForKey/DetectPreviewKind/FillTextPreview 支撑
+// 控制面对象列表的预览能力推断。Core 直连 S3 的 Service 与 /api/cloud/* 路由已随
+// KI-5 清理删除（P2 起云盘走控制面预签名 URL，见 internal/drive）。
 package cloud
 
 import (
-	"context"
-	"fmt"
 	"io"
 	"mime"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
-
-	"easyshare/internal/cloud/objectstore"
 )
 
 const maxTextPreviewBytes int64 = 1 << 20
+
+// File 是网盘文件条目（控制面对象经 driveObjectToFile 转换后的形态，前端契约）。
+type File struct {
+	Key          string      `json:"key"`
+	Name         string      `json:"name"`
+	Size         int64       `json:"size"`
+	ContentType  string      `json:"contentType"`
+	LastModified time.Time   `json:"lastModified"`
+	PreviewKind  PreviewKind `json:"previewKind"`
+}
 
 // PreviewKind 描述前端可采用的预览器类型，而不是暴露存储实现细节。
 type PreviewKind string
@@ -36,32 +47,6 @@ type Preview struct {
 	Truncated   bool        `json:"truncated,omitempty"`
 }
 
-// PreviewInfo 返回文件预览能力；文本内容限量内联，图片和 PDF 由内容端点流式提供。
-func (s *Service) PreviewInfo(ctx context.Context, key string) (Preview, error) {
-	if strings.TrimSpace(key) == "" {
-		return Preview{}, fmt.Errorf("preview: key must not be empty")
-	}
-	info, err := s.store.HeadObject(ctx, objectstore.ObjectRef{Bucket: s.bucket, Key: key})
-	if err != nil {
-		return Preview{}, fmt.Errorf("preview head %s: %w", key, err)
-	}
-	contentType := normalizedContentType(info.ContentType, key)
-	preview := Preview{Key: key, Name: filepath.Base(key), Kind: DetectPreviewKind(contentType, key), ContentType: contentType, Size: info.Size}
-	if preview.Kind != PreviewText {
-		return preview, nil
-	}
-
-	object, err := s.store.GetObject(ctx, objectstore.GetObjectInput{ObjectRef: objectstore.ObjectRef{Bucket: s.bucket, Key: key}})
-	if err != nil {
-		return Preview{}, fmt.Errorf("preview read %s: %w", key, err)
-	}
-	defer object.Body.Close()
-	if err := FillTextPreview(&preview, object.Body); err != nil {
-		return Preview{}, fmt.Errorf("preview read %s: %w", key, err)
-	}
-	return preview, nil
-}
-
 // FillTextPreview 把对象内容限量读入预览的内联文本字段。
 // 超过上限时截断并回退到 UTF-8 字符边界；内容不是有效 UTF-8 时预览类型降级为不支持。
 func FillTextPreview(preview *Preview, body io.Reader) error {
@@ -83,22 +68,6 @@ func FillTextPreview(preview *Preview, body io.Reader) error {
 	}
 	preview.Text = string(data)
 	return nil
-}
-
-// OpenPreview 打开可流式预览的图片或 PDF，并拒绝潜在主动内容（例如 SVG）。
-func (s *Service) OpenPreview(ctx context.Context, key string) (Preview, io.ReadCloser, error) {
-	preview, err := s.PreviewInfo(ctx, key)
-	if err != nil {
-		return Preview{}, nil, err
-	}
-	if preview.Kind != PreviewImage && preview.Kind != PreviewPDF {
-		return preview, nil, fmt.Errorf("preview type %s cannot be streamed", preview.Kind)
-	}
-	object, err := s.store.GetObject(ctx, objectstore.GetObjectInput{ObjectRef: objectstore.ObjectRef{Bucket: s.bucket, Key: key}})
-	if err != nil {
-		return Preview{}, nil, fmt.Errorf("preview open %s: %w", key, err)
-	}
-	return preview, object.Body, nil
 }
 
 // DetectPreviewKind 将 MIME/扩展名归一化为稳定的产品能力。

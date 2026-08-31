@@ -8,7 +8,7 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 
 - **局域网互传**：UDP 设备发现 + TCP 流式传输；拖拽即发（文件夹自动打包），多文件发送、另存为、传输历史与实时速度
 - **账号与网盘（RuoYi 控制面 + RustFS）**：桌面端登录门禁与登录态贯通；云盘上传/列表/下载/删除/分享经控制面签发短期预签名 URL 直传，对象按 `users/{userId}/` 用户命名空间隔离，客户端不持任何存储静态凭据；管理员可在客户端内建账号、开关注册、分配空间配额（含物理容量池上限）
-- **系统集成**：Windows「此电脑」品牌入口（Shell NameSpace 委托 WebDAV；云盘入口暂不可用，见「当前限制」）；macOS Finder 挂载卷 + 原生菜单栏；系统托盘（含悬停浮窗）+ Frameless 窗口
+- **系统集成**：Windows「此电脑」品牌入口（Shell NameSpace 委托 WebDAV）：局域网共享常驻 + 登录后按账号挂载「<昵称> 的网盘」与「EasyShare 共享」两个云端盘（每个文件操作经控制面，配额与授权同样生效）；macOS Finder 挂载卷 + 原生菜单栏；系统托盘（含悬停浮窗，支持拖放上传到个人/共享空间）+ Frameless 窗口
 - **可靠性**：Core watchdog 自动恢复、配置热加载、WebSocket 实时事件 + 传输完成系统通知
 - **知识问答（桌面「知识」页）**：连接公司私有部署的知识服务器，登录一次即可会话式提问，答案附引用来源（文件名/相似度/入库时间/片段）；登录令牌由 Go Core 网关持有，不进前端
 - **知识计算面（Python 服务端）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/PDF/XLSX/PPTX 与图片，含 Office 真实格式预检、可选 PaddleOCR 扫描件识别）、来源感知切块、版本化索引和检索质量评测；`/lab` 支持上传观察与检索问答（引用可溯源）
@@ -29,9 +29,9 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 | `internal/api` | Core HTTP API 路由 + WebSocket 事件流 |
 | `internal/account` | 账号控制面客户端：登录态、用户/空间/配额管理（ADR-0007） |
 | `internal/drive` | WebDAV 共享服务 + 控制面云盘客户端（预签名 URL 上传/下载/列表） |
-| `internal/spacedav` | 按用户命名空间的 WebDAV 服务层（P2 存储隔离） |
+| `internal/spacedav` | 空间 WebDAV 文件系统（P4）：建在 drive 客户端之上，把个人/共享空间暴露给资源管理器 |
 | `internal/knowledge` | 知识服务网关（登录/问答代理，令牌只存 Core 侧不进前端） |
-| `internal/cloud` | Core 直连 S3 时代的旧网盘层——已无生产调用方（KI-5 遗留）；其 `objectstore/` 存储抽象仍在服役 |
+| `internal/cloud` | 网盘视图类型与预览辅助（`File`/`Preview`/预览分类）；Core 直连 S3 的旧网盘层已删（KI-5 已关闭），`objectstore/` 存储抽象仍在服役 |
 | `internal/winui` | Win32 窗口几何工具（托盘悬浮窗定位/多显示器适配） |
 | `cmd/core` | `easyshare-core` 后台进程入口（组装、信号、优雅退出） |
 | `platform-drive/` | RuoYi 控制面内的云盘存储授权模块（Java/Maven）：预签名 URL 签发、空间/配额/池上限。父 POM 指向 gitignore 的 `platform/`（RuoYi 源码工程），编译前提见 AGENTS.md 坑表 |
@@ -170,7 +170,7 @@ EasyShare 采用小步迭代策略：两条产品主线（桌面文件产品 阶
 ## 当前限制
 
 - Windows 为主要支持平台；首次 Mac 构建暴露的 Wails/systray `AppDelegate` 链接冲突已从架构上修复，修复后的 `.app`/DMG 与菜单栏行为仍待 Mac 真机复验。
-- Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。**「此电脑 → EasyShare 网盘」云盘入口当前不可用**——移走客户端存储凭据（KI-2 修复）后该挂载失去数据源，按用户命名空间重做挂载排在 P4。
+- Windows「此电脑」入口依赖 WebClient 服务；macOS 采用 Finder 挂载 WebDAV 卷。按账号命名空间挂载的云端盘（个人/共享，19082/19083）已随控制面批次落地，配额收回/授权撤销时条目自动卸载；**真实鼠标交互验收仍欠**（登录 → 上传 → 换账号看列表、悬浮窗悬停/固定/拖放）。
 - 账号控制面的隔离结论来自控制面活栈验收（9/9）与 Go 客户端集成测试；桌面端「登录 → 上传 → 换账号看列表」真机链路待真实操作补验。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传暂不支持断点续传；在线预览当前支持图片、PDF 和最多 1 MiB 的 UTF-8 文本，暂不支持 Office、音视频、SVG 等高级或主动内容格式。

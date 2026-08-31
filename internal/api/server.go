@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/discovery"
 	"easyshare/internal/knowledge"
@@ -56,8 +55,6 @@ type Server struct {
 	shutdownOnce sync.Once
 	shutdown     chan struct{}
 	driveService driveService
-	cloudDrive   driveService
-	cloud        *cloud.Service
 	knowledge    *knowledge.Service
 	statusMutex  sync.RWMutex
 	status       Status
@@ -66,9 +63,6 @@ type Server struct {
 	receiver     *transfer.Receiver
 	cancelCore   context.CancelFunc
 }
-
-// cloudWebDAVPortOffset is added to WebDAVPort to derive the cloud WebDAV port.
-const cloudWebDAVPortOffset = 1
 
 func NewServer(value config.Config, tasks *task.Store) *Server {
 	server := &Server{config: value, tasks: tasks, hub: newEventHub(), shutdown: make(chan struct{}), status: Status{Core: true}}
@@ -116,13 +110,6 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/transfers/{id}/accept", server.auth(http.HandlerFunc(server.acceptTransfer)))
 	mux.Handle("POST /api/transfers/{id}/reject", server.auth(http.HandlerFunc(server.rejectTransfer)))
 	mux.Handle("POST /api/config/reload", server.auth(http.HandlerFunc(server.reloadConfig)))
-	mux.Handle("GET /api/cloud/files", server.auth(http.HandlerFunc(server.cloudList)))
-	mux.Handle("GET /api/cloud/preview", server.auth(http.HandlerFunc(server.cloudPreview)))
-	mux.HandleFunc("GET /api/cloud/preview/content", server.cloudPreviewContent)
-	mux.Handle("POST /api/cloud/upload", server.auth(http.HandlerFunc(server.cloudUpload)))
-	mux.Handle("POST /api/cloud/download", server.auth(http.HandlerFunc(server.cloudDownload)))
-	mux.Handle("DELETE /api/cloud/files", server.auth(http.HandlerFunc(server.cloudDelete)))
-	mux.Handle("POST /api/cloud/share", server.auth(http.HandlerFunc(server.cloudShare)))
 	mux.Handle("GET /api/knowledge/status", server.auth(http.HandlerFunc(server.knowledgeStatus)))
 	mux.Handle("POST /api/knowledge/login", server.auth(http.HandlerFunc(server.knowledgeLogin)))
 	mux.Handle("POST /api/knowledge/logout", server.auth(http.HandlerFunc(server.knowledgeLogout)))
@@ -202,17 +189,6 @@ func (server *Server) ConfigureDiscovery(service *discovery.Service) {
 func (server *Server) ConfigureTransfer(receiver *transfer.Receiver) {
 	server.receiver = receiver
 }
-func (server *Server) ConfigureCloud(service *cloud.Service) {
-	server.cloud = service
-	server.statusMutex.Lock()
-	server.status.CloudEnabled = service != nil
-	server.statusMutex.Unlock()
-}
-
-func (server *Server) ConfigureCloudDrive(service driveService) {
-	server.cloudDrive = service
-}
-
 // ConfigureKnowledge 注入知识网关运行态（会话由 knowledge.json 持久化）。
 func (server *Server) ConfigureKnowledge(service *knowledge.Service) {
 	server.knowledge = service
@@ -232,26 +208,6 @@ func (server *Server) StartLANDrive() {
 	log.Printf("LAN WebDAV ready at %s", server.webDAVURL())
 }
 
-// StartCloudDrive starts the cloud WebDAV server.
-// Called after ConfigureCloud when cloud is enabled.
-func (server *Server) StartCloudDrive(ctx context.Context) {
-	if server.cloudDrive == nil {
-		return
-	}
-	port := server.config.WebDAVPort + cloudWebDAVPortOffset
-	if err := server.cloudDrive.Start(port); err != nil && !server.cloudDrive.Running() {
-		log.Printf("start cloud WebDAV: %v", err)
-		return
-	}
-	log.Printf("cloud WebDAV ready at http://127.0.0.1:%d", port)
-}
-
-// StopCloudDrive stops the cloud WebDAV server.
-func (server *Server) StopCloudDrive(ctx context.Context) {
-	if server.cloudDrive != nil {
-		_ = server.cloudDrive.Stop(ctx)
-	}
-}
 func (server *Server) MarkDiscovery(running bool) {
 	server.statusMutex.Lock()
 	server.status.Discovery = running
@@ -375,8 +331,6 @@ func (server *Server) stopDriveServices(ctx context.Context) error {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("stop WebDAV: %w", err))
 		}
 	}
-	// Stop cloud drive WebDAV.
-	server.StopCloudDrive(ctx)
 	server.setDriveStatus(false)
 	return errors.Join(cleanupErrors...)
 }
@@ -497,154 +451,6 @@ func (server *Server) reloadConfig(writer http.ResponseWriter, _ *http.Request) 
 	}
 	log.Printf("config reloaded: device=%s receive=%s", value.DeviceName, value.ReceiveDir)
 	writeJSON(writer, http.StatusOK, map[string]bool{"reloaded": true})
-}
-
-func (server *Server) cloudList(writer http.ResponseWriter, request *http.Request) {
-	if server.cloud == nil {
-		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
-		return
-	}
-	prefix := request.URL.Query().Get("prefix")
-	files, err := server.cloud.List(request.Context(), prefix)
-	if err != nil {
-		log.Printf("cloud list: %v", err)
-		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_list_failed", Message: err.Error()})
-		return
-	}
-	if files == nil {
-		files = []cloud.File{}
-	}
-	writeJSON(writer, http.StatusOK, files)
-}
-
-func (server *Server) cloudUpload(writer http.ResponseWriter, request *http.Request) {
-	if server.cloud == nil {
-		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
-		return
-	}
-
-	// Multipart file stream — true streaming: bytes flow directly to S3 without
-	// buffering, so client-side progress reflects real end-to-end upload speed.
-	if strings.HasPrefix(request.Header.Get("Content-Type"), "multipart/form-data") {
-		// Disable read/write deadlines for streaming uploads — large files take
-		// longer than the global ReadTimeout/WriteTimeout allows.
-		rc := http.NewResponseController(writer)
-		_ = rc.SetReadDeadline(time.Time{})
-		_ = rc.SetWriteDeadline(time.Time{})
-
-		mr, err := request.MultipartReader()
-		if err != nil {
-			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "multipart reader: " + err.Error()})
-			return
-		}
-		part, err := mr.NextPart()
-		if err != nil {
-			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "file part required"})
-			return
-		}
-		defer part.Close()
-		fileName := part.FileName()
-		if fileName == "" {
-			writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "file name required"})
-			return
-		}
-		// 文件夹上传时通过 X-Object-Key 指定含路径的对象键（如 "photos/2024/img.jpg"）
-		if objectKey := request.Header.Get("X-Object-Key"); objectKey != "" {
-			fileName = objectKey
-		}
-		var fileSize int64
-		if sizeHeader := request.Header.Get("X-File-Size"); sizeHeader != "" {
-			fileSize, _ = strconv.ParseInt(sizeHeader, 10, 64)
-		}
-		result, err := server.cloud.UploadReader(request.Context(), fileName, part, fileSize)
-		if err != nil {
-			log.Printf("cloud upload: %v", err)
-			writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_upload_failed", Message: err.Error()})
-			return
-		}
-		writeJSON(writer, http.StatusOK, result)
-		return
-	}
-
-	// Legacy JSON filePath (Core reads local file directly)
-	var input struct {
-		FilePath string `json:"filePath"`
-	}
-	if json.NewDecoder(request.Body).Decode(&input) != nil || input.FilePath == "" {
-		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "filePath required"})
-		return
-	}
-	result, err := server.cloud.Upload(request.Context(), input.FilePath)
-	if err != nil {
-		log.Printf("cloud upload: %v", err)
-		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_upload_failed", Message: err.Error()})
-		return
-	}
-	writeJSON(writer, http.StatusOK, result)
-}
-
-func (server *Server) cloudDownload(writer http.ResponseWriter, request *http.Request) {
-	if server.cloud == nil {
-		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
-		return
-	}
-	var input struct {
-		Key string `json:"key"`
-	}
-	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
-		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
-		return
-	}
-	url, err := server.cloud.DownloadURL(request.Context(), input.Key, 0)
-	if err != nil {
-		log.Printf("cloud download url: %v", err)
-		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_download_failed", Message: err.Error()})
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"url": url})
-}
-
-func (server *Server) cloudDelete(writer http.ResponseWriter, request *http.Request) {
-	if server.cloud == nil {
-		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
-		return
-	}
-	var input struct {
-		Key string `json:"key"`
-	}
-	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
-		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
-		return
-	}
-	if err := server.cloud.Delete(request.Context(), input.Key); err != nil {
-		log.Printf("cloud delete: %v", err)
-		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_delete_failed", Message: err.Error()})
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]bool{"deleted": true})
-}
-
-func (server *Server) cloudShare(writer http.ResponseWriter, request *http.Request) {
-	if server.cloud == nil {
-		writeJSON(writer, http.StatusServiceUnavailable, ErrorResponse{Code: "cloud_disabled", Message: "cloud drive not configured"})
-		return
-	}
-	var input struct {
-		Key    string `json:"key"`
-		Expiry int    `json:"expiryHours"`
-	}
-	if json.NewDecoder(request.Body).Decode(&input) != nil || input.Key == "" {
-		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "key required"})
-		return
-	}
-	expiry := time.Duration(input.Expiry) * time.Hour
-	url, err := server.cloud.ShareLink(request.Context(), input.Key, expiry)
-	if err != nil {
-		log.Printf("cloud share: %v", err)
-		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "cloud_share_failed", Message: err.Error()})
-		return
-	}
-	writeJSON(writer, http.StatusOK, map[string]string{"url": url})
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

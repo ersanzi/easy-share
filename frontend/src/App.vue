@@ -214,7 +214,7 @@ const avatarText = computed(() => {
 
       <section class="workspace">
         <!-- ═══ 设置页 ═══ -->
-        <SettingsPanel v-if="view === 'settings'" />
+        <SettingsPanel v-if="view === 'settings'" @logout="app.logout" />
 
         <!-- ═══ 管理页（仅管理员）═══ -->
         <AdminPanel v-else-if="view === 'admin' && app.currentUser.value.isAdmin" />

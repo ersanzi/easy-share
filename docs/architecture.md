@@ -1,6 +1,6 @@
 # EasyShare 当前架构
 
-> 更新基线：2026-08-31（并入 ADR-0007 账号控制面批次）。
+> 更新基线：2026-08-31（账号控制面批次收尾：P4 空间挂载对账、KI-5 死代码清理）。
 
 ## 1. 进程模型
 
@@ -9,8 +9,9 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ easyshare(.exe)  — Wails 桌面端                                 │
-│ main.go + app.go：窗口、托盘、Core 进程管理、WebSocket 事件流    │
-│ tray_windows.go / tray_darwin.go：平台托盘                      │
+│ main.go + app.go：窗口、托盘、悬浮窗、Core 进程管理、事件流      │
+│ spacemount.go + internal/spacedav：空间 WebDAV（19082/19083）， │
+│   登录后挂「此电脑」个人/共享盘，每个文件操作经控制面            │
 │ frontend/：Vue 3 + TypeScript UI                                │
 └───────────────────────────┬─────────────────────────────────────┘
                             │ HTTP 127.0.0.1:19080 / Bearer Token
@@ -22,18 +23,12 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 │ internal/discovery：UDP 设备发现                                │
 │ internal/transfer：TCP 文件传输（含文件夹 zip 管线）            │
 │ internal/drive：WebDAV 共享服务                                 │
-│ internal/cloud：网盘 API（S3 对象存储）                         │
 │ internal/knowledge：知识网关（登录/问答代理，会话落盘）         │
-│ internal/namespace：系统文件入口（此电脑 / Finder 挂载）         │
 └───────┬────────────────────┬───────────────┬────────────┬──────┘
         │ UDP 9527           │ TCP 9528      │ 127.0.0.1:19080 │ HTTP（公司内网）
         │ 设备发现           │ 文件传输      │ WebDAV 共享（无认证） │ 知识服务（FastAPI）
         ▼                    ▼               ▼                ▼
    局域网设备             对端 EasyShare  资源管理器 / Finder  知识服务器（各公司部署）
-                                                   │ 127.0.0.1:19081
-                                                   │ WebDAV 云盘驱动器
-                                                   ▼
-                                              「此电脑」品牌入口
 ```
 
 关闭桌面窗口默认隐藏到托盘（OnBeforeClose 拦截），Core 继续运行。托盘菜单"退出"或界面"退出服务"才执行全量关闭。
@@ -56,13 +51,13 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/transfer` | TCP 流式发送/接收、文件夹 zip 管线、速度计算 |
 | `internal/drive` | WebDAV 服务 + 控制面云盘客户端（预签名 URL 上传/下载/列表，`client.go`/`upload.go`） |
 | `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3） |
-| `internal/spacedav` | 按用户命名空间的 WebDAV 服务层（P2 存储隔离） |
+| `internal/spacedav` | 空间 WebDAV 文件系统（P4 挂载的服务层）：建在 `internal/drive` 客户端之上，每个操作经控制面，配额与共享授权对资源管理器同样生效 |
 | `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
-| `spacemount.go` | 桌面端空间挂载与浮窗拖放目标（P4 前置） |
-| `internal/cloud` | 旧网盘业务层（Core 直连 S3 时代遗留，P2 后无生产调用方，见 KI-5） |
-| `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake） |
-| `internal/cloud/webdavfs` | S3-backed WebDAV FileSystem |
-| `internal/namespace` | 系统文件入口：Windows Shell NameSpace / macOS Finder 挂载 |
+| `spacemount.go` | 桌面端空间挂载（P4：登录后挂「此电脑」个人/共享盘、换账号重挂）与浮窗拖放目标 |
+| `appupdate.go` + `internal/update` | 客户端在线升级（检查/下载/SHA256 校验/静默安装，升级源为控制面，见第 4b 节） |
+| `internal/cloud` | 网盘视图类型与预览辅助（`File`/`Preview`/预览分类/文本限量内联），供桌面端 Wails 绑定使用；Core 直连 S3 的 Service 与路由已删（KI-5） |
+| `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake，`scripts/create_bucket.go` 等控制面之外的用途仍在用） |
+| `internal/namespace` | 系统文件入口：Windows Shell NameSpace / macOS Finder 挂载（双平台同一 `SpaceEntries` 模型） |
 | `internal/fsutil` | 跨平台磁盘/卷枚举、目录列举、打开文件/文件夹 |
 | `internal/logging` | 日志目录、追加写入和 5 MiB 轮转 |
 | `internal/task` | 传输任务状态机、持久化（终态 JSON 文件） |
@@ -79,7 +74,8 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | 功能 | 默认地址/端口 | 暴露范围 |
 | --- | --- | --- |
 | Core API + WebDAV 共享 | `127.0.0.1:19080` | 仅本机 |
-| 云盘驱动器 WebDAV | `127.0.0.1:19081` | 仅本机 |
+| 空间 WebDAV·个人盘 | `127.0.0.1:19082`（WebDAVPort+2，桌面端进程；刻意跳过 +1，旧版 Core 的已废弃云盘 WebDAV 占过 19081） | 仅本机 |
+| 空间 WebDAV·共享盘 | `127.0.0.1:19083`（WebDAVPort+3，桌面端进程） | 仅本机 |
 | 设备发现 | UDP `9527` | 局域网 |
 | 文件传输 | TCP `9528` | 局域网 |
 | 账号控制面 REST（RuoYi admin） | `http://localhost:8090`（`config.json` platformBaseUrl） | 服务端（dev 本机） |
@@ -112,12 +108,6 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/drive/start` | 启动 WebDAV 共享 |
 | `POST` | `/api/drive/stop` | 停止 WebDAV 共享 |
 | `POST` | `/api/config/reload` | 热加载配置 |
-| `GET` | `/api/cloud/files` | 网盘文件列表 |
-| `GET` | `/api/cloud/preview?key=` | 网盘文件预览 |
-| `POST` | `/api/cloud/upload` | 网盘上传（multipart 流式） |
-| `POST` | `/api/cloud/download` | 网盘下载（返回预签名 URL） |
-| `DELETE` | `/api/cloud/files` | 网盘删除 |
-| `POST` | `/api/cloud/share` | 网盘分享链接 |
 | `GET` | `/api/knowledge/status` | 知识服务登录态（本地，无网络探测） |
 | `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话） |
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
@@ -163,20 +153,20 @@ Authorization: Bearer <apiToken>
 
 ### 系统文件入口（此电脑 / Finder）
 
-**Windows**：通过注册表在 Shell NameSpace 注册 CLSID，委托文件夹指向 WebDAV UNC（`\\127.0.0.1@19080\DavWWWRoot`），无需盘符映射。云盘驱动器使用独立端口 19081 的 S3-backed WebDAV。
+桌面端与 Core 各贡献一部分入口，全部指向本机 WebDAV：
 
-**macOS**：优先使用 `mount_webdav` 命令行挂载到 `/Volumes/EasyShare 网盘`（不弹 GUI 对话框），osascript `mount volume` 仅作兜底。
+- **局域网共享**（Core，:19080 常驻）：Windows 通过注册表在 Shell NameSpace 注册 CLSID，委托文件夹指向 WebDAV UNC（`\\127.0.0.1@19080\DavWWWRoot`），无需盘符映射；macOS 优先 `mount_webdav` 挂载（不弹 GUI 对话框），osascript 兜底。
+- **云端空间盘**（P4，桌面端进程 ：19082/:19083）：登录后按账号**实际拥有的空间**挂载——个人盘条目名为「<昵称> 的网盘」，共享盘为「EasyShare 共享」（只读授权也挂，但 WebDAV 层拒写）。退出登录、配额收回或共享授权撤销时条目随之卸载；数据全部经控制面（`internal/spacedav`），配额与授权对资源管理器同样生效。旧 19081 云盘驱动器（bucket 根挂载点）已随 P2 永久下线。
 
 ### 退出全部服务
 
 前端先停止轮询和事件订阅，然后调用 `ShutdownAll`。Core 资源清理顺序：
 
-1. 停止云盘驱动器 WebDAV（:19081）
-2. 停止共享 WebDAV（:19080）
-3. 取消 Core 后台 context（发现、接收等）
-4. 关闭 Core HTTP Server 并退出进程
-5. 桌面端设置 quitting=true，调用 runtime.Quit
-6. 前端进入"服务已安全退出"状态
+1. 停止共享 WebDAV（:19080）
+2. 取消 Core 后台 context（发现、接收等）
+3. 关闭 Core HTTP Server 并退出进程
+4. 桌面端设置 quitting=true，调用 runtime.Quit（桌面进程退出时空间 WebDAV :19082/:19083 随之关闭）
+5. 前端进入"服务已安全退出"状态
 
 托盘退出额外加 3s 超时：Core 无响应时强制退出桌面进程，避免卡死。
 
@@ -210,9 +200,8 @@ desktop eventStream (Go 协程，指数退避重连)
 
 **现行链路（ADR-0007，P2 起）**：桌面端 `internal/drive` 持控制面 JWT 调 `platform-drive/` 换短期预签名 URL（PUT 15m / GET 10m），直传/直取 RustFS；对象键强制落在 `users/{userId}/`（个人）或 `shared/`（共享）命名空间，服务端拒绝跨用户 key。配额与池上限（物理容量探测、预留水位、两种"满"分开报错）见 ADR-0007「空间授权与配额」。
 
-- `internal/cloud` 及其 `/api/cloud/*` 路由是 Core 直连 S3 时代的遗留，**已无生产调用方**（`server.cloud` 为 nil 时一律 503），清理决策登记为 [KI-5](known-issues.md)。
-- `internal/cloud/objectstore` 的 provider-neutral 存储抽象（s3store + memory fake）仍在服役（控制面之外的用途）。
-- `internal/cloud/webdavfs` 是否保留取决于 P4 按用户挂载方案（复用则改为接 `internal/drive`）。
+- `/api/cloud/*` 七条路由与 `cloud.Service`、`webdavfs`、desktop.Client 的 Cloud* 方法已删除（KI-5 已关闭）：P4 空间挂载走 `internal/spacedav`（建在 `internal/drive` 之上），不存在"不经控制面的云盘 WebDAV"路径，隔离边界不再有死代码可绕。
+- `internal/cloud` 仅保留前端契约类型与预览辅助；`internal/cloud/objectstore` 的 provider-neutral 存储抽象（s3store + memory fake）仍在服役（控制面之外的用途）。
 - 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束；凭据真值只在 `deploy/rustfs/.env`（gitignore），由 `run-ruoyi-admin.ps1` 注入控制面进程。
 
 ## 8a. 知识网关（桌面端 ↔ 知识服务）

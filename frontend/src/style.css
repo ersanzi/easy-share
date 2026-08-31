@@ -487,6 +487,15 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .settings-body { padding: 0 19px 14px; }
 .setting-row { padding: 14px 0; border-bottom: 1px solid rgba(60,60,67,.07); }
 .setting-row:last-child { border-bottom: 0; }
+.settings-account { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid rgba(60,60,67,.07); }
+.settings-account-avatar {
+  display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 auto;
+  color: white; background: linear-gradient(#6cb1f2, #2f7cd6); border-radius: 50%;
+  font-size: 16px; font-weight: 600;
+}
+.settings-account-meta { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.settings-account-meta strong { font-size: 13px; }
+.settings-account-meta .setting-hint { margin: 0; }
 .setting-label { display: block; font-size: 13px; font-weight: 600; color: #1d1d1f; }
 .setting-hint { margin: 3px 0 10px; color: var(--muted); font-size: 11px; }
 .setting-input {

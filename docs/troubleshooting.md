@@ -22,13 +22,13 @@ Windows 可按 `Win + R` 粘贴对应路径；macOS 可在 Finder 使用“前�
 
 ## 2. 「此电脑」入口打不开或内容为空
 
-EasyShare 不再映射盘符。「此电脑」入口直接委托到 WebDAV UNC（共享 `\\127.0.0.1@19080\DavWWWRoot`、网盘 `\\127.0.0.1@19081\DavWWWRoot`）。双击打不开或显示为空时，按顺序检查：
+EasyShare 不再映射盘符。「此电脑」入口直接委托到 WebDAV UNC：局域网共享 `\\127.0.0.1@19080\DavWWWRoot`（Core 常驻）；云端空间盘登录后由桌面端挂载——个人盘 19082、共享盘 19083（未登录/未分配容量时不出现）。双击打不开或显示为空时，按顺序检查：
 
-1. 确认正在运行的是最新的 `easyshare.exe` 和配套的 `easyshare-core.exe`，且 `core.log` 出现 WebDAV ready。
-2. 确认端口在监听：
+1. 确认正在运行的是最新的 `easyshare.exe` 和配套的 `easyshare-core.exe`，且 `core.log` 出现 WebDAV ready；空间盘还需要已登录（`desktop.log` 有 `space mount: N 个空间已挂载`）。
+2. 确认端口在监听（共享盘 19080 恒应监听；19082/19083 仅登录后）：
 
    ```powershell
-   Get-NetTCPConnection -LocalPort 19080,19081 -State Listen
+   Get-NetTCPConnection -LocalPort 19080,19082,19083 -State Listen
    ```
 
 3. 确认 Windows WebClient 服务正在运行（解析 WebDAV UNC 必需）：

@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
-import type { UpdateCheckResult, UpdateProgress } from '../types/core'
+import { QUOTA_UNSET } from '../types/core'
+import type { AuthUser, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
+
+// 登出走 App.vue 绑定的 app.logout：只有那条路径会清 composable 的登录态并切回登录页
+const emit = defineEmits<{ logout: [] }>()
 
 interface SettingsForm {
   deviceName: string
@@ -14,6 +18,31 @@ const form = ref<SettingsForm>({ deviceName: '', receiveDir: '', webdavRoot: '' 
 const saving = ref(false)
 const saved = ref(false)
 const loadError = ref('')
+
+// ─── 账号资料 ───
+const user = ref<AuthUser | null>(null)
+const spaces = ref<Space[]>([])
+const spacesError = ref('')
+
+const accountInitial = computed(() => {
+  const name = user.value?.nickName || user.value?.userName || ''
+  return name ? Array.from(name)[0] : '我'
+})
+const personalSpace = computed(() => spaces.value.find(s => s.spaceType === 'personal') ?? null)
+const sharedSpace = computed(() => spaces.value.find(s => s.spaceType === 'shared') ?? null)
+const personalUsage = computed(() => {
+  const s = personalSpace.value
+  if (!s) return ''
+  if (s.quotaBytes === QUOTA_UNSET) return '待开通：尚未分配容量，请联系管理员'
+  const quota = s.quotaBytes < 0 ? '不限' : formatBytes(s.quotaBytes)
+  return `已用 ${formatBytes(s.usedBytes)} / ${quota}`
+})
+const sharedUsage = computed(() => {
+  const s = sharedSpace.value
+  if (!s) return ''
+  const perm = s.permission === 'owner' ? '所有者' : s.permission === 'write' ? '可写' : s.permission === 'read' ? '只读' : '未授权'
+  return `已用 ${formatBytes(s.usedBytes)} · ${perm}`
+})
 
 const load = async () => {
   try {
@@ -136,6 +165,12 @@ const formatSpeed = (bytesPerSecond?: number) => {
 onMounted(async () => {
   load()
   try { appVersion.value = await core.appVersion() } catch { appVersion.value = '' }
+  try { user.value = await core.currentUser() } catch { user.value = null }
+  try {
+    spaces.value = await core.mySpaces()
+  } catch (e) {
+    spacesError.value = e instanceof Error ? e.message : String(e)
+  }
   EventsOn('update:progress', onProgress)
   EventsOn('update:downloaded', onDownloaded)
   EventsOn('update:error', onUpdateError)
@@ -164,6 +199,34 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="settings-grid">
+      <!-- 账号资料 -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <h2>账号</h2>
+        </div>
+        <div class="settings-body">
+          <div class="settings-account">
+            <span class="settings-account-avatar" aria-hidden="true">{{ accountInitial }}</span>
+            <div class="settings-account-meta">
+              <strong>{{ user?.nickName || user?.userName || '…' }}</strong>
+              <span class="setting-hint">@{{ user?.userName || '…' }}<template v-if="user?.isAdmin"> · 管理员</template></span>
+            </div>
+            <button class="secondary-button danger compact" type="button" @click="emit('logout')">退出登录</button>
+          </div>
+          <div v-if="spacesError" class="setting-row">
+            <p class="update-error">空间信息读取失败：{{ spacesError }}</p>
+          </div>
+          <div v-if="personalSpace" class="setting-row">
+            <label class="setting-label">个人网盘</label>
+            <p class="setting-hint">{{ personalUsage }} · 挂载在「此电脑」</p>
+          </div>
+          <div v-if="sharedSpace" class="setting-row">
+            <label class="setting-label">共享空间</label>
+            <p class="setting-hint">{{ sharedUsage }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 通用设置 -->
       <div class="card settings-card">
         <div class="card-header">

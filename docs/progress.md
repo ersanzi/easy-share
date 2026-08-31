@@ -34,7 +34,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 当前位置
 
-**主线一：账号控制面（阶段 4 云端 MVP）** — 外部协作者批次（2026-08-28~30，基点 f5524f9）已于 2026-08-31 合入 dev：P0–P2 完成并经活栈验收，P3 管理面板与空间/配额模型、池上限随批合入，待本仓回归与真机验收。
+**主线一：账号控制面（阶段 4 云端 MVP）** — 外部协作者批次（2026-08-28~30，基点 f5524f9）已于 2026-08-31 合入 dev：P0–P2 完成并经活栈验收，P3 管理面板与空间/配额模型、池上限随批合入；合入迭代已完成本仓回归（Go 18 包/vitest 33/pytest 120/wails build 全绿）。批次实际还携带了 P4（空间挂载 + 浮窗切换器），由 2026-08-31 收尾迭代对账确认；KI-5 死代码已清、设置页账号资料已补。剩余真机鼠标验收。
 
 **知识平台里程碑 1.8：知识质量驾驶舱** — 进行中（四个 Tab 已实现，余批量压测与人工验收）
 
@@ -111,12 +111,15 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] WPS 最小闭环（发芽路线第 4 步）：知识服务自托管加载项（/wps 同源免跨域），WPS 文字「知识」页签选中段落一键查询，任务窗格登录 + 引用展示；本机安装脚本登记 jsaddons。详见 [`iterations/2026-08-21-wps-minimal-loop.md`](iterations/2026-08-21-wps-minimal-loop.md)
 - [x] 托盘悬停浮窗（切片 1，2026-08-31 外部批次合入）：Windows 侧改用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 获得悬停事件（`getlantern/systray` 不具备且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2，标题栏含图标/名称/头像/设置，点设置显示主窗口；定位基于 `Shell_NotifyIconGetRect`，适配任务栏四边缘与多显示器负坐标；已移除 systray 及其 8 个传递依赖。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md)
 - [x] 客户端在线升级（2026-08-31）：升级源为 RuoYi 控制面（platform-drive 发布接口，安装包存 RustFS、预签名直传不经控制面）；Windows 全自动「检查→下载（SHA256 校验）→重启并更新→NSIS 静默安装→自动重启」，macOS 检测+引导下载；设置页「关于与更新」卡片 + 启动 24h 节流自动检查（设置入口红点）；`publish-release.ps1` 一条命令发布。真机 UI 全流程验收通过（0.1.0→0.1.1）。详见 [`iterations/2026-08-31-online-update.md`](iterations/2026-08-31-online-update.md)
+- [x] P4 空间挂载（随外部批次合入，2026-08-31 收尾迭代对账确认）：`spacemount.go` + `internal/spacedav`（建在 drive 控制面客户端之上，每个文件操作经控制面，配额/授权对资源管理器生效），登录后按账号实际拥有的空间挂「此电脑」条目——个人盘「<昵称> 的网盘」（19082）+ 共享盘「EasyShare 共享」（19083，只读授权挂盘但拒写），登出/配额收回/授权撤销自动卸载；浮窗空间切换器 + 拖放上传（`SetDropSpace`/`uploadDroppedToSpace`）；旧 19081 云盘 WebDAV 永久下线。双平台 `namespace.SpaceEntries` 同一模型（darwin 只读标注重漏由 macOS CI 捕获修复）
+- [x] 控制面批次收尾（2026-08-31）：文档对账（本条 + architecture/README/known-issues/合并文档勘误——此前文档把 P4 误记为"剩余"）+ KI-5 死代码清理（`/api/cloud/*` 七路由、`cloud.Service`、`webdavfs`、desktop.Client Cloud* 方法，净删约 1390 行）+ 设置页「账号」资料卡片（头像/昵称/账号/管理员标识 + 空间用量 + 退出登录）。详见 [`iterations/2026-08-31-account-plane-closure.md`](iterations/2026-08-31-account-plane-closure.md)
 - [x] 悬浮窗布局重构与固定态（切片 2，2026-08-31 外部批次合入）：浮窗加高按内容分区、固定态（固定是文件拖放的前提）、托盘图标 GUID 持久化与窗口位置/固定状态持久化。详见 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-31 | 控制面批次收尾 — P4 挂载对账（文档纠偏）+ KI-5 死代码清理 + 设置页账号资料 | 已完成（回归绿+构建过；真机鼠标验收遗留） |
 | 2026-08-31 | 客户端在线升级（控制面托管）— 检查/下载/校验/静默安装全自动（Windows）+ platform-drive 发布接口 | 已完成（UI 全流程验收通过 0.1.0→0.1.1） |
 | 2026-08-31 | 合入外部协作者批次 — RuoYi 账号控制面 P0–P3 + 托盘悬浮窗 + 空间/配额/池上限（快照基点 f5524f9） | 已完成（本仓回归进行中） |
 | 2026-08-29 | 账号控制面 P2：按用户隔离的存储授权 — 预签名 URL 直传，客户端不再持 RustFS 凭据 | 已完成（隔离验收 9/9；桌面端 UI 链路待真机补验） |
@@ -183,7 +186,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
-**账号控制面（阶段 4 云端 MVP，外部批次已合入）** — 决策见 [ADR-0007](adr/0007-account-control-plane-ruoyi.md)：统一账号采用 **RuoYi-Vue-Plus 6.0**（Java 控制面，调和了主线一 Go 单体与主线二 Java 控制面的选型冲突——账号归 RuoYi，`easyshare-core` 退回本机采集/传输层）。P0：RuoYi 6.0 跑在 PostgreSQL 16 + Redis 上，登录返回 JWT（`deploy/ruoyi-db/`）。P1：桌面客户端登录门禁 + 登录态贯通（主界面与悬浮窗头像跟随账号、登出、点头像进设置）。P2：按用户隔离的存储授权——控制面模块 `platform-drive/` 签发短期预签名 URL，客户端不再持任何 RustFS 凭据，对象键落在 `users/{userId}/` 下，跨用户隔离 9/9 验收通过；**KI-2 关闭、KI-1/KI-4 顺带修掉、KI-3 的用户隔离部分关闭**（稳定文件身份仍未做），新登记 KI-5。P3 已随批次落地：客户端自绘管理页（`AdminPanel.vue`，账号/注册开关/空间配额一页管）+ `es_space` 空间授权与配额模型 + 池上限与物理容量感知（`CapacityService`，方案见 [`plans/2026-08-30-space-pool-and-organize.md`](plans/2026-08-30-space-pool-and-organize.md)，整理算法部分待实施）。剩余：设置页账号资料 → P4 浮窗滑动开关 + 按用户命名空间的资源管理器挂载。详见 [`iterations/2026-08-29-account-control-plane-p0.md`](iterations/2026-08-29-account-control-plane-p0.md)、[`iterations/2026-08-29-account-p1-desktop-login.md`](iterations/2026-08-29-account-p1-desktop-login.md)、[`iterations/2026-08-29-account-p2-storage-isolation.md`](iterations/2026-08-29-account-p2-storage-isolation.md)。
+**账号控制面（阶段 4 云端 MVP，外部批次已合入）** — 决策见 [ADR-0007](adr/0007-account-control-plane-ruoyi.md)：统一账号采用 **RuoYi-Vue-Plus 6.0**（Java 控制面，调和了主线一 Go 单体与主线二 Java 控制面的选型冲突——账号归 RuoYi，`easyshare-core` 退回本机采集/传输层）。P0：RuoYi 6.0 跑在 PostgreSQL 16 + Redis 上，登录返回 JWT（`deploy/ruoyi-db/`）。P1：桌面客户端登录门禁 + 登录态贯通（主界面与悬浮窗头像跟随账号、登出、点头像进设置）。P2：按用户隔离的存储授权——控制面模块 `platform-drive/` 签发短期预签名 URL，客户端不再持任何 RustFS 凭据，对象键落在 `users/{userId}/` 下，跨用户隔离 9/9 验收通过；**KI-2 关闭、KI-1/KI-4 顺带修掉、KI-3 的用户隔离部分关闭**（稳定文件身份仍未做），新登记 KI-5。P3 已随批次落地：客户端自绘管理页（`AdminPanel.vue`，账号/注册开关/空间配额一页管）+ `es_space` 空间授权与配额模型 + 池上限与物理容量感知（`CapacityService`，方案见 [`plans/2026-08-30-space-pool-and-organize.md`](plans/2026-08-30-space-pool-and-organize.md)，整理算法部分待实施）。P4（浮窗空间切换器 + 按用户命名空间的资源管理器挂载）与设置页账号资料均已落地——前者随外部批次（`spacemount.go` + `internal/spacedav`，收尾迭代对账确认），后者随收尾迭代，KI-5 死代码（约 1390 行）同批清除，详见 [`iterations/2026-08-31-account-plane-closure.md`](iterations/2026-08-31-account-plane-closure.md)。剩余：真机鼠标验收（见已知阻塞）。详见 [`iterations/2026-08-29-account-control-plane-p0.md`](iterations/2026-08-29-account-control-plane-p0.md)、[`iterations/2026-08-29-account-p1-desktop-login.md`](iterations/2026-08-29-account-p1-desktop-login.md)、[`iterations/2026-08-29-account-p2-storage-isolation.md`](iterations/2026-08-29-account-p2-storage-isolation.md)。
 
 **托盘悬浮窗（切片 1、2 已合入）** — 阶段 2 内的新增能力。切片 1：Windows 侧用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 替换 `getlantern/systray`（该库无悬停事件且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2。切片 2：浮窗加高按内容分区、固定态（固定是文件拖放的前提——悬停态下鼠标一旦离开图标浮窗即收起，无法作为拖放目标）、窗口位置与固定状态持久化。「桌面右下角常驻悬浮窗」与「托盘图标悬停」为**同一窗口的两种状态**，不另建部件。剩余真实鼠标交互验收。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md) 与 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)。
 
@@ -207,9 +210,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 已知阻塞
 
-- **外部批次合入后需完整回归**：账号控制面 P0–P3 与托盘悬浮窗在快照分支上通过其自带验证，与本仓 23 个知识平台提交合并后的回归（Go/前端/构建）由本次合入迭代承担；真机「登录 → 上传 → 换账号看列表」仍需真实鼠标操作补验
-- P2 的隔离结论来自控制面活栈验收与 Go 客户端集成测试；**桌面端 UI 链路只验证了编译与类型**
-- **「此电脑 → EasyShare 网盘」入口不可用**：修 KI-2 移走 Core 的 RustFS 凭据后该挂载失去数据源（非"顺手清理"，是本轮的代价）。恢复它需要先定**空间授权与配额模型**——该模型已随 P3 落地（`es_space`），挂载重做归 P4
+- **真机鼠标验收欠账**（需真实操作，代码侧已就绪）：① 登录 → 上传 → 换账号看列表（P2 桌面端 UI 链路只验过编译与类型）②「此电脑」空间盘挂载/卸载与换账号重挂 ③ 悬浮窗悬停/固定/拖放交互（切片 1+2）④ 设置页账号卡片与退出登录。可与公司部署验收一并做
+- 本仓回归已于合入迭代完成（Go 18 包全绿 / vitest 33 / pytest 120 / wails build），后续以各迭代自验为准
 - macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 

@@ -1,8 +1,8 @@
 // Package spacedav 把一个「空间」（个人或共享）暴露为 WebDAV 文件系统，供 Windows
 // 资源管理器直接挂载。
 //
-// 与 internal/cloud/webdavfs 的区别，也是本包存在的理由：webdavfs 建在
-// objectstore.Store 之上，用编译期静态凭据直连 RustFS（KI-2）；本包建在
+// 前身是建在 objectstore.Store 之上、用编译期静态凭据直连 RustFS 的
+// internal/cloud/webdavfs（KI-2，已随 KI-5 清理删除）。本包改为建在
 // internal/drive 客户端之上，**每个操作都经控制面**——因此
 //
 //   - 客户端不持任何对象存储凭据（ADR-0007 不变量 1）；

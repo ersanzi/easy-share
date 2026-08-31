@@ -5,20 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"easyshare/internal/api"
-	"easyshare/internal/cloud"
 	"easyshare/internal/discovery"
 	"easyshare/internal/knowledge"
 	"easyshare/internal/task"
@@ -125,137 +118,6 @@ func (client *Client) CreateTask(ctx context.Context, input map[string]any) (tas
 // PatchTask 更新外部任务的进度/状态。
 func (client *Client) PatchTask(ctx context.Context, id string, input map[string]any) error {
 	return client.request(ctx, http.MethodPatch, "/api/tasks/"+id, input, nil)
-}
-
-func (client *Client) CloudList(ctx context.Context) ([]cloud.File, error) {
-	var result []cloud.File
-	err := client.request(ctx, http.MethodGet, "/api/cloud/files", nil, &result)
-	return result, err
-}
-
-// CloudPreview 获取后端声明的预览能力，并将相对内容地址补全为 Core 地址。
-func (client *Client) CloudPreview(ctx context.Context, key string) (cloud.Preview, error) {
-	var result cloud.Preview
-	err := client.request(ctx, http.MethodGet, "/api/cloud/preview?key="+url.QueryEscape(key), nil, &result)
-	if err != nil {
-		return cloud.Preview{}, err
-	}
-	if strings.HasPrefix(result.ContentURL, "/") {
-		result.ContentURL = client.baseURL + result.ContentURL
-	}
-	return result, nil
-}
-
-func (client *Client) CloudUpload(ctx context.Context, filePath string) (cloud.UploadResult, error) {
-	var result cloud.UploadResult
-	err := client.request(ctx, http.MethodPost, "/api/cloud/upload", map[string]string{"filePath": filePath}, &result)
-	return result, err
-}
-
-// ProgressFunc reports upload progress: bytes sent so far and total file size.
-type ProgressFunc func(sent, total int64)
-
-type progressReader struct {
-	reader     io.Reader
-	sent       int64
-	total      int64
-	onProgress ProgressFunc
-}
-
-func (pr *progressReader) Read(p []byte) (int, error) {
-	n, err := pr.reader.Read(p)
-	pr.sent += int64(n)
-	if pr.onProgress != nil {
-		pr.onProgress(pr.sent, pr.total)
-	}
-	return n, err
-}
-
-// CloudUploadStream uploads a local file via multipart form data, reporting
-// progress through the callback. This enables real-time progress in the UI.
-func (client *Client) CloudUploadStream(ctx context.Context, filePath string, onProgress ProgressFunc) (cloud.UploadResult, error) {
-	return client.CloudUploadStreamWithKey(ctx, filePath, "", onProgress)
-}
-
-// CloudUploadStreamWithKey 与 CloudUploadStream 相同，但可通过 objectKey 指定
-// 含路径的对象键（如 "photos/2024/img.jpg"）。objectKey 为空时退化为文件名。
-func (client *Client) CloudUploadStreamWithKey(ctx context.Context, filePath, objectKey string, onProgress ProgressFunc) (cloud.UploadResult, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return cloud.UploadResult{}, fmt.Errorf("open file: %w", err)
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return cloud.UploadResult{}, fmt.Errorf("stat file: %w", err)
-	}
-
-	pipeReader, pipeWriter := io.Pipe()
-	writer := multipart.NewWriter(pipeWriter)
-
-	go func() {
-		part, partErr := writer.CreateFormFile("file", filepath.Base(filePath))
-		if partErr != nil {
-			_ = pipeWriter.CloseWithError(partErr)
-			return
-		}
-		pr := &progressReader{reader: file, total: info.Size(), onProgress: onProgress}
-		if _, copyErr := io.Copy(part, pr); copyErr != nil {
-			_ = pipeWriter.CloseWithError(copyErr)
-			return
-		}
-		_ = writer.Close()
-		_ = pipeWriter.Close()
-	}()
-
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/cloud/upload", pipeReader)
-	if err != nil {
-		return cloud.UploadResult{}, err
-	}
-	request.Header.Set("Authorization", "Bearer "+client.token)
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-	request.Header.Set("X-File-Size", strconv.FormatInt(info.Size(), 10))
-	if objectKey != "" {
-		request.Header.Set("X-Object-Key", objectKey)
-	}
-
-	// Use a dedicated client with no timeout for large file uploads.
-	uploadClient := &http.Client{Timeout: 0}
-	response, err := uploadClient.Do(request)
-	if err != nil {
-		return cloud.UploadResult{}, err
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode >= 300 {
-		var apiError api.ErrorResponse
-		_ = json.NewDecoder(response.Body).Decode(&apiError)
-		return cloud.UploadResult{}, fmt.Errorf("%s", apiError.Message)
-	}
-
-	var result cloud.UploadResult
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return cloud.UploadResult{}, err
-	}
-	return result, nil
-}
-func (client *Client) CloudDownload(ctx context.Context, key string) (string, error) {
-	var result struct {
-		URL string `json:"url"`
-	}
-	err := client.request(ctx, http.MethodPost, "/api/cloud/download", map[string]string{"key": key}, &result)
-	return result.URL, err
-}
-func (client *Client) CloudDelete(ctx context.Context, key string) error {
-	return client.request(ctx, http.MethodDelete, "/api/cloud/files", map[string]string{"key": key}, nil)
-}
-func (client *Client) CloudShare(ctx context.Context, key string, expiryHours int) (string, error) {
-	var result struct {
-		URL string `json:"url"`
-	}
-	err := client.request(ctx, http.MethodPost, "/api/cloud/share", map[string]any{"key": key, "expiryHours": expiryHours}, &result)
-	return result.URL, err
 }
 
 // --- 知识网关代理（令牌全程留在 Core，前端只见登录态视图） ---

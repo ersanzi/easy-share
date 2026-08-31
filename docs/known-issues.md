@@ -3,7 +3,7 @@
 > 登记已确认、尚未修复的实现缺陷。**只登记不复制**：细节和修复决策仍在各自的迭代记录、ADR 或代码注释中。
 > 与相邻文档的分工：产品级能力边界见 [`../README.md`](../README.md) 的「当前限制」；阻塞下一步推进的事项见 [`progress.md`](progress.md) 的「已知阻塞」；可复现的环境故障与解法见 [`troubleshooting.md`](troubleshooting.md)。
 >
-> 最后更新：2026-08-29
+> 最后更新：2026-08-31
 
 ## 登记表
 
@@ -13,7 +13,7 @@
 | [KI-2](#ki-2云端凭据编译期硬编码且可从二进制明文提取) | 高 | 云端凭据编译期硬编码，可从二进制明文提取 | 服务器化部署的前置阻塞 | 已修复（[P2](iterations/2026-08-29-account-p2-storage-isolation.md)） |
 | [KI-3](#ki-3对象-key-直接使用文件名无身份与用户隔离) | 高 | 对象 key 直接使用文件名，无身份与用户隔离 | 多用户与文件版本的前置阻塞 | 部分修复（[P2](iterations/2026-08-29-account-p2-storage-isolation.md) 做完用户隔离；稳定文件身份仍未做） |
 | [KI-4](#ki-4预览测试依赖本机注册表的-mime-映射) | 中 | 预览测试依赖本机注册表的 MIME 映射 | 阻断本机完整构建流水线 | 已修复（[P2](iterations/2026-08-29-account-p2-storage-isolation.md)，取修复方向第 2 条） |
-| [KI-5](#ki-5core-侧云盘路由已无调用方但仍可绕过用户隔离) | 中 | Core 侧云盘路由已无调用方，但仍可绕过用户隔离 | 隔离边界的回归风险 | 未修复 |
+| [KI-5](#ki-5core-侧云盘路由已无调用方但仍可绕过用户隔离) | 中 | Core 侧云盘路由已无调用方，但仍可绕过用户隔离 | 隔离边界的回归风险 | 已修复（[批次收尾](iterations/2026-08-31-account-plane-closure.md)） |
 
 严重度口径：**高** = 阻塞既定路线的下一阶段；**中** = 影响可用性或可诊断性，但不阻塞开发；**低** = 体验瑕疵。
 
@@ -152,6 +152,14 @@ Get-ItemProperty 'HKCR:\.md' | Select-Object -ExpandProperty 'Content Type'
 **修复方向**　删除而非留存：摘掉七个路由注册、删 `cloud.Service` 与 `ConfigureCloud`、删 `webdavfs` 与 `drive/cloud_service.go`。需保留的是仍在服役的部分——`cloud.File`、`cloud.Preview`、`DetectPreviewKind`、`ContentTypeForKey`、`FillTextPreview`，以及 `objectstore` 抽象（`s3store`/`memory` 对控制面之外的用途仍有价值）。约 900 行的删除面，且要一并处理 `cloud_preview_test.go`，故未搭在 P2 里做。
 
 若 P4 的按用户挂载决定复用 `webdavfs`，则该文件不删、改为接 `internal/drive` 客户端（只需 `Store` 十个方法中的五个）。两条路互斥，先定 P4 方案再动手。
+
+**已修复（[批次收尾迭代](iterations/2026-08-31-account-plane-closure.md)，2026-08-31）** P4 已随外部批次落地为 `internal/spacedav`（建在 `internal/drive` 控制面客户端之上，与 `webdavfs` 无关），删除分支生效，净删约 1390 行：
+
+- `internal/api`：七条 `/api/cloud/*` 路由、`ConfigureCloud`/`ConfigureCloudDrive`/`StartCloudDrive`/`StopCloudDrive`、五个 handler 与 `cloud_preview.go`（HMAC 内容票据）及其测试；
+- `internal/cloud`：`service.go`（`cloud.Service`）与 `webdavfs/` 整包删除；`File` 结构体迁入 `preview.go`，预览辅助（`DetectPreviewKind`/`ContentTypeForKey`/`FillTextPreview`）与 `objectstore` 保留；
+- `internal/drive/cloud_service.go` 与 `internal/desktop/client.go` 的 Cloud* 客户端方法（调用已删路由，均无调用方）。
+
+删除后不存在任何"不经控制面"的云盘路径，隔离边界只能由控制面裁决。验收：`go build ./...`/`go vet`/`go test ./...` 18 包全绿，`vue-tsc`/`vitest` 33 条通过，`wails build` + Core 重编通过。
 
 **关联**　[P2 迭代记录](iterations/2026-08-29-account-p2-storage-isolation.md)「已知限制」；[ADR-0007](adr/0007-account-control-plane-ruoyi.md) 不变量 1、2。
 
