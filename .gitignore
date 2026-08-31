@@ -46,6 +46,8 @@ easyshare-scaffold/
 
 # ─── RuoYi 控制面（platform/：独立 Java 工程，自带 .git，不纳入本 Go 仓）───
 platform/
+# RuoYi admin 在仓库根运行时写 logs/（sys-console/sys-info/sys-error 及 .gz 轮转，*.log 覆盖不了 gz）
+logs/
 # ─── Python ───
 __pycache__/
 *.py[cod]
