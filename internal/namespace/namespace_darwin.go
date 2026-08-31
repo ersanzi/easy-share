@@ -100,6 +100,9 @@ func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
 		}
 		if mount.Kind == "shared" {
 			entry.CLSID, entry.Name, entry.Description = sharedSpaceCLSID, "EasyShare 共享", "团队共享空间"
+			if mount.ReadOnly {
+				entry.Description = "团队共享空间（只读）"
+			}
 		} else {
 			name := "EasyShare 网盘"
 			if mount.DisplayName != "" {
