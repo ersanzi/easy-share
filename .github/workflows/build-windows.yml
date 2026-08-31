@@ -103,19 +103,8 @@ jobs:
             build/bin/easyshare-core.exe
             build/bin/*-installer.exe
 
-      - name: Publish master rolling Release
-        if: ${{ github.ref == 'refs/heads/master' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: "EasyShare 最新构建 (master)"
-          body: "master 分支最新自动构建产物，每次合并到 master 后自动更新。"
-          prerelease: true
-          make_latest: false
-          files: |
-            build/bin/easyshare.exe
-            build/bin/easyshare-core.exe
-            build/bin/*-installer.exe
+      # 滚动 Release 由 rolling-release.yml 在双平台构建成功后统一删除重建，
+      # 本工作流只上传产物，不再直接发布（避免双流水线并发互删资产）。
 
       - name: Publish prerelease Release
         if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}

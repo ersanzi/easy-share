@@ -1,0 +1,94 @@
+name: Rolling Release
+
+# 滚动 Release 收口：Windows Build 与 macOS Build 只上传构建产物，双平台对同一提交
+# 全部成功后，由本工作流**删除并重建** latest Release。
+#
+# 为什么不能原地更新：softprops/action-gh-release 对已存在的 Release 只追加资产，
+# published_at 停在首次创建日、latest 标签钉在旧提交——Release 列表里"最新构建"
+# 永远显示成旧日期，用户看不到产物其实已更新。删除重建让日期与标签都跟随 master。
+#
+# 为什么单一发布者：Windows 与 macOS 完成时间不同，若各自删除重建，后完成者会把
+# 先完成者刚传的资产一并删掉。故只有本工作流动 Release，构建工作流只交产物。
+# 注意：workflow_run 事件只认默认分支（master）上的本文件。
+
+on:
+  workflow_run:
+    workflows: ["Windows Build", "macOS Build"]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: rolling-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检查双平台是否都已成功
+        id: ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.event.workflow_run.head_sha }}"
+          runs="$(gh api --paginate "repos/$repo/actions/runs?head_sha=$sha" \
+            -q '[.workflow_runs[] | select(.conclusion == "success") | .name] | unique | join(",")')"
+          echo "已成功的构建：$runs"
+          if [[ ",$runs," == *",Windows Build,"* && ",$runs," == *",macOS Build,"* ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            # 另一个平台还没跑完：安静退出，它完成时的事件会再次触发本工作流
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 下载双平台产物
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.event.workflow_run.head_sha }}"
+          win_id="$(gh api --paginate "repos/$repo/actions/runs?head_sha=$sha" \
+            -q '[.workflow_runs[] | select(.name == "Windows Build" and .conclusion == "success") | .id][0]')"
+          mac_id="$(gh api --paginate "repos/$repo/actions/runs?head_sha=$sha" \
+            -q '[.workflow_runs[] | select(.name == "macOS Build" and .conclusion == "success") | .id][0]')"
+          echo "Windows run=$win_id  macOS run=$mac_id"
+          rm -rf staging win mac && mkdir -p staging
+          gh run download "$win_id" --repo "$repo" --dir win
+          gh run download "$mac_id" --repo "$repo" --dir mac
+          find win mac -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.app.zip' -o -name 'SHA256SUMS.txt' \) \
+            -exec cp {} staging/ \;
+          ls -lh staging/
+
+      - name: 重建 latest Release
+        if: steps.ready.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.event.workflow_run.head_sha }}"
+          short="${sha::7}"
+          subject="$(gh api "repos/$repo/commits/$sha" -q '.commit.message' | head -1 | tr -d '`"')"
+          # --cleanup-tag 连标签一起删；重建时由 --target 把 latest 钉到当前提交
+          gh release delete latest --repo "$repo" --yes --cleanup-tag || true
+          notes="master 分支滚动构建，Windows 与 macOS 双平台成功后自动重建。
+
+          - 提交：${short} ${subject}
+          - Windows：EasyShare-amd64-installer.exe（安装包）、easyshare.exe / easyshare-core.exe（绿色版）
+          - macOS：EasyShare.dmg / EasyShare.app.zip（universal，含 SHA256SUMS.txt）"
+          gh release create latest staging/* --repo "$repo" \
+            --target "$sha" \
+            --title "EasyShare 最新构建 (master)" \
+            --prerelease \
+            --notes "$notes"
