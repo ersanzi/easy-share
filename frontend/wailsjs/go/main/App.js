@@ -10,6 +10,58 @@ export function AcceptTransferAs(arg1) {
   return window['go']['main']['App']['AcceptTransferAs'](arg1);
 }
 
+export function AdminCapacity() {
+  return window['go']['main']['App']['AdminCapacity']();
+}
+
+export function AdminCreateUser(arg1) {
+  return window['go']['main']['App']['AdminCreateUser'](arg1);
+}
+
+export function AdminDeleteUser(arg1) {
+  return window['go']['main']['App']['AdminDeleteUser'](arg1);
+}
+
+export function AdminGrantShared(arg1, arg2) {
+  return window['go']['main']['App']['AdminGrantShared'](arg1, arg2);
+}
+
+export function AdminListSpaces() {
+  return window['go']['main']['App']['AdminListSpaces']();
+}
+
+export function AdminListUsers(arg1, arg2) {
+  return window['go']['main']['App']['AdminListUsers'](arg1, arg2);
+}
+
+export function AdminRegisterEnabled() {
+  return window['go']['main']['App']['AdminRegisterEnabled']();
+}
+
+export function AdminResetPassword(arg1, arg2) {
+  return window['go']['main']['App']['AdminResetPassword'](arg1, arg2);
+}
+
+export function AdminSetPersonalQuota(arg1, arg2) {
+  return window['go']['main']['App']['AdminSetPersonalQuota'](arg1, arg2);
+}
+
+export function AdminSetRegisterEnabled(arg1) {
+  return window['go']['main']['App']['AdminSetRegisterEnabled'](arg1);
+}
+
+export function AdminSetSharedQuota(arg1) {
+  return window['go']['main']['App']['AdminSetSharedQuota'](arg1);
+}
+
+export function AdminSetUserStatus(arg1, arg2) {
+  return window['go']['main']['App']['AdminSetUserStatus'](arg1, arg2);
+}
+
+export function AdminSharedMembers() {
+  return window['go']['main']['App']['AdminSharedMembers']();
+}
+
 export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
@@ -44,6 +96,10 @@ export function CloudUploadFolder() {
 
 export function CloudUploadPaths(arg1) {
   return window['go']['main']['App']['CloudUploadPaths'](arg1);
+}
+
+export function CurrentUser() {
+  return window['go']['main']['App']['CurrentUser']();
 }
 
 export function DeleteTask(arg1) {
@@ -94,6 +150,26 @@ export function ListDrives() {
   return window['go']['main']['App']['ListDrives']();
 }
 
+export function Login(arg1, arg2) {
+  return window['go']['main']['App']['Login'](arg1, arg2);
+}
+
+export function Logout() {
+  return window['go']['main']['App']['Logout']();
+}
+
+export function MySpaces() {
+  return window['go']['main']['App']['MySpaces']();
+}
+
+export function OpenAdminConsole() {
+  return window['go']['main']['App']['OpenAdminConsole']();
+}
+
+export function OpenCurrentSpace() {
+  return window['go']['main']['App']['OpenCurrentSpace']();
+}
+
 export function OpenFile(arg1) {
   return window['go']['main']['App']['OpenFile'](arg1);
 }
@@ -140,6 +216,10 @@ export function SendBatch(arg1, arg2) {
 
 export function SendFile(arg1, arg2) {
   return window['go']['main']['App']['SendFile'](arg1, arg2);
+}
+
+export function SetDropSpace(arg1) {
+  return window['go']['main']['App']['SetDropSpace'](arg1);
 }
 
 export function ShutdownAll() {

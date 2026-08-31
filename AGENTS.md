@@ -3,20 +3,20 @@
 > 本文件是项目开发的通用指导，适用于任何参与本项目的人类开发者或 AI 助手。
 > 本文只保留**别处没有**的约定与坑；架构事实、构建细节、迭代流程分别以
 > [`docs/architecture.md`](docs/architecture.md)、[`docs/development.md`](docs/development.md)、[`docs/version-iteration.md`](docs/version-iteration.md) 为准。
-> 最后更新：2026-08-20
+> 最后更新：2026-08-31
 
 ## 产品定位与设计哲学
 
 EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对标百度网盘 / AirDrop），并正演进为企业知识管理平台（见 [`docs/knowledge-platform.md`](docs/knowledge-platform.md)）。核心原则：
 
-- **开箱即用**：用户不应看到端口、密钥、地址等基础设施细节。服务连接参数用编译期常量（`internal/cloud/defaults.go`），不暴露配置界面。
+- **开箱即用**：用户不应看到端口、密钥、地址等基础设施细节。账号与云盘接入由 RuoYi 控制面统一管理（ADR-0007），客户端不持任何对象存储静态凭据（`internal/cloud/defaults.go` 已删除，存储走控制面签发的短期预签名 URL）。
 - **Windows 深度集成**：不仅限于应用内功能，要在资源管理器「此电脑」可见（Shell NameSpace），像 WPS 云盘一样融入系统。
 - **macOS 简约视觉**：圆角卡片、毛玻璃、SF 排版风格。不接受 Windows Fluent 原生风，不接受补丁式中间态修复，要求从架构层面解决根因。
 - **技术参数自动推断**：不让用户做不理解的技术选择（如 queryMode、fieldKey）。字段命名按角色/用途，不按实现位置。
 
 ## 架构与流程速查（详情见权威文档）
 
-- **架构**：Wails 桌面端 + Go Core 双进程（HTTP/WebSocket 127.0.0.1:19080）+ Python 知识服务（FastAPI，独立进程）。进程图、端口、API 清单、生命周期 → [`docs/architecture.md`](docs/architecture.md)
+- **架构**：Wails 桌面端 + Go Core 双进程（HTTP/WebSocket 127.0.0.1:19080）+ Python 知识服务（FastAPI，独立进程）+ RuoYi 账号控制面（Java，`platform-drive/` 模块，dev 见 `deploy/ruoyi-db/`）。进程图、端口、API 清单、生命周期 → [`docs/architecture.md`](docs/architecture.md)
 - **迭代流程**：先在 `docs/progress.md`「进行中」登记主题 → 建 `docs/iterations/YYYY-MM-DD-主题.md` → 实现与验证 → 更新 progress/README → 用户明确要求时才提交推送。模板与 DoD → [`docs/version-iteration.md`](docs/version-iteration.md)
 - **原生命令**（`.zcode/commands/`，随仓库版本化）：`/iterate <主题>` 一键完成开工登记（生成迭代文档骨架 + progress.md 挂牌）；`/verify` 跑 Go/Python/前端三层轻量回归（不含 NSIS 全量）
 - **构建/测试命令**：完整清单 → [`docs/development.md`](docs/development.md)；全量流水线 `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`；Python 侧 `knowledge/.venv/Scripts/python.exe -m pytest -m "not integration"`
@@ -60,6 +60,7 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | PowerShell .ps1 中文乱码/解析错误 | Windows PowerShell 5.1 按 GBK 读无 BOM 的 .ps1，含中文的脚本必须存 UTF-8 **带 BOM**（`printf '\xEF\xBB\xBF' \| cat - file > tmp && mv tmp file`） |
 | WPS 加载项登记不生效 | 新版个人版（≥12.1.0.16910）忽略手工 jsplugins.xml，读 jsaddons 的 publish.xml；**在线模式必须用 `<jspluginonline>` 标签**（`<jsplugin>` 是离线模式，url 应指 .7z 包）；改登记后必须 `taskkill /IM wps.exe /F` 彻底退出（常驻进程不重读登记）；曾误判离线会在 `jsaddons\jsaddinblockhost.ini` 留域名拦截、`authaddin.json` 留旧记录，需一并清理 |
 | wails build 文件锁定 | 先 `Stop-Process -Name easyshare` |
+| platform-drive 编译 | 顶层 Maven 模块的父 POM 指向 `platform/pom.xml`（RuoYi 源码工程，已 gitignore）——本仓 clone 后不能直接 `mvn`，需先按 `deploy/ruoyi-db/README.md` 准备 RuoYi 工程目录 |
 | 只跑 wails build 后新 API 不生效 | `wails build` 只编桌面端壳，`build/bin/easyshare-core.exe` 不会重编——桌面端冒烟前必须 `go build -o build/bin/easyshare-core.exe ./cmd/core` 或直接跑 `scripts/build.ps1` |
 | AWS SDK PutObject 非 seekable 流 | 须加 `v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware` |
 | 此电脑入口显示名异常 | 删除 CLSID 下 LocalizedString/System.Category/TileInfo 等劫持显示名的旧值 |

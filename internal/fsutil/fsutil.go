@@ -15,9 +15,9 @@ import (
 
 // DriveInfo describes a logical drive (Windows) or mounted volume (macOS).
 type DriveInfo struct {
-	Letter     string  `json:"letter"`     // Windows: "C:"; macOS: 挂载路径如 "/" 或 "/Volumes/xxx"
-	Label      string  `json:"label"`      // volume label
-	Type       string  `json:"type"`       // fixed, removable, network, cdrom, ramdisk
+	Letter     string  `json:"letter"` // Windows: "C:"; macOS: 挂载路径如 "/" 或 "/Volumes/xxx"
+	Label      string  `json:"label"`  // volume label
+	Type       string  `json:"type"`   // fixed, removable, network, cdrom, ramdisk
 	TotalBytes int64   `json:"totalBytes"`
 	FreeBytes  int64   `json:"freeBytes"`
 	UsedPct    float64 `json:"usedPct"` // 0-100

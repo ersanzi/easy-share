@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-08-21
+> 每次迭代开始和结束时更新。最后更新：2026-08-31
 
 ## 路线总览
 
@@ -14,9 +14,9 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | --- | --- | --- |
 | 阶段 0 | 局域网可用（发现/传输/WebDAV 入口） | ✅ 2026-07-19 |
 | 阶段 1 | 可分发、可日常使用（NSIS/自启动） | ✅ 2026-07-19 |
-| 阶段 2 | 产品体验完善（托盘/设置/网盘/拖拽/macOS） | ✅ 2026-07-29 |
+| 阶段 2 | 产品体验完善（托盘/设置/网盘/拖拽/macOS/悬浮窗） | ✅ 2026-07-29 |
 | 阶段 3 | 安全加固（设备配对/TLS/凭据保护） | 🔄 进行中 |
-| 阶段 4 | 云端 MVP（账号/文件元数据/持久任务） | 待开始 |
+| 阶段 4 | 云端 MVP（账号/文件元数据/持久任务） | 🔄 进行中 |
 | 阶段 5 | 同步与原生入口（CfAPI / FileProvider） | 待开始 |
 | 阶段 6 | 云端与内网融合（配对/E2EE/就近获取） | 待开始 |
 
@@ -28,10 +28,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 里程碑 1 | 文档管线架构落地（清洗产物/版本化索引/评测集/结构感知切块/Milvus） | ✅ 2026-07-29 |
 | 里程碑 1.5 | /lab 问答页（检索+生成+引用溯源） | ✅ 2026-07-26 |
 | 里程碑 1.8 | 知识质量驾驶舱（单文档透视/策略对比/生成审计/健康度仪表盘） | 🔄 进行中 |
-| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳） | 待开始 || 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 暂缓 |
+| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳） | 待开始 |
+| 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 暂缓（账号部分已由 ADR-0007 RuoYi 控制面落地） |
 | 里程碑 3 | WPS 插件（知识副驾驶/主动推送） | 暂缓 |
 
 ## 当前位置
+
+**主线一：账号控制面（阶段 4 云端 MVP）** — 外部协作者批次（2026-08-28~30，基点 f5524f9）已于 2026-08-31 合入 dev：P0–P2 完成并经活栈验收，P3 管理面板与空间/配额模型、池上限随批合入，待本仓回归与真机验收。
 
 **知识平台里程碑 1.8：知识质量驾驶舱** — 进行中（四个 Tab 已实现，余批量压测与人工验收）
 
@@ -106,11 +109,20 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 清洗 Diff 视图（驾驶舱第一期收尾）：规则引擎记录逐动作明细（整块删除/文本改写，含 before/after），manifest 内嵌持久化，UI 删除线 + 红色背景标注规则名与命中计数。详见 [`iterations/2026-08-04-cockpit-cleaning-diff.md`](iterations/2026-08-04-cockpit-cleaning-diff.md)
 - [x] 桌面端集成知识问答（发芽路线第 3 步）：Core 作知识网关（登录/健康/问答 5 个代理端点，令牌存 Core 侧 knowledge.json 不进前端），桌面端「知识」页登录 + 会话式问答 + 引用折叠，令牌失效自动回登录页。详见 [`iterations/2026-08-21-desktop-knowledge-qa.md`](iterations/2026-08-21-desktop-knowledge-qa.md)
 - [x] WPS 最小闭环（发芽路线第 4 步）：知识服务自托管加载项（/wps 同源免跨域），WPS 文字「知识」页签选中段落一键查询，任务窗格登录 + 引用展示；本机安装脚本登记 jsaddons。详见 [`iterations/2026-08-21-wps-minimal-loop.md`](iterations/2026-08-21-wps-minimal-loop.md)
+- [x] 托盘悬停浮窗（切片 1，2026-08-31 外部批次合入）：Windows 侧改用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 获得悬停事件（`getlantern/systray` 不具备且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2，标题栏含图标/名称/头像/设置，点设置显示主窗口；定位基于 `Shell_NotifyIconGetRect`，适配任务栏四边缘与多显示器负坐标；已移除 systray 及其 8 个传递依赖。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md)
+- [x] 悬浮窗布局重构与固定态（切片 2，2026-08-31 外部批次合入）：浮窗加高按内容分区、固定态（固定是文件拖放的前提）、托盘图标 GUID 持久化与窗口位置/固定状态持久化。详见 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-31 | 合入外部协作者批次 — RuoYi 账号控制面 P0–P3 + 托盘悬浮窗 + 空间/配额/池上限（快照基点 f5524f9） | 已完成（本仓回归进行中） |
+| 2026-08-29 | 账号控制面 P2：按用户隔离的存储授权 — 预签名 URL 直传，客户端不再持 RustFS 凭据 | 已完成（隔离验收 9/9；桌面端 UI 链路待真机补验） |
+| 2026-08-29 | 账号控制面 P1：桌面登录 + 登录态贯通（头像跟随账号） | 已完成（待手工交互验收） |
+| 2026-08-29 | 账号控制面 P0：RuoYi-Vue-Plus 6.0 环境落地（PG+Redis+登录） | 已完成 |
+| 2026-08-30 | 空间池上限与物理容量感知 — es_space 空间/配额模型 + CapacityService 池上限 | 已完成（随外部批次合入，待回归） |
+| 2026-08-29 | 悬浮窗布局重构与固定态（切片 2：加高分区+固定按钮+托盘图标GUID持久化） | 已完成（待手工交互验收） |
+| 2026-08-28 | 托盘悬停浮窗（切片 1：悬停链路） | 已完成（待手工交互验收） |
 | 2026-08-21 | WPS 最小闭环 — 选中段落查知识引用的最小加载项（发芽路线第 4 步） | 已完成（**真机验收通过**：jspluginonline 在线登记，选中→查询→引用全链路） |
 | 2026-08-21 | 桌面端集成知识问答 — 登录态 + 问答面板长进 Wails 桌面端，打通桌面端 ↔ 知识服务（发芽路线第 3 步） | 已完成（全量回归通过；真实服务手工验收待公司部署合并） |
 | 2026-08-20 | 种下去冲刺 — 目录监听自动入库 + /lab 登录闭环 + 部署脚本 + 公司使用指引；真实端到端冒烟通过 | 已完成（全量回归 120 passed） |
@@ -169,6 +181,10 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**账号控制面（阶段 4 云端 MVP，外部批次已合入）** — 决策见 [ADR-0007](adr/0007-account-control-plane-ruoyi.md)：统一账号采用 **RuoYi-Vue-Plus 6.0**（Java 控制面，调和了主线一 Go 单体与主线二 Java 控制面的选型冲突——账号归 RuoYi，`easyshare-core` 退回本机采集/传输层）。P0：RuoYi 6.0 跑在 PostgreSQL 16 + Redis 上，登录返回 JWT（`deploy/ruoyi-db/`）。P1：桌面客户端登录门禁 + 登录态贯通（主界面与悬浮窗头像跟随账号、登出、点头像进设置）。P2：按用户隔离的存储授权——控制面模块 `platform-drive/` 签发短期预签名 URL，客户端不再持任何 RustFS 凭据，对象键落在 `users/{userId}/` 下，跨用户隔离 9/9 验收通过；**KI-2 关闭、KI-1/KI-4 顺带修掉、KI-3 的用户隔离部分关闭**（稳定文件身份仍未做），新登记 KI-5。P3 已随批次落地：客户端自绘管理页（`AdminPanel.vue`，账号/注册开关/空间配额一页管）+ `es_space` 空间授权与配额模型 + 池上限与物理容量感知（`CapacityService`，方案见 [`plans/2026-08-30-space-pool-and-organize.md`](plans/2026-08-30-space-pool-and-organize.md)，整理算法部分待实施）。剩余：设置页账号资料 → P4 浮窗滑动开关 + 按用户命名空间的资源管理器挂载。详见 [`iterations/2026-08-29-account-control-plane-p0.md`](iterations/2026-08-29-account-control-plane-p0.md)、[`iterations/2026-08-29-account-p1-desktop-login.md`](iterations/2026-08-29-account-p1-desktop-login.md)、[`iterations/2026-08-29-account-p2-storage-isolation.md`](iterations/2026-08-29-account-p2-storage-isolation.md)。
+
+**托盘悬浮窗（切片 1、2 已合入）** — 阶段 2 内的新增能力。切片 1：Windows 侧用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 替换 `getlantern/systray`（该库无悬停事件且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2。切片 2：浮窗加高按内容分区、固定态（固定是文件拖放的前提——悬停态下鼠标一旦离开图标浮窗即收起，无法作为拖放目标）、窗口位置与固定状态持久化。「桌面右下角常驻悬浮窗」与「托盘图标悬停」为**同一窗口的两种状态**，不另建部件。剩余真实鼠标交互验收。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md) 与 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)。
+
 **知识平台主线：业务流跑通**（2026-08-20 用户指示）——压测统一后置，优先把解析→RAG→交付的端到端价值闭环跑通。三层解析路由（pdf-inspector 路由 + MinerU 深度解析 + PaddleOCR 兜底）代码已落地并通过全量回归，待真实 mineru-api 部署后冒烟；设计文档见 [`iterations/2026-08-20-mineru-parsing-provider-design.md`](iterations/2026-08-20-mineru-parsing-provider-design.md)（含 §4.8 pdf-inspector 增补），实现记录见 [`iterations/2026-08-20-three-tier-pdf-routing.md`](iterations/2026-08-20-three-tier-pdf-routing.md)。
 
 **知识平台里程碑 1.8：知识质量驾驶舱** — 四个 Tab 均已落地；**批量压测后置**（2026-08-20 决策：与其他测试统一做），驾驶舱人工验收待业务流跑通时一并执行。
@@ -189,6 +205,10 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 已知阻塞
 
+- **外部批次合入后需完整回归**：账号控制面 P0–P3 与托盘悬浮窗在快照分支上通过其自带验证，与本仓 23 个知识平台提交合并后的回归（Go/前端/构建）由本次合入迭代承担；真机「登录 → 上传 → 换账号看列表」仍需真实鼠标操作补验
+- P2 的隔离结论来自控制面活栈验收与 Go 客户端集成测试；**桌面端 UI 链路只验证了编译与类型**
+- **「此电脑 → EasyShare 网盘」入口不可用**：修 KI-2 移走 Core 的 RustFS 凭据后该挂载失去数据源（非"顺手清理"，是本轮的代价）。恢复它需要先定**空间授权与配额模型**——该模型已随 P3 落地（`es_space`），挂载重做归 P4
+- macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 
 ## 版本约定

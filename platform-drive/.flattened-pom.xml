@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <!--
+      EasyShare 存储授权模块（ADR-0007 决策 3）。
+      刻意放在 EasyShare 仓内、而非 platform/ 内：platform/ 是上游 RuoYi 的独立 clone
+      且被 .gitignore 忽略，我们自己的产品代码放进去会脱离版本管理并与上游更新冲突。
+      通过 platform/pom.xml 的 <module>../platform-drive</module> 参与同一个 Maven reactor。
+    -->
+    <parent>
+        <groupId>org.dromara</groupId>
+        <artifactId>ruoyi-vue-plus</artifactId>
+        <version>6.0.0</version>
+        <relativePath>../platform/pom.xml</relativePath>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>easyshare-drive</artifactId>
+    <packaging>jar</packaging>
+
+    <description>
+        EasyShare 云盘存储授权模块：验登录态 → 按用户命名空间签发 RustFS 预签名 URL
+    </description>
+
+    <dependencies>
+        <!-- 通用工具：R 统一响应、ServiceException -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-core</artifactId>
+        </dependency>
+
+        <!-- 登录态：LoginHelper 取当前用户 ID -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-satoken</artifactId>
+        </dependency>
+
+        <!-- web 服务：BaseController 与 Spring MVC -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-web</artifactId>
+        </dependency>
+
+        <!-- AWS SDK v2（含 netty 异步 HTTP 客户端），由 ruoyi-common-oss 带入 -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-oss</artifactId>
+        </dependency>
+
+        <!-- 空间与配额落库：es_space / es_space_member -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-mybatis</artifactId>
+        </dependency>
+
+        <!-- 用量缓存：全桶 list 昂贵，按空间缓存 60s -->
+        <dependency>
+            <groupId>org.dromara</groupId>
+            <artifactId>ruoyi-common-redis</artifactId>
+        </dependency>
+
+        <!-- 测试：越权路径用例（DriveKeysTest） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                      父 pom 用 <groups>${profiles.active}</groups> 按 @Tag 过滤，
+                      导致无标签的纯单测不被执行。这里清空过滤：隔离用例必须每次都跑。
+                    -->
+                    <groups combine.self="override"/>
+                    <excludedGroups combine.self="override">exclude</excludedGroups>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

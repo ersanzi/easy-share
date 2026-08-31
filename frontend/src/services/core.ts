@@ -1,6 +1,19 @@
 ﻿import {
   AcceptTransfer,
   AcceptTransferAs,
+  AdminCreateUser,
+  AdminCapacity,
+  AdminDeleteUser,
+  AdminGrantShared,
+  AdminListSpaces,
+  AdminListUsers,
+  AdminRegisterEnabled,
+  AdminResetPassword,
+  AdminSetPersonalQuota,
+  AdminSetRegisterEnabled,
+  AdminSetSharedQuota,
+  AdminSetUserStatus,
+  AdminSharedMembers,
   ClearHistory,
   CloudDelete,
   CloudDownload,
@@ -10,6 +23,7 @@
   CloudUpload,
   CloudUploadFolder,
   CloudUploadPaths,
+  CurrentUser,
   DeleteTask,
   GetLogDirectory,
   GetSettings,
@@ -19,6 +33,10 @@
   KnowledgeLogin,
   KnowledgeLogout,
   KnowledgeStatus,
+  Login,
+  Logout,
+  MySpaces,
+  OpenAdminConsole,
   OpenFile,
   OpenReceiveFolder,
   ProcessDroppedFiles,
@@ -36,6 +54,8 @@
   StopDrive,
 } from '../../wailsjs/go/main/App'
 import type {
+  AuthUser,
+  Capacity,
   CloudFile,
   CloudPreview as CloudPreviewData,
   CoreSnapshot,
@@ -43,6 +63,8 @@ import type {
   KnowledgeAnswer,
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
+  ManagedUserPage,
+  Space,
 } from '../types/core'
 
 export interface SettingsData {
@@ -88,4 +110,28 @@ export const core = {
   knowledgeLogout: KnowledgeLogout,
   knowledgeHealth: () => KnowledgeHealth() as Promise<KnowledgeHealthData>,
   knowledgeAsk: (question: string) => KnowledgeAsk(question) as Promise<KnowledgeAnswer>,
+  // 账号控制面（P1）
+  login: (username: string, password: string) => Login(username, password) as Promise<AuthUser>,
+  logout: Logout,
+  currentUser: () => CurrentUser() as Promise<AuthUser>,
+  // 管理页（P3）：客户端内自绘，直接调控制面。鉴权在控制面，非管理员一律被拒。
+  adminListUsers: (pageNum: number, pageSize: number) =>
+    AdminListUsers(pageNum, pageSize) as Promise<ManagedUserPage>,
+  adminCreateUser: (userName: string, nickName: string, password: string) =>
+    AdminCreateUser({ userName, nickName, password } as never),
+  adminSetUserStatus: AdminSetUserStatus,
+  adminResetPassword: AdminResetPassword,
+  adminDeleteUser: AdminDeleteUser,
+  adminRegisterEnabled: () => AdminRegisterEnabled() as Promise<boolean>,
+  adminSetRegisterEnabled: AdminSetRegisterEnabled,
+  // 空间与配额（P3）：管理页在一处设定共享容量与逐账号个人配额
+  mySpaces: () => MySpaces() as Promise<Space[]>,
+  adminListSpaces: () => AdminListSpaces() as Promise<Space[]>,
+  adminCapacity: () => AdminCapacity() as Promise<Capacity>,
+  adminSharedMembers: () => AdminSharedMembers() as Promise<Record<string, string>>,
+  adminSetPersonalQuota: AdminSetPersonalQuota,
+  adminSetSharedQuota: AdminSetSharedQuota,
+  adminGrantShared: AdminGrantShared,
+  // RuoYi 自带后台：仅本产品不复刻的运维动作（菜单/字典/定时任务）用得到
+  openAdminConsole: OpenAdminConsole,
 }

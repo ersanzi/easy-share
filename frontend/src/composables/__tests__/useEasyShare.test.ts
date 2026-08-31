@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   stopDrive: vi.fn(),
   reportError: vi.fn().mockResolvedValue(undefined),
   logDirectory: vi.fn(),
+  currentUser: vi.fn().mockResolvedValue({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false }),
+  login: vi.fn(),
+  logout: vi.fn(),
+  openAdminConsole: vi.fn(),
   onFileDrop: vi.fn(),
   onFileDropOff: vi.fn(),
   eventsOn: vi.fn(),
@@ -39,6 +43,19 @@ const Harness = defineComponent({
   template: `
     <span data-test="error">{{ error }}</span>
     <button data-test="shutdown" @click="shutdown">shutdown</button>
+  `,
+})
+
+// AuthHarness 暴露登录态与管理入口，用于验证「管理」按钮的显隐条件。
+const AuthHarness = defineComponent({
+  setup: useEasyShare,
+  template: `
+    <span data-test="error">{{ error }}</span>
+    <span data-test="admin">{{ currentUser.isAdmin }}</span>
+    <span data-test="logged-in">{{ currentUser.loggedIn }}</span>
+    <button data-test="login" @click="login('admin', 'admin123')">login</button>
+    <button data-test="logout" @click="logout">logout</button>
+    <button data-test="open-admin" @click="openAdminConsole">admin</button>
   `,
 })
 
@@ -103,6 +120,40 @@ describe('useEasyShare', () => {
       '刷新状态: snapshot failed',
       expect.stringContaining('snapshot failed'),
     )
+    wrapper.unmount()
+  })
+
+  // 「管理」入口的显隐由 isAdmin 决定，登出后必须收起——否则会留一个非管理员点得到的入口。
+  it('tracks isAdmin across login and clears it on logout', async () => {
+    mocks.login.mockResolvedValue({
+      loggedIn: true, userName: 'admin', nickName: '管理员', avatar: '', isAdmin: true,
+    })
+    mocks.logout.mockResolvedValue(undefined)
+
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('false')
+
+    await wrapper.get('[data-test="login"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('true')
+
+    await wrapper.get('[data-test="logout"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('false')
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('surfaces admin console open failures as operation errors', async () => {
+    mocks.openAdminConsole.mockRejectedValueOnce(new Error('管理后台地址无效（需 http/https）：ftp://x'))
+
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    await wrapper.get('[data-test="open-admin"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="error"]').text()).toContain('管理后台地址无效')
     wrapper.unmount()
   })
 })

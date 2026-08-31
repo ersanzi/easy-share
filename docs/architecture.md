@@ -1,10 +1,10 @@
 # EasyShare 当前架构
 
-> 更新基线：2026-08-21。
+> 更新基线：2026-08-31（并入 ADR-0007 账号控制面批次）。
 
 ## 1. 进程模型
 
-EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制）：
+EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制）；账号控制面（RuoYi Java）与知识服务是独立部署的服务端进程：
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
@@ -38,13 +38,15 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 
 关闭桌面窗口默认隐藏到托盘（OnBeforeClose 拦截），Core 继续运行。托盘菜单"退出"或界面"退出服务"才执行全量关闭。
 
+**账号控制面（RuoYi-Vue-Plus 6.0，Java，服务端部署）**：桌面端与 Core 均为其客户端。登录经控制面拿 JWT；云盘上传/下载由控制面模块 `platform-drive/` 验证身份后签发短期预签名 URL，客户端凭 URL 直传 RustFS，**不再持有任何对象存储静态凭据**（ADR-0007 不变量 1/3，`internal/cloud/defaults.go` 已删除）。环境组成：RuoYi admin（REST :8090）+ PostgreSQL 16（:5432）+ Redis 7（:6380）+ plus-ui 管理后台（:8091，次要出口），dev 部署见 `deploy/ruoyi-db/`。
+
 ## 2. 主要代码入口
 
 | 路径 | 职责 |
 | --- | --- |
 | `main.go` | Wails 窗口创建、Frameless、DragAndDrop、OnBeforeClose 隐藏/退出 |
 | `app.go` | 前端桥接、Core 探测/启动、事件流订阅、系统通知、watchdog |
-| `tray_windows.go` | Windows 托盘（getlantern/systray + ICO） |
+| `tray_windows.go` + `tray_hover_windows.go` | Windows 托盘（原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4`，systray 已移除）与托盘悬停浮窗（独立线程 Win32 窗口内嵌 WebView2） |
 | `tray_darwin.go` + `tray_native_darwin.m` | macOS 菜单栏（NSStatusItem，不接管 AppDelegate） |
 | `cmd/core/main.go` | Core 组装、信号监听、优雅退出 |
 | `internal/api` | HTTP 路由、WebSocket eventHub、状态、资源清理 |
@@ -52,8 +54,12 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/desktop` | Core HTTP 客户端（含 WebSocket 订阅）、健康校验、子进程启动 |
 | `internal/discovery` | UDP 设备广播与在线列表 |
 | `internal/transfer` | TCP 流式发送/接收、文件夹 zip 管线、速度计算 |
-| `internal/drive` | WebDAV 服务（本地目录 + S3 云盘两种 FileSystem） |
-| `internal/cloud` | 网盘业务层：上传/下载/列表/删除/分享/预览 |
+| `internal/drive` | WebDAV 服务 + 控制面云盘客户端（预签名 URL 上传/下载/列表，`client.go`/`upload.go`） |
+| `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3） |
+| `internal/spacedav` | 按用户命名空间的 WebDAV 服务层（P2 存储隔离） |
+| `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
+| `spacemount.go` | 桌面端空间挂载与浮窗拖放目标（P4 前置） |
+| `internal/cloud` | 旧网盘业务层（Core 直连 S3 时代遗留，P2 后无生产调用方，见 KI-5） |
 | `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake） |
 | `internal/cloud/webdavfs` | S3-backed WebDAV FileSystem |
 | `internal/namespace` | 系统文件入口：Windows Shell NameSpace / macOS Finder 挂载 |
@@ -64,6 +70,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `frontend/src/composables/useEasyShare.ts` | 前端状态、实时事件订阅、轮询 fallback |
 | `frontend/src/components/` | 概览、设备、传输、网盘、设置 UI |
 | `knowledge/` | Python 知识平台服务（FastAPI，独立进程） |
+| `platform-drive/` | RuoYi 控制面内的云盘存储授权模块（顶层独立 Maven 模块，父 POM 指向 gitignore 的 `platform/` RuoYi 源码工程） |
 
 `frontend/wailsjs` 是 Wails 自动生成代码，`wails build` 时自动重生成。
 
@@ -75,6 +82,10 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | 云盘驱动器 WebDAV | `127.0.0.1:19081` | 仅本机 |
 | 设备发现 | UDP `9527` | 局域网 |
 | 文件传输 | TCP `9528` | 局域网 |
+| 账号控制面 REST（RuoYi admin） | `http://localhost:8090`（`config.json` platformBaseUrl） | 服务端（dev 本机） |
+| plus-ui 管理后台（次要出口） | `http://localhost:8091`（adminConsoleUrl） | 服务端（dev 本机） |
+| 控制面 PostgreSQL 16 | `127.0.0.1:5432`（docker compose） | 仅本机（dev） |
+| 控制面 Redis 7 | `127.0.0.1:6380`（docker compose，专用实例） | 仅本机（dev） |
 
 端口由 `%LOCALAPPDATA%\EasyShare\config.json`（macOS: `~/Library/Application Support/EasyShare/config.json`）配置。Core API Host 必须是 loopback 地址。
 
@@ -176,17 +187,18 @@ desktop eventStream (Go 协程，指数退避重连)
 
 - 配置持久化在 `config.json`，使用临时文件加原子替换写入，支持热加载（`/api/config/reload`）。
 - 传输任务：运行中为内存状态；终态（completed/rejected/failed）持久化为 JSON 文件。
-- 网盘文件存储在 RustFS（S3 兼容），凭据编译期常量（`internal/cloud/defaults.go`），不暴露给前端。
+- 网盘文件存储在 RustFS（S3 兼容），凭据只在控制面（`deploy/rustfs/.env` → RuoYi 进程环境），客户端经预签名 URL 直传，不暴露给前端。
 - peers 是内存状态，Core 退出后丢失。
 - 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
 
 ## 8. 云盘与对象存储
 
-- `internal/cloud` 是网盘业务层，提供上传/下载/列表/删除/分享/预览 API。
-- `internal/cloud/objectstore` 定义 provider-neutral 存储接口；`s3store` 使用 AWS SDK v2 连接 RustFS。
-- `internal/cloud/webdavfs` 将 S3 对象存储映射为 WebDAV FileSystem，供云盘驱动器使用。
-- 上传采用 multipart 流式（真实进度），AWS SDK 非 seekable 流需 `SwapComputePayloadSHA256ForUnsignedPayloadMiddleware`。
-- 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束。
+**现行链路（ADR-0007，P2 起）**：桌面端 `internal/drive` 持控制面 JWT 调 `platform-drive/` 换短期预签名 URL（PUT 15m / GET 10m），直传/直取 RustFS；对象键强制落在 `users/{userId}/`（个人）或 `shared/`（共享）命名空间，服务端拒绝跨用户 key。配额与池上限（物理容量探测、预留水位、两种"满"分开报错）见 ADR-0007「空间授权与配额」。
+
+- `internal/cloud` 及其 `/api/cloud/*` 路由是 Core 直连 S3 时代的遗留，**已无生产调用方**（`server.cloud` 为 nil 时一律 503），清理决策登记为 [KI-5](known-issues.md)。
+- `internal/cloud/objectstore` 的 provider-neutral 存储抽象（s3store + memory fake）仍在服役（控制面之外的用途）。
+- `internal/cloud/webdavfs` 是否保留取决于 P4 按用户挂载方案（复用则改为接 `internal/drive`）。
+- 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束；凭据真值只在 `deploy/rustfs/.env`（gitignore），由 `run-ruoyi-admin.ps1` 注入控制面进程。
 
 ## 8a. 知识网关（桌面端 ↔ 知识服务）
 
@@ -197,7 +209,7 @@ desktop eventStream (Go 协程，指数退避重连)
 
 | 能力 | Windows | macOS |
 | --- | --- | --- |
-| 托盘 | getlantern/systray（ICO） | NSStatusItem（tray_native_darwin.m） |
+| 托盘 | 原生 Shell_NotifyIcon（ICO，NOTIFYICON_VERSION_4 + 悬停浮窗） | NSStatusItem（tray_native_darwin.m） |
 | 文件入口 | Shell NameSpace 注册表 | mount_webdav / osascript |
 | 打开文件 | `explorer /select,` | `open` |
 | 磁盘枚举 | kernel32 GetLogicalDrives | syscall.Statfs /Volumes |
@@ -211,7 +223,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - Core API 和 WebDAV 只监听 loopback，无外部网络暴露。
 - Core API 使用随机 Token；健康检查同时验证 Device ID 和 HMAC proof。
 - WebDAV 无认证（仅回环，无需认证）。
-- 云端凭据编译期固定（`internal/cloud/defaults.go`），不暴露给前端或 Shell 扩展。
+- 对象存储静态凭据只存在于控制面（RuoYi）进程，客户端二进制经预签名 URL 访问（ADR-0007 不变量 1，KI-2 已关闭）。
 - UDP 发现和 TCP 文件传输面向可信局域网，无端到端加密或设备配对。
 
 ## 11. 知识平台（独立服务）

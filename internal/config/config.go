@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -20,6 +21,11 @@ const (
 	defaultDiscoveryPort = 9527
 	defaultTransferPort  = 9528
 	defaultWebDAVPort    = 19080
+	// 账号控制面默认地址（dev 本机 RuoYi，见 deploy/ruoyi-db）。
+	defaultPlatformBaseURL = "http://localhost:8090"
+	// RuoYi 自带 Web 后台（plus-ui）地址。客户端的管理页是自绘的，不依赖它；
+	// 此地址留给「需要完整后台才能做的运维动作」（如菜单/字典/定时任务）作次要出口。
+	defaultAdminConsoleURL = "http://localhost:8091"
 )
 
 // DefaultConfigPath 返回配置文件的默认路径。
@@ -64,6 +70,12 @@ type Config struct {
 	WebDAVUsername string      `json:"webdavUsername"`
 	WebDAVPassword string      `json:"webdavPassword"`
 	Cloud          CloudConfig `json:"cloud"`
+	// PlatformBaseURL 是账号控制面（RuoYi-Vue-Plus）的地址。首个非 loopback 外部地址。
+	// 见 docs/adr/0007-account-control-plane-ruoyi.md。dev 默认本机 8090。
+	PlatformBaseURL string `json:"platformBaseUrl"`
+	// AdminConsoleURL 是 RuoYi 自带 Web 后台的地址。客户端的「管理」页自绘、直接调 REST，
+	// 不跳这里；该字段仅用于后台专属的运维动作（菜单/字典/定时任务等本产品不复刻的部分）。
+	AdminConsoleURL string `json:"adminConsoleUrl"`
 }
 
 func Load(path string) (Config, error) {
@@ -81,6 +93,13 @@ func loadUnlocked(path string) (Config, error) {
 		}
 		if err := value.Validate(); err != nil {
 			return Config{}, fmt.Errorf("validate config: %w", err)
+		}
+		// 旧配置迁移：早于账号体系的 config.json 无 platformBaseUrl，补默认值。
+		if strings.TrimSpace(value.PlatformBaseURL) == "" {
+			value.PlatformBaseURL = defaultPlatformBaseURL
+		}
+		if strings.TrimSpace(value.AdminConsoleURL) == "" {
+			value.AdminConsoleURL = defaultAdminConsoleURL
 		}
 		return value, nil
 	}
@@ -214,6 +233,9 @@ func defaultConfig() (Config, error) {
 		WebDAVPort:     defaultWebDAVPort,
 		WebDAVUsername: "EasyShare",
 		WebDAVPassword: webDAVPassword,
+		// 账号控制面：dev 默认本机 RuoYi（见 deploy/ruoyi-db）。生产改为服务器地址。
+		PlatformBaseURL: defaultPlatformBaseURL,
+		AdminConsoleURL: defaultAdminConsoleURL,
 	}, nil
 }
 

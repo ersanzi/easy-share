@@ -1,0 +1,29 @@
+# EasyShare 云盘存储授权模块配置（platform-drive）。
+#
+# 按 ADR-0007 不变量 1：RustFS 的真实 AK/SK 只允许存在于控制面，绝不进客户端二进制。
+# 本文件纳入版本管理，但**不含明文密钥**——密钥从环境变量注入，
+# 真值放在 deploy/rustfs/.env（已 gitignore），由 run-ruoyi-admin.ps1 读取后设进环境。
+#
+# 用法：java -jar ruoyi-admin.jar --spring.config.additional-location=file:./deploy/ruoyi-db/easyshare-drive.yml
+easyshare:
+  drive:
+    endpoint: ${RUSTFS_ENDPOINT:http://127.0.0.1:9000}
+    region: us-east-1
+    access-key: ${RUSTFS_ACCESS_KEY}
+    secret-key: ${RUSTFS_SECRET_KEY}
+    bucket: ${RUSTFS_BUCKET:easyshare}
+    # 预签名有效期：够一次大文件传输，又不至于长期可用被转发滥用
+    put-expiry: 15m
+    get-expiry: 10m
+    # 池上限：探测「对象存储数据实际落盘的那个卷」的可用容量。
+    #
+    # 必须是**宿主侧**路径。RustFS 跑在容器里，容器内 df 看到的是 WSL2 稀疏 vhdx 的虚数
+    # （本机实测容器内显示 1007 GB，而宿主实际只剩 34 GB），拿它判定等于没判。
+    #
+    # 本机的 Docker 数据 vhdx 在（注意：Docker 程序装在 D 盘，但数据 vhdx 在 C 盘）：
+    #   C:\Users\<用户>\AppData\Local\Docker\wsl\disk\docker_data.vhdx
+    # vhdx 位置取决于 Docker Desktop 设置，换机器需按实际情况改。
+    # 留空则不启用池上限，行为与未引入该功能时一致。
+    capacity-path: ${RUSTFS_CAPACITY_PATH:${LOCALAPPDATA:}/Docker/wsl/disk}
+    # 预留水位：不允许云盘吃掉的部分。磁盘写满会连带影响 PG/Redis 与系统本身。
+    reserved-bytes: 5GB

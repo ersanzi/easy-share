@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,9 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"easyshare/internal/account"
 	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
+	"easyshare/internal/drive"
 	"easyshare/internal/fsutil"
 	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
@@ -45,12 +48,37 @@ type App struct {
 	quitLock     sync.Mutex
 	trayStatusCh chan string
 	trayOnce     sync.Once
+
+	// 账号控制面（RuoYi）会话。token 只保管在桌面端进程，不下发前端。
+	accountMu      sync.RWMutex
+	accountSession *account.Session
+	// trayUserCh 把登录态推给托盘悬浮窗（模式同 trayStatusCh）。
+	trayUserCh chan AuthUser
+	// mounts 管「此电脑」里两个云端空间的 WebDAV 端点与条目，见 spacemount.go。
+	mounts *spaceMounts
+	// dropSpace 是悬浮窗切换器选中的目标空间（拖入的文件进哪个空间）。
+	// 空串表示未选择，按个人空间处理。由浮窗线程写、上传路径读，故加锁。
+	dropSpaceMu sync.Mutex
+	dropSpace   string
+}
+
+// AuthUser 是下发给前端的登录态（不含 token）。
+//
+// IsAdmin 只决定「管理」入口是否显示，不承担鉴权——后台接口自己按 Sa-Token 角色拒绝。
+type AuthUser struct {
+	LoggedIn bool   `json:"loggedIn"`
+	UserName string `json:"userName"`
+	NickName string `json:"nickName"`
+	Avatar   string `json:"avatar"`
+	IsAdmin  bool   `json:"isAdmin"`
 }
 
 func NewApp() *App {
 	return &App{
 		logger:       log.New(io.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds),
 		trayStatusCh: make(chan string, 1),
+		trayUserCh:   make(chan AuthUser, 1),
+		mounts:       newSpaceMounts(),
 	}
 }
 
@@ -165,7 +193,19 @@ func (a *App) GetSnapshot() (desktop.Snapshot, error) {
 	}
 	result, err := client.Snapshot(a.ctx)
 	a.reportError("get snapshot", err)
+	// 个人云盘归控制面管，Core 无从判断可用性，故由桌面端按会话状态覆盖。
+	result.Status.CloudEnabled = a.cloudAvailable()
 	return result, err
+}
+
+// cloudAvailable 判断个人云盘当前是否可用：配置了控制面地址且已登录。
+func (a *App) cloudAvailable() bool {
+	if strings.TrimSpace(a.config.PlatformBaseURL) == "" {
+		return false
+	}
+	a.accountMu.RLock()
+	defer a.accountMu.RUnlock()
+	return a.accountSession != nil && a.accountSession.Token != ""
 }
 
 func (a *App) SendFile(peerID, path string) error {
@@ -269,6 +309,365 @@ func (a *App) ReportFrontendError(message, stack string) {
 }
 
 func (a *App) GetLogDirectory() string { return logging.Directory() }
+
+// --- 账号控制面（RuoYi）：P1 登录 + 当前用户 ---
+
+// Login 用用户名密码向账号控制面登录，成功后把会话（含 JWT）保存在桌面端，
+// 返回可展示的用户信息（不含 token）。见 docs/adr/0007。
+func (a *App) Login(username, password string) (AuthUser, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return AuthUser{}, fmt.Errorf("未配置账号服务地址")
+	}
+	client := account.New(base)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	session, err := client.Login(ctx, username, password)
+	if err != nil {
+		a.logger.Printf("login failed for %q: %v", username, err)
+		return AuthUser{}, err
+	}
+	a.accountMu.Lock()
+	a.accountSession = session
+	a.accountMu.Unlock()
+	a.logger.Printf("user logged in: %s", session.User.UserName)
+	a.publishTrayUser()
+	// 按该账号实际拥有的空间挂「此电脑」条目。异步：挂载要回控制面读空间，
+	// 不该把登录这一步拖慢，登录成功与否也不取决于它。
+	go a.refreshSpaceMounts()
+	return a.CurrentUser(), nil
+}
+
+// Logout 清除本地会话，并尽力通知控制面登出。
+func (a *App) Logout() {
+	a.accountMu.Lock()
+	session := a.accountSession
+	a.accountSession = nil
+	a.accountMu.Unlock()
+	// 先卸盘再通知控制面：会话已清空，挂着的盘此刻已经不可用，留着只会让用户点进去报错
+	a.unmountAllSpaces()
+	if session == nil {
+		return
+	}
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := account.New(base).Logout(ctx, session.Token); err != nil {
+			a.logger.Printf("logout notify failed: %v", err)
+		}
+	}
+	a.publishTrayUser()
+}
+
+// publishTrayUser 把当前登录态推给托盘悬浮窗（非阻塞，模式同 updateTrayStatus）。
+func (a *App) publishTrayUser() {
+	user := a.CurrentUser()
+	select {
+	case a.trayUserCh <- user:
+	default:
+		// 通道满则丢弃旧值再放新值，保证悬浮窗拿到最新态。
+		select {
+		case <-a.trayUserCh:
+		default:
+		}
+		select {
+		case a.trayUserCh <- user:
+		default:
+		}
+	}
+}
+
+// CurrentUser 返回当前登录态（未登录时 LoggedIn=false）。
+func (a *App) CurrentUser() AuthUser {
+	a.accountMu.RLock()
+	defer a.accountMu.RUnlock()
+	return a.currentUserLocked()
+}
+
+// currentUserLocked 在持有 accountMu 时组装 AuthUser。
+func (a *App) currentUserLocked() AuthUser {
+	if a.accountSession == nil {
+		return AuthUser{LoggedIn: false}
+	}
+	u := a.accountSession.User
+	return AuthUser{
+		LoggedIn: true,
+		UserName: u.UserName,
+		NickName: u.NickName,
+		Avatar:   u.Avatar,
+		IsAdmin:  a.accountSession.IsAdmin(),
+	}
+}
+
+// --- 管理页（P3）：客户端内自绘的账号与空间管理 ---
+//
+// 管理界面是客户端自己的页面，沿用客户端色调，不跳 RuoYi 自带后台。下面的方法在把请求
+// 转给控制面之前先做一道本地检查（adminSession），目的是给出中文错误、避免无谓往返；
+// **真正的鉴权在控制面**——JWT 不是管理员的，接口自己会拒。
+
+// adminSession 取当前会话，要求已登录且为管理员。返回控制面客户端与 token。
+func (a *App) adminSession() (*account.Client, string, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, "", fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" {
+		return nil, "", fmt.Errorf("请先登录")
+	}
+	if !session.IsAdmin() {
+		return nil, "", fmt.Errorf("当前账号没有管理权限")
+	}
+	return account.New(base), session.Token, nil
+}
+
+// AdminListUsers 分页取账号列表。
+func (a *App) AdminListUsers(pageNum, pageSize int) (*account.UserPage, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	page, err := client.ListUsers(ctx, token, pageNum, pageSize)
+	a.reportError("admin list users", err)
+	return page, err
+}
+
+// AdminCreateUser 新建账号。
+func (a *App) AdminCreateUser(user account.NewUser) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.CreateUser(ctx, token, user)
+	if err == nil {
+		a.logger.Printf("admin created user %q", user.UserName)
+	}
+	a.reportError("admin create user", err)
+	return err
+}
+
+// AdminSetUserStatus 启用/停用账号。
+func (a *App) AdminSetUserStatus(userID string, enabled bool) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.SetUserStatus(ctx, token, userID, enabled)
+	a.reportError("admin set user status", err)
+	return err
+}
+
+// AdminResetPassword 重置指定账号的密码。
+func (a *App) AdminResetPassword(userID, password string) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.ResetUserPassword(ctx, token, userID, password)
+	if err == nil {
+		a.logger.Printf("admin reset password for user %s", userID)
+	}
+	a.reportError("admin reset password", err)
+	return err
+}
+
+// AdminDeleteUser 删除账号。
+func (a *App) AdminDeleteUser(userID string) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.DeleteUser(ctx, token, userID)
+	if err == nil {
+		a.logger.Printf("admin deleted user %s", userID)
+	}
+	a.reportError("admin delete user", err)
+	return err
+}
+
+// AdminRegisterEnabled 读「允许自助注册」开关。
+func (a *App) AdminRegisterEnabled() (bool, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	enabled, err := client.RegisterEnabled(ctx, token)
+	a.reportError("admin read register switch", err)
+	return enabled, err
+}
+
+// AdminSetRegisterEnabled 写「允许自助注册」开关。
+func (a *App) AdminSetRegisterEnabled(enabled bool) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.SetRegisterEnabled(ctx, token, enabled)
+	if err == nil {
+		a.logger.Printf("admin set register switch to %v", enabled)
+	}
+	a.reportError("admin set register switch", err)
+	return err
+}
+
+// --- 空间与配额（P3）---
+//
+// 「一个地方砍空间」：管理页的空间区同时设定共享容量与逐账号个人配额。
+// 配额的强制点在控制面签发预签名 URL 时，客户端这里只是入口。
+
+// MySpaces 取当前登录账号可见的空间：个人空间 +（被授权时的）共享空间。
+//
+// 与 Admin* 系列不同，这个不要求管理员——每个账号都要能看自己的容量。
+func (a *App) MySpaces() ([]account.Space, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" {
+		return nil, fmt.Errorf("请先登录")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	spaces, err := account.New(base).MySpaces(ctx, session.Token)
+	a.reportError("read my spaces", err)
+	return spaces, err
+}
+
+// AdminListSpaces 取全部空间与实时用量（共享在前）。
+func (a *App) AdminListSpaces() ([]account.Space, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	spaces, err := client.ListSpaces(ctx, token)
+	a.reportError("admin list spaces", err)
+	return spaces, err
+}
+
+// AdminCapacity 取容量总览：物理可用、已承诺、实际已用。
+//
+// 管理页据此判断是否超配。逐空间配额看不出这件事——那是本方法存在的理由。
+func (a *App) AdminCapacity() (*account.Capacity, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	capacity, err := client.GetCapacity(ctx, token)
+	a.reportError("admin read capacity", err)
+	return capacity, err
+}
+
+// AdminSharedMembers 取共享空间的成员授权：账号 ID → read/write。
+func (a *App) AdminSharedMembers() (map[string]string, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	members, err := client.SharedMembers(ctx, token)
+	a.reportError("admin list shared members", err)
+	return members, err
+}
+
+// AdminSetPersonalQuota 设定某账号的个人空间容量。0 收回、-1 不限。
+func (a *App) AdminSetPersonalQuota(userID string, quotaBytes int64) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.SetPersonalQuota(ctx, token, userID, quotaBytes)
+	if err == nil {
+		a.logger.Printf("admin set personal quota for %s to %d bytes", userID, quotaBytes)
+		// 改的可能就是自己的配额：重挂一次，让副标题的数字与盘的有无立刻跟上
+		go a.refreshSpaceMounts()
+	}
+	a.reportError("admin set personal quota", err)
+	return err
+}
+
+// AdminSetSharedQuota 设定共享空间容量。
+func (a *App) AdminSetSharedQuota(quotaBytes int64) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.SetSharedQuota(ctx, token, quotaBytes)
+	if err == nil {
+		a.logger.Printf("admin set shared quota to %d bytes", quotaBytes)
+		go a.refreshSpaceMounts()
+	}
+	a.reportError("admin set shared quota", err)
+	return err
+}
+
+// AdminGrantShared 授予或撤销某账号对共享空间的权限。permission 传空即撤销。
+func (a *App) AdminGrantShared(userID, permission string) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.GrantShared(ctx, token, userID, permission)
+	if err == nil {
+		a.logger.Printf("admin set shared permission for %s to %q", userID, permission)
+		// 撤销自己的授权时，共享盘要从「此电脑」里消失
+		go a.refreshSpaceMounts()
+	}
+	a.reportError("admin grant shared", err)
+	return err
+}
+
+// OpenAdminConsole 在系统默认浏览器里打开 RuoYi 自带后台（plus-ui）。
+//
+// 这是**次要出口**，不是管理页本身：客户端的管理页自绘、直接调 REST。此处只覆盖本产品
+// 不复刻的后台专属运维动作（菜单/字典/定时任务等）。
+func (a *App) OpenAdminConsole() error {
+	target := strings.TrimSpace(a.config.AdminConsoleURL)
+	if target == "" {
+		err := fmt.Errorf("未配置管理后台地址")
+		a.reportError("open admin console", err)
+		return err
+	}
+	// 只放行 http/https：地址来自 config.json，损坏或被改成别的 scheme 时不该拿去唤起程序。
+	parsed, err := url.Parse(target)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		wrapped := fmt.Errorf("管理后台地址无效（需 http/https）：%s", target)
+		a.reportError("open admin console", wrapped)
+		return wrapped
+	}
+	runtime.BrowserOpenURL(a.ctx, target)
+	return nil
+}
 
 // OpenFile 用系统默认应用打开指定文件（Finder 双击 / 资源管理器选中）。
 func (a *App) OpenFile(path string) error {
@@ -393,26 +792,120 @@ func (a *App) SelectFiles() ([]string, error) {
 }
 
 // --- Cloud drive ---
+//
+// 个人云盘的存储访问一律经账号控制面换短期预签名 URL，再直传/直取 RustFS：
+// 桌面端不持存储凭据（ADR-0007 不变量 1，修 KI-2），对象键的用户命名空间由
+// 控制面强制（不变量 2，修 KI-3）。传输任务与进度仍记在 Core（不变量 3）。
+
+// driveClient 返回云盘客户端与当前登录用户的 JWT。未登录或未配置控制面时报错。
+func (a *App) driveClient() (*drive.Client, string, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, "", fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" {
+		return nil, "", fmt.Errorf("请先登录后再使用网盘")
+	}
+	return drive.New(base), session.Token, nil
+}
+
+// driveObjectToFile 把控制面返回的对象转成前端已在用的 cloud.File。
+// 控制面不返回 contentType（S3 列举本就没有），按扩展名推断。
+func driveObjectToFile(object drive.Object) cloud.File {
+	contentType := cloud.ContentTypeForKey(object.Path)
+	return cloud.File{
+		Key:          object.Path,
+		Name:         filepath.Base(object.Path),
+		Size:         object.Size,
+		ContentType:  contentType,
+		LastModified: object.LastModified,
+		PreviewKind:  cloud.DetectPreviewKind(contentType, object.Path),
+	}
+}
 
 func (a *App) CloudList() ([]cloud.File, error) {
-	client, err := a.coreClient()
+	client, token, err := a.driveClient()
 	if err != nil {
 		return nil, err
 	}
-	result, err := client.CloudList(a.ctx)
-	a.reportError("cloud list", err)
-	return result, err
+	objects, err := client.Objects(a.ctx, token, drive.SpacePersonal)
+	if err != nil {
+		a.reportError("cloud list", err)
+		return nil, err
+	}
+	files := make([]cloud.File, 0, len(objects))
+	for _, object := range objects {
+		files = append(files, driveObjectToFile(object))
+	}
+	return files, nil
 }
 
 // CloudPreview 返回文件的安全预览能力。
+//
+// 图片/PDF 交给 WebView2 直接加载控制面签发的预签名 URL；文本内容由本进程限量读入后内联。
+// SVG 等可含主动内容的类型在 DetectPreviewKind 里已归为 unsupported，不会拿到 URL。
 func (a *App) CloudPreview(key string) (cloud.Preview, error) {
-	client, err := a.coreClient()
+	client, token, err := a.driveClient()
 	if err != nil {
 		return cloud.Preview{}, err
 	}
-	result, err := client.CloudPreview(a.ctx, key)
-	a.reportError("cloud preview", err)
-	return result, err
+	contentType := cloud.ContentTypeForKey(key)
+	preview := cloud.Preview{
+		Key:         key,
+		Name:        filepath.Base(key),
+		ContentType: contentType,
+		Kind:        cloud.DetectPreviewKind(contentType, key),
+	}
+
+	switch preview.Kind {
+	case cloud.PreviewImage, cloud.PreviewPDF:
+		url, presignErr := client.PresignGet(a.ctx, token, drive.SpacePersonal, key)
+		if presignErr != nil {
+			a.reportError("cloud preview", presignErr)
+			return cloud.Preview{}, presignErr
+		}
+		preview.ContentURL = url
+		if size, sizeErr := a.driveObjectSize(client, token, key); sizeErr == nil {
+			preview.Size = size
+		}
+	case cloud.PreviewText:
+		body, size, openErr := client.Open(a.ctx, token, drive.SpacePersonal, key)
+		if openErr != nil {
+			a.reportError("cloud preview", openErr)
+			return cloud.Preview{}, openErr
+		}
+		defer body.Close()
+		if size > 0 {
+			preview.Size = size
+		}
+		if fillErr := cloud.FillTextPreview(&preview, body); fillErr != nil {
+			a.reportError("cloud preview", fillErr)
+			return cloud.Preview{}, fillErr
+		}
+	default:
+		if size, sizeErr := a.driveObjectSize(client, token, key); sizeErr == nil {
+			preview.Size = size
+		}
+	}
+	return preview, nil
+}
+
+// driveObjectSize 从控制面列举结果里取对象大小。
+// 预签名 URL 不暴露元数据，而控制面暂无单对象 stat 接口，故按列举匹配。
+func (a *App) driveObjectSize(client *drive.Client, token, key string) (int64, error) {
+	objects, err := client.Objects(a.ctx, token, drive.SpacePersonal)
+	if err != nil {
+		return 0, err
+	}
+	for _, object := range objects {
+		if object.Path == key {
+			return object.Size, nil
+		}
+	}
+	return 0, fmt.Errorf("对象不存在：%s", key)
 }
 
 func (a *App) CloudUpload() (string, error) {
@@ -420,71 +913,28 @@ func (a *App) CloudUpload() (string, error) {
 	if err != nil || path == "" {
 		return "", err
 	}
-	info, err := os.Stat(path)
+	if _, err := os.Stat(path); err != nil {
+		return "", err
+	}
+	core, driveClient, token, err := a.uploadClients()
 	if err != nil {
 		return "", err
 	}
-	fileName := filepath.Base(path)
-	fileSize := info.Size()
-
-	client, clientErr := a.coreClient()
-	if clientErr != nil {
-		return "", clientErr
-	}
-
-	// 在 Core 统一任务存储中注册云盘上传任务
-	created, createErr := client.CreateTask(a.ctx, map[string]any{
-		"kind": "cloud_upload", "fileName": fileName, "direction": "send",
-		"peer": "网盘", "totalBytes": fileSize, "status": "running",
-	})
-	if createErr != nil {
-		a.reportError("create cloud upload task", createErr)
-		return "", createErr
-	}
-
-	go func() {
-		start := time.Now()
-		var lastPatch time.Time
-
-		result, uploadErr := client.CloudUploadStream(a.ctx, path, func(sent, total int64) {
-			now := time.Now()
-			if now.Sub(lastPatch) < 200*time.Millisecond && sent < total {
-				return
-			}
-			lastPatch = now
-			elapsed := now.Sub(start).Seconds()
-			speed := 0.0
-			if elapsed > 0 {
-				speed = float64(sent) / elapsed
-			}
-			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
-				"transferredBytes": sent, "speed": speed, "status": "running",
-			})
-		})
-
-		if uploadErr != nil {
-			a.reportError("cloud upload", uploadErr)
-			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
-				"status": "failed", "error": uploadErr.Error(),
-			})
-			return
-		}
-		a.logger.Printf("cloud upload done: key=%s etag=%s", result.Key, result.ETag)
-		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
-			"transferredBytes": fileSize, "speed": 0, "status": "completed",
-		})
-	}()
-
-	return fileName, nil
+	go a.uploadSingleFile(core, driveClient, token, drive.SpacePersonal, path, filepath.Base(path))
+	return filepath.Base(path), nil
 }
 
-// CloudUploadPaths 将指定路径（文件或文件夹）上传到网盘，供拖拽调用。
+// CloudUploadPaths 将指定路径（文件或文件夹）上传到当前目标空间，供拖拽调用。
 // 文件以文件名为键，文件夹保留目录结构（"文件夹名/相对路径"）。
+//
+// 目标空间取自悬浮窗切换器的选择（默认个人空间）——这就是那个滑动开关的落点：
+// 切到「共享」后，拖进去的文件进共享空间而不是个人空间。
 func (a *App) CloudUploadPaths(paths []string) error {
-	client, err := a.coreClient()
+	core, driveClient, token, err := a.uploadClients()
 	if err != nil {
 		return err
 	}
+	space := a.targetSpace()
 	go func() {
 		for _, path := range paths {
 			info, statErr := os.Stat(path)
@@ -492,24 +942,38 @@ func (a *App) CloudUploadPaths(paths []string) error {
 				continue
 			}
 			if info.IsDir() {
-				a.uploadDir(client, path)
+				a.uploadDir(core, driveClient, token, space, path)
 			} else {
-				a.uploadSingleFile(client, path, filepath.Base(path))
+				a.uploadSingleFile(core, driveClient, token, space, path, filepath.Base(path))
 			}
 		}
 	}()
 	return nil
 }
 
-// uploadSingleFile 上传单个文件，进度写入 Core 统一任务存储。
-func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey string) {
+// uploadClients 一次取齐上传所需的两个客户端：Core 记任务进度，控制面客户端传字节。
+func (a *App) uploadClients() (*desktop.Client, *drive.Client, string, error) {
+	core, err := a.coreClient()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	driveClient, token, err := a.driveClient()
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return core, driveClient, token, nil
+}
+
+// uploadSingleFile 上传单个文件：字节经控制面预签名直传 RustFS，
+// 进度仍写入 Core 的统一任务存储（Core 保留传输任务职责，ADR-0007 不变量 3）。
+func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, token, space, filePath, objectKey string) {
 	fileName := filepath.Base(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return
 	}
 	fileSize := info.Size()
-	created, createErr := client.CreateTask(a.ctx, map[string]any{
+	created, createErr := core.CreateTask(a.ctx, map[string]any{
 		"kind": "cloud_upload", "fileName": fileName, "direction": "send",
 		"peer": "网盘", "totalBytes": fileSize, "status": "running",
 	})
@@ -519,7 +983,7 @@ func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey strin
 	}
 	start := time.Now()
 	var lastPatch time.Time
-	_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, func(sent, total int64) {
+	uploadErr := driveClient.UploadFile(a.ctx, token, space, objectKey, filePath, func(sent, total int64) {
 		now := time.Now()
 		if now.Sub(lastPatch) < 200*time.Millisecond && sent < total {
 			return
@@ -530,24 +994,24 @@ func (a *App) uploadSingleFile(client *desktop.Client, filePath, objectKey strin
 		if elapsed > 0 {
 			speed = float64(sent) / elapsed
 		}
-		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 			"transferredBytes": sent, "speed": speed, "status": "running",
 		})
 	})
 	if uploadErr != nil {
 		a.reportError("cloud upload", uploadErr)
-		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 			"status": "failed", "error": uploadErr.Error(),
 		})
 		return
 	}
-	_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+	_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 		"transferredBytes": fileSize, "speed": 0, "status": "completed",
 	})
 }
 
 // uploadDir 遍历目录逐文件上传，保留目录结构。进度写入 Core 统一任务存储。
-func (a *App) uploadDir(client *desktop.Client, dir string) {
+func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, space, dir string) {
 	folderName := filepath.Base(dir)
 	var files []string
 	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -560,7 +1024,7 @@ func (a *App) uploadDir(client *desktop.Client, dir string) {
 		return
 	}
 	// 文件夹级任务：totalBytes 为文件数，transferredBytes 为已完成文件数
-	created, createErr := client.CreateTask(a.ctx, map[string]any{
+	created, createErr := core.CreateTask(a.ctx, map[string]any{
 		"kind": "cloud_upload", "fileName": folderName + "/", "direction": "send",
 		"peer": "网盘", "totalBytes": int64(len(files)), "status": "running",
 	})
@@ -574,20 +1038,19 @@ func (a *App) uploadDir(client *desktop.Client, dir string) {
 			continue
 		}
 		objectKey := folderName + "/" + filepath.ToSlash(rel)
-		_, uploadErr := client.CloudUploadStreamWithKey(a.ctx, filePath, objectKey, nil)
-		if uploadErr != nil {
+		if uploadErr := driveClient.UploadFile(a.ctx, token, space, objectKey, filePath, nil); uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
-			_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 				"status": "failed", "error": uploadErr.Error(),
 			})
 			return
 		}
-		_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 			"transferredBytes": int64(i + 1), "status": "running",
 		})
 	}
 	a.logger.Printf("cloud folder upload done: %s (%d files)", folderName, len(files))
-	_ = client.PatchTask(a.ctx, created.ID, map[string]any{
+	_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 		"transferredBytes": int64(len(files)), "speed": 0, "status": "completed",
 	})
 }
@@ -599,20 +1062,20 @@ func (a *App) CloudUploadFolder() (string, error) {
 	if err != nil || dir == "" {
 		return "", err
 	}
-	client, clientErr := a.coreClient()
-	if clientErr != nil {
-		return "", clientErr
+	core, driveClient, token, err := a.uploadClients()
+	if err != nil {
+		return "", err
 	}
-	go a.uploadDir(client, dir)
+	go a.uploadDir(core, driveClient, token, drive.SpacePersonal, dir)
 	return filepath.Base(dir), nil
 }
 
 func (a *App) CloudDownload(key string) error {
-	client, err := a.coreClient()
+	client, token, err := a.driveClient()
 	if err != nil {
 		return err
 	}
-	url, err := client.CloudDownload(a.ctx, key)
+	url, err := client.PresignGet(a.ctx, token, drive.SpacePersonal, key)
 	if err != nil {
 		a.reportError("cloud download", err)
 		return err
@@ -622,21 +1085,26 @@ func (a *App) CloudDownload(key string) error {
 }
 
 func (a *App) CloudDelete(key string) error {
-	client, err := a.coreClient()
+	client, token, err := a.driveClient()
 	if err != nil {
 		return err
 	}
-	err = client.CloudDelete(a.ctx, key)
+	err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
 	a.reportError("cloud delete", err)
 	return err
 }
 
+// CloudShare 生成可分享的链接。
+//
+// 当前实现返回控制面签发的预签名下载 URL，其有效期由控制面统一约束
+// （easyshare.drive.get-expiry，默认 10 分钟），**不接受调用方指定的小时数**——
+// 长效外链需要控制面提供独立的分享接口（可撤销、可审计），属后续阶段。
 func (a *App) CloudShare(key string, expiryHours int) (string, error) {
-	client, err := a.coreClient()
+	client, token, err := a.driveClient()
 	if err != nil {
 		return "", err
 	}
-	url, err := client.CloudShare(a.ctx, key, expiryHours)
+	url, err := client.PresignGet(a.ctx, token, drive.SpacePersonal, key)
 	a.reportError("cloud share", err)
 	return url, err
 }
@@ -715,18 +1183,35 @@ func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
 
-// registerNamespace adds EasyShare entries to the system file-space entry.
-// Windows：注册「此电脑」命名空间条目；macOS：Finder 挂载 WebDAV 卷。
-// 网盘和共享入口直接指向 WebDAV，不暴露盘符。
+// registerNamespace 清理「此电脑」里的 EasyShare 条目，为登录后的挂载做准备。
+//
+// 「此电脑」里只该有**两个**盘：网盘（个人）与共享，都由 refreshSpaceMounts 在登录后
+// 按实际授权挂载（见 spacemount.go）。局域网收件箱是本机目录，从文件管理器正常访问即可，
+// 不单独占一个条目——多一个条目只会让「哪个是我的网盘」变得不清楚。
 func (a *App) registerNamespace() {
 	namespace.Log = a.logger.Printf
-	iconPath := namespace.IconFromBuild()
-	cloudPort := a.config.WebDAVPort + 1
-	entries := namespace.DefaultEntries(iconPath, cloudPort, a.config.WebDAVPort)
-	if err := namespace.Register(entries); err != nil {
-		a.logger.Printf("namespace register: %v", err)
-	} else {
-		a.logger.Printf("namespace registered")
+
+	// 清掉上次会话（或上次崩溃）留下的条目，含早期版本注册过的局域网条目。
+	//
+	// 必须无条件清：进程刚起，本次还没挂过任何东西，unmountAllSpaces 会因为
+	// 「没挂过」而跳过清理，于是残留条目会一直留在「此电脑」里点进去报错。
+	a.clearSpaceEntriesOnStartup()
+}
+
+// clearSpaceEntriesOnStartup 启动时无条件移除两个云端空间条目。
+//
+// 它们的有效性完全取决于登录态，而进程刚起时没有登录态。登录后
+// refreshSpaceMounts 会按实际授权重新挂上。
+func (a *App) clearSpaceEntriesOnStartup() {
+	stale := []namespace.Entry{
+		{CLSID: namespace.PersonalCLSID()},
+		{CLSID: namespace.SharedCLSID()},
+		// 早期版本把局域网目录也注册成一个条目，导致「此电脑」里出现三个盘。
+		// 这里主动清掉，否则老用户升级后会一直留着那个多余条目。
+		{CLSID: namespace.LANCLSID()},
+	}
+	if err := namespace.Unregister(stale); err != nil {
+		a.logger.Printf("namespace clear stale space entries: %v", err)
 	}
 }
 

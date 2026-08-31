@@ -89,6 +89,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		WebDAVPort:     19080,
 		WebDAVUsername: "EasyShare",
 		WebDAVPassword: "webdav-password",
+		PlatformBaseURL: "http://localhost:8090",
+		AdminConsoleURL: "http://localhost:8091",
 	}
 
 	if err := Save(path, want); err != nil {
@@ -123,6 +125,31 @@ func TestLoadRejectsInvalidPersistedConfig(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load() accepted an insecure empty configuration")
+	}
+}
+
+// 账号体系之前的 config.json 没有 platformBaseUrl / adminConsoleUrl，
+// 老用户升级后必须自动补上默认值，否则登录与「管理」入口都会因空地址而不可用。
+func TestLoadMigratesMissingPlatformURLs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{
+		"deviceId":"device-id","deviceName":"legacy","apiHost":"127.0.0.1","apiPort":19079,
+		"apiToken":"api-token","discoveryPort":9527,"transferPort":9528,
+		"receiveDir":"C:\\tmp\\recv","webdavRoot":"C:\\tmp\\share","webdavPort":19080,
+		"webdavUsername":"EasyShare","webdavPassword":"webdav-password"
+	}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.PlatformBaseURL != "http://localhost:8090" {
+		t.Errorf("PlatformBaseURL = %q, want default", got.PlatformBaseURL)
+	}
+	if got.AdminConsoleURL != "http://localhost:8091" {
+		t.Errorf("AdminConsoleURL = %q, want default", got.AdminConsoleURL)
 	}
 }
 
