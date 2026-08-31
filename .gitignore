@@ -55,4 +55,9 @@ __pycache__/
 # ─── 本地测试产物 ───
 .playwright-cli/
 output/playwright/
-data/jobs.db
+# 知识面 pytest 从仓库根跑时的 SQLite 落点（auth/jobs/query_log）
+data/
+# 计划模式会话产物（.zcode/commands 是版本化的，plans 不是）
+.zcode/plans/
+# platform-drive 的 Maven 构建产物（platform/ 整体已忽略，模块在仓内需单独忽略）
+platform-drive/target/

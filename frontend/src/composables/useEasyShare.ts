@@ -43,6 +43,9 @@ export function useEasyShare() {
   const emptyUser: AuthUser = { loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false }
   const currentUser = ref<AuthUser>({ ...emptyUser })
   const loggingIn = ref(false)
+  // 在线升级：启动自动检查（Go 侧 24h 节流）发现新版本时记录版本号，
+  // 设置入口据此打红点；用户检查/下载后由设置页自身状态接管。
+  const updateAvailable = ref('')
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
@@ -239,6 +242,12 @@ export function useEasyShare() {
     }
   }
 
+  // 启动自动检查发现新版本（Go 侧 emit，24h 节流）
+  const handleUpdateAvailable = (data: { latestVersion?: string }) => {
+    if (inactive()) return
+    updateAvailable.value = data?.latestVersion ?? ''
+  }
+
   onMounted(() => {
     disposed = false
     document.addEventListener('visibilitychange', handleVisibility)
@@ -246,6 +255,8 @@ export function useEasyShare() {
     OnFileDrop(handleFilesDropped, false)
     // 订阅 Go 端转发的 Core 实时事件
     EventsOn('core-event', handleCoreEvent)
+    // 订阅升级可用通知（update:available）
+    EventsOn('update:available', handleUpdateAvailable)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
@@ -267,6 +278,7 @@ export function useEasyShare() {
     disposed = true
     stopPolling()
     EventsOff('core-event')
+    EventsOff('update:available')
     document.removeEventListener('visibilitychange', handleVisibility)
     OnFileDropOff()
   })
@@ -289,6 +301,7 @@ export function useEasyShare() {
     activeTasks,
     currentUser,
     loggingIn,
+    updateAvailable,
     login: async (username: string, password: string): Promise<boolean> => {
       loggingIn.value = true
       try {

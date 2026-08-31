@@ -38,7 +38,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 
 关闭桌面窗口默认隐藏到托盘（OnBeforeClose 拦截），Core 继续运行。托盘菜单"退出"或界面"退出服务"才执行全量关闭。
 
-**账号控制面（RuoYi-Vue-Plus 6.0，Java，服务端部署）**：桌面端与 Core 均为其客户端。登录经控制面拿 JWT；云盘上传/下载由控制面模块 `platform-drive/` 验证身份后签发短期预签名 URL，客户端凭 URL 直传 RustFS，**不再持有任何对象存储静态凭据**（ADR-0007 不变量 1/3，`internal/cloud/defaults.go` 已删除）。环境组成：RuoYi admin（REST :8090）+ PostgreSQL 16（:5432）+ Redis 7（:6380）+ plus-ui 管理后台（:8091，次要出口），dev 部署见 `deploy/ruoyi-db/`。
+**账号控制面（RuoYi-Vue-Plus 6.0，Java，服务端部署）**：桌面端与 Core 均为其客户端。登录经控制面拿 JWT；云盘上传/下载由控制面模块 `platform-drive/` 验证身份后签发短期预签名 URL，客户端凭 URL 直传 RustFS，**不再持有任何对象存储静态凭据**（ADR-0007 不变量 1/3，`internal/cloud/defaults.go` 已删除）。客户端在线升级的版本清单与安装包也托管在控制面（匿名 `/easyshare/app/*`，安装包存 RustFS `releases/{version}/` 前缀、预签名直传，见第 4b 节）。环境组成：RuoYi admin（REST :8090）+ PostgreSQL 16（:5433，本机原生 PG 占用 5432 故容器映射 5433）+ Redis 7（:6380）+ plus-ui 管理后台（:8091，次要出口），dev 部署见 `deploy/ruoyi-db/`。
 
 ## 2. 主要代码入口
 
@@ -84,7 +84,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | 文件传输 | TCP `9528` | 局域网 |
 | 账号控制面 REST（RuoYi admin） | `http://localhost:8090`（`config.json` platformBaseUrl） | 服务端（dev 本机） |
 | plus-ui 管理后台（次要出口） | `http://localhost:8091`（adminConsoleUrl） | 服务端（dev 本机） |
-| 控制面 PostgreSQL 16 | `127.0.0.1:5432`（docker compose） | 仅本机（dev） |
+| 控制面 PostgreSQL 16 | `127.0.0.1:5433`（docker compose；本机原生 PG 占用 5432，宿主映射 5433） | 仅本机（dev） |
 | 控制面 Redis 7 | `127.0.0.1:6380`（docker compose，专用实例） | 仅本机（dev） |
 
 端口由 `%LOCALAPPDATA%\EasyShare\config.json`（macOS: `~/Library/Application Support/EasyShare/config.json`）配置。Core API Host 必须是 loopback 地址。
@@ -124,6 +124,21 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底） |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
+
+## 4b. 控制面升级接口（platform-drive，2026-08-31 起）
+
+客户端在线升级（`internal/update` + `appupdate.go`）。升级检查先于登录发生，故前两个端点**匿名**（`security.excludes` 白名单放行，`@SaIgnore` 只是注解层保险；安装包本就公开）；管理端点要求 superadmin。安装包本体存 RustFS `releases/{version}/` 前缀，控制面不在数据路径上。
+
+| 方法 | 路径 | 鉴权 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/easyshare/app/latest?platform=windows\|macos` | 匿名 | 最新版本清单（version/notes/publishedAt/assets；从未发布返回 data=null） |
+| `GET` | `/easyshare/app/assets/{assetId}/url` | 匿名 | 现取预签名下载 URL（GET 10m，客户端下载前调用） |
+| `POST` | `/easyshare/app/admin/uploads` | superadmin | 上传准备：建/复用版本与资产记录，返回预签名 PUT URL（两段式，发布方直传 RustFS） |
+| `POST` | `/easyshare/app/admin/assets/{assetId}/publish` | superadmin | 发布：校验对象存在且大小一致后置已发布 |
+| `GET` | `/easyshare/app/admin/releases` | superadmin | 版本列表（管理/回滚决策） |
+| `DELETE` | `/easyshare/app/admin/releases/{releaseId}` | superadmin | 删除版本（回滚：记录+对象一并删） |
+
+桌面端升级链路：启动 24h 节流自动检查（`update-state.json`）→ 设置页「关于与更新」手动检查 → 下载（SHA256 校验，`%LOCALAPPDATA%\EasyShare\updates\`）→ Windows 安装版「重启并更新」（`installer /S /update` → 优雅停 Core → NSIS taskkill 残留 → 覆盖安装 → 自动重启）；macOS 与绿色版仅引导下载。发布入口 `scripts/publish-release.ps1`。
 
 ### WebSocket 事件类型
 

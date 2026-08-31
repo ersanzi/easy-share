@@ -62,6 +62,18 @@ export function AdminSharedMembers() {
   return window['go']['main']['App']['AdminSharedMembers']();
 }
 
+export function AppVersion() {
+  return window['go']['main']['App']['AppVersion']();
+}
+
+export function ApplyUpdate() {
+  return window['go']['main']['App']['ApplyUpdate']();
+}
+
+export function CheckUpdate() {
+  return window['go']['main']['App']['CheckUpdate']();
+}
+
 export function ClearHistory() {
   return window['go']['main']['App']['ClearHistory']();
 }
@@ -178,6 +190,10 @@ export function OpenReceiveFolder() {
   return window['go']['main']['App']['OpenReceiveFolder']();
 }
 
+export function OpenUpdatesFolder() {
+  return window['go']['main']['App']['OpenUpdatesFolder']();
+}
+
 export function ProcessDroppedFiles(arg1) {
   return window['go']['main']['App']['ProcessDroppedFiles'](arg1);
 }
@@ -228,6 +244,10 @@ export function ShutdownAll() {
 
 export function StartDrive() {
   return window['go']['main']['App']['StartDrive']();
+}
+
+export function StartUpdateDownload() {
+  return window['go']['main']['App']['StartUpdateDownload']();
 }
 
 export function Startup(arg1) {

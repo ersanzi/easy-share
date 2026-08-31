@@ -12,9 +12,10 @@ if (-not (Test-Path $jar)) {
     Write-Error "未找到 $jar —— 请先在 platform/ 下执行 ./mvnw clean package -DskipTests"
 }
 
-# JDK 21（RuoYi 6.0 要求）
-if (-not $env:JAVA_HOME) {
-    $env:JAVA_HOME = 'C:\Program Files\Microsoft\jdk-21.0.8.9-hotspot'
+# JDK 21（RuoYi 6.0 要求）。本机实际安装在 D:\Develop\java21；
+# 注意系统全局 JAVA_HOME 可能指向 JDK 17（class 版本 65 报错就是它），必须显式覆盖。
+if ($env:JAVA_HOME -notmatch 'java21') {
+    $env:JAVA_HOME = 'D:\Develop\java21'
 }
 $java = Join-Path $env:JAVA_HOME 'bin\java.exe'
 

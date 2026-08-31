@@ -174,4 +174,4 @@ EasyShare 采用小步迭代策略：两条产品主线（桌面文件产品 阶
 - 账号控制面的隔离结论来自控制面活栈验收（9/9）与 Go 客户端集成测试；桌面端「登录 → 上传 → 换账号看列表」真机链路待真实操作补验。
 - 局域网发现和文件传输面向可信网络，尚无设备配对和传输加密。
 - 网盘上传暂不支持断点续传；在线预览当前支持图片、PDF 和最多 1 MiB 的 UTF-8 文本，暂不支持 Office、音视频、SVG 等高级或主动内容格式。
-- 暂无自动升级；macOS 与 Windows GitHub Actions 均支持 master/PR、手动和 tag 构建并产出安装包与 SHA-256 校验文件；`dev` 推送仅触发 Python 知识面测试（Knowledge Tests），Windows 日常验证仍以本地 `scripts/build.ps1` 为准。
+- 在线升级已上线（0.1.1，2026-08-31）：升级源为 RuoYi 控制面，Windows 支持「检查 → 下载（SHA256 校验）→ 重启并更新 → 静默安装 → 自动重启」全自动；macOS 仅检测并引导下载（产物未签名，自动替换留后续）；GitHub Releases 仍是开发侧分发渠道，未接入客户端升级检查。发布命令见 `scripts/publish-release.ps1`，排障见 [`docs/troubleshooting.md`](docs/troubleshooting.md) 第 13 节。macOS 与 Windows GitHub Actions 均支持 master/PR、手动和 tag 构建并产出安装包与 SHA-256 校验文件；`dev` 推送仅触发 Python 知识面测试（Knowledge Tests），Windows 日常验证仍以本地 `scripts/build.ps1` 为准。

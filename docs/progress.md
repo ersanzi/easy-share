@@ -110,12 +110,14 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 桌面端集成知识问答（发芽路线第 3 步）：Core 作知识网关（登录/健康/问答 5 个代理端点，令牌存 Core 侧 knowledge.json 不进前端），桌面端「知识」页登录 + 会话式问答 + 引用折叠，令牌失效自动回登录页。详见 [`iterations/2026-08-21-desktop-knowledge-qa.md`](iterations/2026-08-21-desktop-knowledge-qa.md)
 - [x] WPS 最小闭环（发芽路线第 4 步）：知识服务自托管加载项（/wps 同源免跨域），WPS 文字「知识」页签选中段落一键查询，任务窗格登录 + 引用展示；本机安装脚本登记 jsaddons。详见 [`iterations/2026-08-21-wps-minimal-loop.md`](iterations/2026-08-21-wps-minimal-loop.md)
 - [x] 托盘悬停浮窗（切片 1，2026-08-31 外部批次合入）：Windows 侧改用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 获得悬停事件（`getlantern/systray` 不具备且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2，标题栏含图标/名称/头像/设置，点设置显示主窗口；定位基于 `Shell_NotifyIconGetRect`，适配任务栏四边缘与多显示器负坐标；已移除 systray 及其 8 个传递依赖。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md)
+- [x] 客户端在线升级（2026-08-31）：升级源为 RuoYi 控制面（platform-drive 发布接口，安装包存 RustFS、预签名直传不经控制面）；Windows 全自动「检查→下载（SHA256 校验）→重启并更新→NSIS 静默安装→自动重启」，macOS 检测+引导下载；设置页「关于与更新」卡片 + 启动 24h 节流自动检查（设置入口红点）；`publish-release.ps1` 一条命令发布。真机 UI 全流程验收通过（0.1.0→0.1.1）。详见 [`iterations/2026-08-31-online-update.md`](iterations/2026-08-31-online-update.md)
 - [x] 悬浮窗布局重构与固定态（切片 2，2026-08-31 外部批次合入）：浮窗加高按内容分区、固定态（固定是文件拖放的前提）、托盘图标 GUID 持久化与窗口位置/固定状态持久化。详见 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-31 | 客户端在线升级（控制面托管）— 检查/下载/校验/静默安装全自动（Windows）+ platform-drive 发布接口 | 已完成（UI 全流程验收通过 0.1.0→0.1.1） |
 | 2026-08-31 | 合入外部协作者批次 — RuoYi 账号控制面 P0–P3 + 托盘悬浮窗 + 空间/配额/池上限（快照基点 f5524f9） | 已完成（本仓回归进行中） |
 | 2026-08-29 | 账号控制面 P2：按用户隔离的存储授权 — 预签名 URL 直传，客户端不再持 RustFS 凭据 | 已完成（隔离验收 9/9；桌面端 UI 链路待真机补验） |
 | 2026-08-29 | 账号控制面 P1：桌面登录 + 登录态贯通（头像跟随账号） | 已完成（待手工交互验收） |
@@ -213,9 +215,10 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 版本约定
 
-当前版本：**0.1.0**（开发基线，尚未正式发布）
+当前版本：**0.1.1**（2026-08-31 起，随在线升级功能发布；经控制面升级通道真机验证）
 
 版本号规则：
 - 0.x.y：阶段 0-3 的迭代版本
 - 1.0.0：云端 MVP 可用时
 - 安装包版本与 wails.json `info.productVersion` 保持一致
+- 发布新版：改三处版本号（`internal/version/version.go`、`wails.json`、`frontend/package.json`）→ `scripts/build.ps1` → `scripts/publish-release.ps1` 上传控制面

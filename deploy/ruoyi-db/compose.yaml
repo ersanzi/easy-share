@@ -9,7 +9,9 @@ services:
       TZ: Asia/Shanghai
       # 关闭 SCRAM 之外的问题：使用默认 md5/scram，RuoYi JDBC 正常
     ports:
-      - "127.0.0.1:5432:5432"
+      # 宿主 5433 → 容器 5432：本机装有原生 PostgreSQL 占用 5432（连接串与
+      # platform/ruoyi-admin 的 application-dev.yml 需同步用 5433）
+      - "127.0.0.1:5433:5432"
     volumes:
       - ruoyi-pg-data:/var/lib/postgresql/data
     healthcheck:

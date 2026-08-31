@@ -325,3 +325,11 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 4. 当前 `JobRunner` 是进程内执行器，只支持单个 Uvicorn worker。多个 worker 会各自启动执行线程并共享 SQLite/JSON 存储，可能导致重复执行或状态冲突。
 5. 上传出现 `SignatureDoesNotMatch` 时，核对 `knowledge/.env` 与 `deploy/rustfs/.env`、当前 RustFS 实例使用的 access key/secret key 是否一致；修改后重启 Python 服务，让 Settings 重新加载。
 6. 实验台必须复用正式 `DocumentPipeline`，不要在 `lab` 包里复制解析、清洗或索引逻辑。
+
+## 13. 在线升级相关
+
+1. **Git Bash 里跑安装包 `/S` 变成了 `S:/`**：MSYS 会把以 `/` 开头的参数当路径转换（`CommandLine` 里可见 `installer.exe S:/`），安装器进入交互模式挂在向导页。用 `MSYS_NO_PATHCONV=1` 前缀或 PowerShell `Start-Process -ArgumentList '/S'` 跑。
+2. **发布脚本发出的中文更新说明变问号**：Windows PowerShell 5.1 的 `Invoke-RestMethod` 对字符串 Body 默认按 ISO-8859-1 编码。发送前显式转 UTF-8 字节：`-Body ([System.Text.Encoding]::UTF8.GetBytes($json))` 并带 `charset=utf-8`（`publish-release.ps1` 已修）。
+3. **静默升级后开机自启被悄悄打开**：NSIS 静默模式下 `MessageBox MB_YESNO` 返回默认按钮 IDYES。凡是静默安装路径会经过的询问弹窗，必须包 `${IfNot} ${Silent}`。
+4. **检查更新一直转圈/报错**：控制面（`config.json` 的 platformBaseUrl）不可达，或 `security.excludes` 白名单没放行 `/easyshare/app/latest`（RuoYi 路由级 checkLogin 不认 `@SaIgnore`，只认白名单；且列表是整体替换，漏带基线条目会连登录都挂）。
+5. **下载完成但「重启并更新」不出现**：绿色版/非安装目录运行（注册表 `HKCU\Software\EasyShare\EasyShare\InstallDir` 与 exe 目录不一致）或 macOS——按设计只引导手动安装。

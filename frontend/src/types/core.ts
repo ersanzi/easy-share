@@ -192,3 +192,34 @@ export interface Space {
 // 配额哨兵值，与 Go/Java 侧保持一致。
 export const QUOTA_UNSET = 0
 export const QUOTA_UNLIMITED = -1
+// ─── 在线升级（appupdate.go / internal/update）───
+
+// 一个可下载资产（安装包/DMG/zip）。URL 不在清单里，下载前现取。
+export interface UpdateAssetInfo {
+  id: string
+  kind: string
+  filename: string
+  size: number
+  sha256: string
+}
+
+// 一次升级检查的结果。hasUpdate 由 Go 侧 semver 比较得出。
+export interface UpdateCheckResult {
+  currentVersion: string
+  latestVersion: string
+  hasUpdate: boolean
+  notes: string
+  publishedAt: string
+  asset?: UpdateAssetInfo
+  // 是否 NSIS 安装版（Windows）；绿色版与 macOS 为 false
+  installedMode: boolean
+  // 能否「重启并更新」：Windows 安装版且有 installer 资产
+  canAutoInstall: boolean
+}
+
+// update:progress 事件载荷（200ms 节流，Go 侧已算好速度）
+export interface UpdateProgress {
+  received: number
+  total: number
+  speed: number
+}

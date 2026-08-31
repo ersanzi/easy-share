@@ -27,3 +27,29 @@ easyshare:
     capacity-path: ${RUSTFS_CAPACITY_PATH:${LOCALAPPDATA:}/Docker/wsl/disk}
     # 预留水位：不允许云盘吃掉的部分。磁盘写满会连带影响 PG/Redis 与系统本身。
     reserved-bytes: 5GB
+
+# 安全白名单（RuoYi SecurityConfig 的路由级 checkLogin 排除项）。
+#
+# ⚠ Spring 列表属性是整体替换：这里定义 security.excludes 会**整体覆盖** jar 内
+# application.yml 的基线列表（已按 RuoYi-Vue-Plus 6.0 ruoyi-admin/application.yml
+# 逐条核对），因此必须带上全部基线条目。升级 platform/ 工程后请重新对照。
+# 本仓新增的匿名项（客户端在线升级，检查先于登录；路由级 checkLogin 不认 @SaIgnore，
+# 只能走白名单）：
+#   /easyshare/app/latest            版本清单
+#   /easyshare/app/assets/*/url      下载 URL 现取
+security:
+  excludes:
+    - /*.html
+    - /**/*.html
+    - /**/*.css
+    - /**/*.js
+    - /favicon.ico
+    - /error
+    - /*/api-docs
+    - /*/api-docs/**
+    - /warm-flow-ui/config
+    - /snail-chat/**
+    - /api/snail/chat/**
+    - /easyshare/app/latest
+    - /easyshare/app/assets/*/url
+

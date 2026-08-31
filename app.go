@@ -24,6 +24,7 @@ import (
 	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
 	"easyshare/internal/namespace"
+	"easyshare/internal/update"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -60,6 +61,12 @@ type App struct {
 	// 空串表示未选择，按个人空间处理。由浮窗线程写、上传路径读，故加锁。
 	dropSpaceMu sync.Mutex
 	dropSpace   string
+	// 在线升级状态（绑定方法见 appupdate.go）
+	updateMu          sync.Mutex
+	updateManifest    *update.Manifest
+	updateAsset       *update.Asset
+	updateFilePath    string
+	updateDownloading bool
 }
 
 // AuthUser 是下发给前端的登录态（不含 token）。
@@ -119,6 +126,8 @@ func (a *App) Startup(ctx context.Context) {
 
 	go a.watchdog()
 	go a.eventStream()
+	// 静默检查更新（24h 节流，发现新版本发 update:available 事件）
+	go a.autoUpdateCheck()
 
 	// Register EasyShare entries in Windows Explorer "此电脑" (This PC).
 	a.registerNamespace()
@@ -1228,6 +1237,14 @@ func (a *App) showWindow() {
 }
 
 func (a *App) quitFromTray() {
+	a.logger.Printf("quit requested from tray")
+	a.quitAll()
+}
+
+// beginQuit 置退出标记并尽力优雅停 Core（watchdog 见标记后不再拉起），重复调用安全。
+// 需要在退出前插入额外动作的调用方（如升级前启动安装包），应在 beginQuit 与
+// runtime.Quit 之间执行该动作。
+func (a *App) beginQuit() {
 	a.quitLock.Lock()
 	if a.quitting {
 		a.quitLock.Unlock()
@@ -1235,7 +1252,6 @@ func (a *App) quitFromTray() {
 	}
 	a.quitting = true
 	a.quitLock.Unlock()
-	a.logger.Printf("quit requested from tray")
 
 	// 给 Core shutdown 加超时，避免 Core 无响应时阻塞退出流程（macOS 上常见）
 	if client, err := a.coreClient(); err == nil {
@@ -1253,6 +1269,11 @@ func (a *App) quitFromTray() {
 		}
 		cancel()
 	}
+}
+
+// quitAll 优雅退出：停 Core 后关闭窗口（托盘退出与升级应用共用一条链路）。
+func (a *App) quitAll() {
+	a.beginQuit()
 	runtime.Quit(a.ctx)
 }
 

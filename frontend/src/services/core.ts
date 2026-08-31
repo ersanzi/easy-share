@@ -14,6 +14,9 @@
   AdminSetSharedQuota,
   AdminSetUserStatus,
   AdminSharedMembers,
+  AppVersion,
+  ApplyUpdate,
+  CheckUpdate,
   ClearHistory,
   CloudDelete,
   CloudDownload,
@@ -39,6 +42,7 @@
   OpenAdminConsole,
   OpenFile,
   OpenReceiveFolder,
+  OpenUpdatesFolder,
   ProcessDroppedFiles,
   RejectTransfer,
   ReportFrontendError,
@@ -51,6 +55,7 @@
   SendFile,
   ShutdownAll,
   StartDrive,
+  StartUpdateDownload,
   StopDrive,
 } from '../../wailsjs/go/main/App'
 import type {
@@ -65,6 +70,7 @@ import type {
   KnowledgeStatus as KnowledgeStatusData,
   ManagedUserPage,
   Space,
+  UpdateCheckResult,
 } from '../types/core'
 
 export interface SettingsData {
@@ -134,4 +140,10 @@ export const core = {
   adminGrantShared: AdminGrantShared,
   // RuoYi 自带后台：仅本产品不复刻的运维动作（菜单/字典/定时任务）用得到
   openAdminConsole: OpenAdminConsole,
+  // 在线升级（appupdate.go）：检查 → 下载（进度经 update:progress 事件）→ 应用
+  appVersion: () => AppVersion() as Promise<string>,
+  checkUpdate: () => CheckUpdate() as Promise<UpdateCheckResult>,
+  startUpdateDownload: StartUpdateDownload,
+  applyUpdate: ApplyUpdate,
+  openUpdatesFolder: OpenUpdatesFolder,
 }

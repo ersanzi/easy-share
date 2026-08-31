@@ -48,6 +48,11 @@ ManifestDPIAware true
 
 !include "MUI.nsh"
 
+## 在线升级：解析命令行 /update 标志（客户端静默升级时传 "/S /update"）
+!include "FileFunc.nsh"
+!insertmacro GetParameters
+!insertmacro GetOptions
+
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
 
@@ -82,15 +87,30 @@ ShowUninstDetails show
 
 ## 自启动选项变量
 Var AutoStart
+## 在线升级标志：1 = 静默升级安装，完成后自动重启应用
+Var UpdateMode
 
 Function .onInit
     !insertmacro wails.checkArchitecture
     StrCpy $AutoStart "0"
+    StrCpy $UpdateMode "0"
+    ${GetParameters} $R0
+    ${GetOptions} $R0 "/update" $R1
+    ${IfNot} ${Errors}
+        StrCpy $UpdateMode "1"
+    ${EndIf}
 FunctionEnd
 
 ## 安装区段
 Section "Install"
     !insertmacro wails.setShellContext
+
+    ## 覆盖安装前终止正在运行的 EasyShare 进程（exe 被占用会导致覆盖失败）。
+    ## 交互式重装与静默升级共用；进程不存在时 taskkill 静默失败，不影响安装。
+    DetailPrint "正在停止 EasyShare 进程..."
+    nsExec::ExecToLog 'taskkill /F /IM "${PRODUCT_EXECUTABLE}" /T'
+    nsExec::ExecToLog 'taskkill /F /IM "${CORE_EXECUTABLE}" /T'
+    Sleep 1000
 
     ## 安装 WebView2 Runtime（如果缺失）
     !insertmacro wails.webview2runtime
@@ -115,11 +135,20 @@ Section "Install"
     ## 写入卸载信息
     !insertmacro wails.writeUninstaller
 
-    ## 询问是否开机自启动
-    MessageBox MB_YESNO|MB_ICONQUESTION "是否在 Windows 启动时自动运行 ${INFO_PRODUCTNAME}？" IDNO noAutoStart
-        StrCpy $AutoStart "1"
-        WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\""
-    noAutoStart:
+    ## 询问是否开机自启动（静默升级 /S 不弹窗：MessageBox 在静默模式下的返回值
+    ## 是默认按钮 IDYES，会误开自启，必须显式跳过）
+    ${IfNot} ${Silent}
+        MessageBox MB_YESNO|MB_ICONQUESTION "是否在 Windows 启动时自动运行 ${INFO_PRODUCTNAME}？" IDNO noAutoStart
+            StrCpy $AutoStart "1"
+            WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\""
+        noAutoStart:
+    ${EndIf}
+
+    ## 在线升级（/update）：安装完成后自动重启应用，对齐主流软件的升级体验
+    ${If} $UpdateMode == "1"
+        DetailPrint "升级完成，正在重启 ${INFO_PRODUCTNAME}..."
+        Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+    ${EndIf}
 
 SectionEnd
 

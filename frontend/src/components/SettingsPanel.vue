@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
+import type { UpdateCheckResult, UpdateProgress } from '../types/core'
+import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 
 interface SettingsForm {
   deviceName: string
@@ -48,7 +50,101 @@ const save = async () => {
   }
 }
 
-onMounted(load)
+// ─── 在线升级 ───
+// 状态机：check →（有新版本）download（进度事件）→ downloaded → apply
+const appVersion = ref('')
+const checking = ref(false)
+const checkResult = ref<UpdateCheckResult | null>(null)
+const updateError = ref('')
+const downloadState = ref<'idle' | 'downloading' | 'downloaded'>('idle')
+const progress = ref<UpdateProgress | null>(null)
+const applying = ref(false)
+const applyError = ref('')
+
+const onProgress = (payload: UpdateProgress) => { progress.value = payload }
+const onDownloaded = () => { downloadState.value = 'downloaded' }
+const onUpdateError = (payload: { message?: string }) => {
+  downloadState.value = 'idle'
+  updateError.value = payload?.message || '下载失败'
+}
+
+const check = async () => {
+  if (checking.value) return
+  checking.value = true
+  updateError.value = ''
+  applyError.value = ''
+  checkResult.value = null
+  downloadState.value = 'idle'
+  progress.value = null
+  try {
+    checkResult.value = await core.checkUpdate()
+  } catch (e) {
+    updateError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    checking.value = false
+  }
+}
+
+const download = async () => {
+  if (downloadState.value === 'downloading') return
+  downloadState.value = 'downloading'
+  progress.value = null
+  updateError.value = ''
+  try {
+    await core.startUpdateDownload()
+  } catch (e) {
+    downloadState.value = 'idle'
+    updateError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+const apply = async () => {
+  if (applying.value) return
+  applying.value = true
+  applyError.value = ''
+  try {
+    await core.applyUpdate()
+  } catch (e) {
+    applyError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    applying.value = false
+  }
+}
+
+const openUpdatesFolder = () => { void core.openUpdatesFolder() }
+
+const progressPercent = computed(() => {
+  const p = progress.value
+  if (!p || p.total <= 0) return null
+  return Math.min(100, Math.round((p.received / p.total) * 100))
+})
+
+const formatBytes = (bytes?: number) => {
+  if (!bytes || bytes <= 0) return '—'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++ }
+  return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+const formatSpeed = (bytesPerSecond?: number) => {
+  if (!bytesPerSecond || bytesPerSecond <= 0) return ''
+  return `${formatBytes(bytesPerSecond)}/s`
+}
+
+onMounted(async () => {
+  load()
+  try { appVersion.value = await core.appVersion() } catch { appVersion.value = '' }
+  EventsOn('update:progress', onProgress)
+  EventsOn('update:downloaded', onDownloaded)
+  EventsOn('update:error', onUpdateError)
+})
+onBeforeUnmount(() => {
+  EventsOff('update:progress')
+  EventsOff('update:downloaded')
+  EventsOff('update:error')
+})
 </script>
 
 <template>
@@ -111,6 +207,69 @@ onMounted(load)
               <button class="secondary-button compact" type="button" @click="pickShareDir">浏览…</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- 关于与更新 -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <h2>关于与更新</h2>
+        </div>
+        <div class="settings-body">
+          <div class="setting-row">
+            <label class="setting-label">当前版本</label>
+            <p class="setting-hint">EasyShare {{ appVersion || '…' }}</p>
+            <div class="update-actions">
+              <button class="secondary-button compact" type="button" :disabled="checking" @click="check">
+                {{ checking ? '检查中…' : '检查更新' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="updateError" class="setting-row">
+            <p class="update-error">{{ updateError }}</p>
+          </div>
+
+          <div v-if="checkResult && !checkResult.hasUpdate" class="setting-row">
+            <p class="setting-hint">已是最新版本（{{ checkResult.latestVersion }}）</p>
+          </div>
+
+          <template v-if="checkResult?.hasUpdate">
+            <div class="setting-row">
+              <label class="setting-label">新版本 {{ checkResult.latestVersion }}</label>
+              <p class="setting-hint">
+                发布于 {{ checkResult.publishedAt || '—' }}
+                <template v-if="checkResult.asset"> · 安装包约 {{ formatBytes(checkResult.asset.size) }}</template>
+              </p>
+              <pre v-if="checkResult.notes" class="update-notes">{{ checkResult.notes }}</pre>
+            </div>
+            <div class="setting-row">
+              <div v-if="downloadState === 'idle'" class="update-actions">
+                <button class="primary-button compact" type="button" @click="download">下载更新</button>
+              </div>
+              <div v-else-if="downloadState === 'downloading'" class="update-progress">
+                <div class="progress-track">
+                  <div class="progress-fill" :style="{ width: `${progressPercent ?? 0}%` }"></div>
+                </div>
+                <span class="setting-hint">
+                  {{ progressPercent !== null ? `${progressPercent}%` : '下载中…' }}{{ formatSpeed(progress?.speed) ? ` · ${formatSpeed(progress?.speed)}` : '' }}
+                </span>
+              </div>
+              <div v-else class="update-actions">
+                <button v-if="checkResult.canAutoInstall" class="primary-button compact" type="button" :disabled="applying" @click="apply">
+                  {{ applying ? '正在重启…' : '重启并更新' }}
+                </button>
+                <button v-else class="primary-button compact" type="button" :disabled="applying" @click="apply">
+                  前往下载
+                </button>
+                <button class="secondary-button compact" type="button" @click="openUpdatesFolder">打开下载目录</button>
+              </div>
+              <p v-if="downloadState === 'downloaded' && !checkResult.canAutoInstall" class="setting-hint">
+                {{ checkResult.installedMode ? '当前版本不支持自动安装，可从下载目录手动运行安装包' : 'macOS / 绿色版请手动安装：下载目录中双击安装包，或从浏览器下载后替换' }}
+              </p>
+              <p v-if="applyError" class="update-error">{{ applyError }}</p>
+            </div>
+          </template>
         </div>
       </div>
     </div>
