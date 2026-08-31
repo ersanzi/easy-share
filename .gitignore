@@ -43,6 +43,9 @@ Desktop.ini
 
 # ─── 旧脚手架目录 ───
 easyshare-scaffold/
+
+# ─── RuoYi 控制面（platform/：独立 Java 工程，自带 .git，不纳入本 Go 仓）───
+platform/
 # ─── Python ───
 __pycache__/
 *.py[cod]

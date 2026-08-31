@@ -1,3 +1,134 @@
+export namespace account {
+	
+	export class Capacity {
+	    enabled: boolean;
+	    usableBytes: number;
+	    poolBytes: number;
+	    reservedBytes: number;
+	    committedBytes: number;
+	    usedBytes: number;
+	    unlimitedCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Capacity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.usableBytes = source["usableBytes"];
+	        this.poolBytes = source["poolBytes"];
+	        this.reservedBytes = source["reservedBytes"];
+	        this.committedBytes = source["committedBytes"];
+	        this.usedBytes = source["usedBytes"];
+	        this.unlimitedCount = source["unlimitedCount"];
+	    }
+	}
+	export class ManagedUser {
+	    userId: string;
+	    userName: string;
+	    nickName: string;
+	    deptName: string;
+	    status: string;
+	    createTime: string;
+	    loginDate: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ManagedUser(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.userName = source["userName"];
+	        this.nickName = source["nickName"];
+	        this.deptName = source["deptName"];
+	        this.status = source["status"];
+	        this.createTime = source["createTime"];
+	        this.loginDate = source["loginDate"];
+	    }
+	}
+	export class NewUser {
+	    userName: string;
+	    nickName: string;
+	    password: string;
+	    deptId?: string;
+	    roleIds?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NewUser(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userName = source["userName"];
+	        this.nickName = source["nickName"];
+	        this.password = source["password"];
+	        this.deptId = source["deptId"];
+	        this.roleIds = source["roleIds"];
+	    }
+	}
+	export class Space {
+	    spaceId: string;
+	    spaceType: string;
+	    ownerId: string;
+	    spaceName: string;
+	    quotaBytes: number;
+	    usedBytes: number;
+	    status: string;
+	    permission: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Space(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.spaceId = source["spaceId"];
+	        this.spaceType = source["spaceType"];
+	        this.ownerId = source["ownerId"];
+	        this.spaceName = source["spaceName"];
+	        this.quotaBytes = source["quotaBytes"];
+	        this.usedBytes = source["usedBytes"];
+	        this.status = source["status"];
+	        this.permission = source["permission"];
+	    }
+	}
+	export class UserPage {
+	    total: number;
+	    rows: ManagedUser[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UserPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.rows = this.convertValues(source["rows"], ManagedUser);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace api {
 	
 	export class Status {
@@ -248,6 +379,26 @@ export namespace fsutil {
 
 export namespace main {
 	
+	export class AuthUser {
+	    loggedIn: boolean;
+	    userName: string;
+	    nickName: string;
+	    avatar: string;
+	    isAdmin: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuthUser(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.loggedIn = source["loggedIn"];
+	        this.userName = source["userName"];
+	        this.nickName = source["nickName"];
+	        this.avatar = source["avatar"];
+	        this.isAdmin = source["isAdmin"];
+	    }
+	}
 	export class FilesDroppedEvent {
 	    files: string[];
 	    dirs: string[];

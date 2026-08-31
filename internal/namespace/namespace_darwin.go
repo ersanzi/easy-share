@@ -23,6 +23,12 @@ type Entry struct {
 	Description string
 	IconPath    string
 	TargetPath  string // 要挂载的 WebDAV URL
+
+	// 下面几个字段是 Windows 注册表型条目的显示/绑定属性，macOS 无对应机制，
+	// 保留以对齐跨平台 API。Finder 的卷名即 Name，副标题无处安放。
+	Subtitle       string
+	UserID         string
+	SortOrderIndex uint32
 }
 
 // WebDAVUNC 在 macOS 上返回可挂载的 WebDAV URL（Windows 上则是 UNC 路径）。
@@ -31,24 +37,79 @@ func WebDAVUNC(port int) string {
 	return "http://127.0.0.1:" + strconv.Itoa(port) + "/"
 }
 
-// DefaultEntries 返回标准的 EasyShare 挂载卷：网盘与局域网共享。
+// LANEntry 是局域网收件箱卷（本机目录，不受配额与共享授权约束）。
+func LANEntry(iconPath string, port int) Entry {
+	return Entry{
+		CLSID:       lanCLSID,
+		Name:        "EasyShare 局域网",
+		Description: "局域网收件箱",
+		IconPath:    iconPath,
+		TargetPath:  WebDAVUNC(port),
+	}
+}
+
+// DefaultEntries 返回标准的 EasyShare 挂载卷：网盘与局域网收件箱。
 func DefaultEntries(iconPath string, cloudPort, sharePort int) []Entry {
 	return []Entry{
 		{
-			CLSID:       "cloud",
+			CLSID:       cloudCLSID,
 			Name:        "EasyShare 网盘",
 			Description: "EasyShare 网盘",
 			IconPath:    iconPath,
 			TargetPath:  WebDAVUNC(cloudPort),
 		},
-		{
-			CLSID:       "share",
-			Name:        "EasyShare 共享",
-			Description: "局域网共享",
-			IconPath:    iconPath,
-			TargetPath:  WebDAVUNC(sharePort),
-		},
+		LANEntry(iconPath, sharePort),
 	}
+}
+
+// 卷的逻辑标识，与 Windows 侧的三个 CLSID 一一对应。
+const (
+	cloudCLSID       = "cloud"
+	lanCLSID         = "lan"
+	sharedSpaceCLSID = "shared-space"
+)
+
+// PersonalCLSID 是个人云盘空间卷的标识。
+func PersonalCLSID() string { return cloudCLSID }
+
+// SharedCLSID 是云端共享空间卷的标识。
+func SharedCLSID() string { return sharedSpaceCLSID }
+
+// LANCLSID 是局域网收件箱卷的标识。
+func LANCLSID() string { return lanCLSID }
+
+// SpaceMount 描述一个要挂载的云端空间，字段含义与 Windows 侧一致。
+type SpaceMount struct {
+	Kind        string
+	Port        int
+	UserID      string
+	DisplayName string
+	Subtitle    string
+	ReadOnly    bool
+}
+
+// SpaceEntries 由空间列表构造挂载卷。
+func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
+	entries := make([]Entry, 0, len(mounts))
+	for _, mount := range mounts {
+		entry := Entry{
+			IconPath:   iconPath,
+			TargetPath: WebDAVUNC(mount.Port),
+			UserID:     mount.UserID,
+			Subtitle:   mount.Subtitle,
+		}
+		if mount.Kind == "shared" {
+			entry.CLSID, entry.Name, entry.Description = sharedSpaceCLSID, "EasyShare 共享", "团队共享空间"
+		} else {
+			name := "EasyShare 网盘"
+			if mount.DisplayName != "" {
+				name = mount.DisplayName + " 的网盘"
+			}
+			entry.CLSID, entry.Name, entry.Description = cloudCLSID, name, "我的云盘空间"
+		}
+		entries = append(entries, entry)
+	}
+	return entries
 }
 
 // Register 挂载各 WebDAV 卷。单个卷失败不阻断其他卷，首个错误返回给调用方。

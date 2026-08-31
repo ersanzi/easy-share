@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-07-27
+> 每次迭代开始和结束时更新。最后更新：2026-08-29
 
 ## 路线总览
 
@@ -16,7 +16,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 阶段 1 | 可分发、可日常使用（NSIS/自启动） | ✅ 2026-07-19 |
 | 阶段 2 | 产品体验完善（托盘/设置/网盘/拖拽/macOS） | 🔄 进行中 |
 | 阶段 3 | 安全加固（设备配对/TLS/凭据保护） | 待开始 |
-| 阶段 4 | 云端 MVP（账号/文件元数据/持久任务） | 待开始 |
+| 阶段 4 | 云端 MVP（账号/文件元数据/持久任务） | 🔄 进行中 |
 | 阶段 5 | 同步与原生入口（CfAPI / FileProvider） | 待开始 |
 | 阶段 6 | 云端与内网融合（配对/E2EE/就近获取） | 待开始 |
 
@@ -92,11 +92,16 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 检索质量评测集：30 条标注（黄金 Office 样本 + 6 篇企业文档语料，含权限范围用例），recall@5 / hit@1 / MRR / 片段命中率基线进入 pytest 常规回归；`scripts/eval_retrieval.py` 可切真实 embedding 对比。新增 knowledge-tests CI（ubuntu，dev/master push + PR）补上 Python 测试无 CI 的缺口。详见 [`iterations/2026-07-26-retrieval-eval-harness.md`](iterations/2026-07-26-retrieval-eval-harness.md)
 - [x] /lab 知识问答页（里程碑 1.5）：检索 + 生成 + 引用溯源，`/query` contexts 透出 `file_id/version_id`，引用一键打开 clean.md；未配置 LLM 时降级纯检索并明示能力。真机冒烟通过（百炼 embedding + SenseNova LLM 真实链路）。详见 [`iterations/2026-07-26-lab-ask-panel.md`](iterations/2026-07-26-lab-ask-panel.md)
 - [x] 清洗规则引擎：结构噪声（跨页页眉页脚/页码，默认开）+ PII 脱敏（手机/身份证/邮箱/地址，默认关）+ 自定义 regex；规则集为 JSON 数据（本地文件过渡，里程碑 2 由 Java 按租户下发同一 schema），manifest 记录逐规则命中数，含 ReDoS/坏配置防护。真实 embedding 语义基线同步留存（评测集全指标 1.000）。详见 [`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md)
+- [x] 托盘悬停浮窗（切片 1）：Windows 侧改用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 获得悬停事件（`getlantern/systray` 不具备且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2，标题栏含图标/名称/头像/设置，点设置显示主窗口；定位基于 `Shell_NotifyIconGetRect`，适配任务栏四边缘与多显示器负坐标；已移除 systray 及其 8 个传递依赖。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-08-29 | 账号控制面 P1：桌面登录 + 登录态贯通（头像跟随账号） | 已完成（待手工交互验收） |
+| 2026-08-29 | 账号控制面 P0：RuoYi-Vue-Plus 6.0 环境落地（PG+Redis+登录） | 已完成 |
+| 2026-08-29 | 悬浮窗布局重构与固定态（切片 2：加高分区+固定按钮+托盘图标GUID持久化） | 已完成（待手工交互验收） |
+| 2026-08-28 | 托盘悬停浮窗（切片 1：悬停链路） | 已完成（待手工交互验收） |
 | 2026-07-27 | 任务中心接收文件夹跟随设置 | 已完成（待手工交互验收） |
 | 2026-07-27 | 客户端 C1.2：全局活动抽屉与统一任务中心前端一期 | 已完成（待手工交互验收） |
 | 2026-07-27 | 清洗规则引擎（结构噪声+PII 脱敏+自定义规则）+ 真实 embedding 基线 | 已完成 |
@@ -131,6 +136,12 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**账号控制面（阶段 4 云端 MVP，P0/P1/P2 已完成）** — 决策见 [ADR-0007](adr/0007-account-control-plane-ruoyi.md)：统一账号采用 **RuoYi-Vue-Plus 6.0**（Java 控制面，调和了主线一 Go 单体与主线二 Java 控制面的选型冲突——账号归 RuoYi，`easyshare-core` 退回本机采集/传输层）。P0：RuoYi 6.0 跑在 PostgreSQL 16 + Redis 上，登录返回 JWT（`deploy/ruoyi-db/`）。P1：桌面客户端登录门禁 + 登录态贯通（主界面与悬浮窗头像跟随账号、登出、点头像进设置）。P2：按用户隔离的存储授权——新增控制面模块 `platform-drive/` 签发短期预签名 URL，客户端不再持任何 RustFS 凭据，对象键落在 `users/{userId}/` 下，跨用户隔离 9/9 验收通过；**KI-2 关闭、KI-1/KI-4 顺带修掉、KI-3 的用户隔离部分关闭**（稳定文件身份仍未做），新登记 KI-5。后续 P3 管理员+注册开关（含 plus-ui 后台）→ 设置页账号资料 → P4 浮窗滑动开关+按用户命名空间的资源管理器挂载。详见 [`iterations/2026-08-29-account-control-plane-p0.md`](iterations/2026-08-29-account-control-plane-p0.md)、[`iterations/2026-08-29-account-p1-desktop-login.md`](iterations/2026-08-29-account-p1-desktop-login.md)、[`iterations/2026-08-29-account-p2-storage-isolation.md`](iterations/2026-08-29-account-p2-storage-isolation.md)。
+
+**托盘悬浮窗（切片 1 已完成，切片 2 待实现）** — 阶段 2 内的新增能力。切片 1 已交付：Windows 侧用原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4` 替换 `getlantern/systray`（该库无悬停事件且无法配置获得），浮窗为独立线程上的 Win32 窗口内嵌 WebView2，悬停弹出、定位、自动收起与标题栏渲染均已实测通过，并已移除 systray 及其 8 个传递依赖。剩余真实鼠标交互验收。
+
+切片 2 计划已确认：浮窗高度扩大并按内容分区，新增固定态（固定是文件拖放的前提——悬停态下鼠标一旦离开图标浮窗即收起，无法作为拖放目标），窗口位置与固定状态持久化。用户要求的「桌面右下角常驻悬浮窗」与「托盘图标悬停」经分析为**同一窗口的两种状态**，不另建部件。详见 [`iterations/2026-08-28-tray-hover-widget.md`](iterations/2026-08-28-tray-hover-widget.md) 与 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)。
+
 **P0 双平台发布验收** — CI 与 Release 下载闭环已完成；`v0.1.0-test.2` 的 macOS/Windows workflow 均成功，Release 已标记为 Prerelease 且 6 个资产均可下载。剩余真实 Mac/Windows 安装验收。详见 [`iterations/2026-07-23-platform-release-test.md`](iterations/2026-07-23-platform-release-test.md)。
 
 **知识平台里程碑 1：管线架构落地** — 已落地：RustFS 对象引用异步任务、TXT/Markdown/DOCX/文本型 PDF/XLSX/PPTX 结构化解析（含 Office 真实格式预检）、可配置清洗规则引擎（结构噪声/PII 脱敏/自定义 regex，manifest 命中可追溯）、版本化索引与失败恢复、检索质量评测基线（Hash 词面 + 真实 embedding 双口径）、`/lab` 实验台与知识问答页。剩余：**PaddleOCR 扫描件接入（下一步，规则引擎已就位承接 OCR 噪声）**、Unstructured 结构感知切块、Milvus 迁移；不提前引入 Java。`/lab` 只为开发验证方便，不进入 Wails 客户端，也不代表最终产品 UI。详见 [`iterations/2026-07-25-python-document-cleaning-pipeline.md`](iterations/2026-07-25-python-document-cleaning-pipeline.md) 与 [`iterations/2026-07-27-cleaning-rule-engine.md`](iterations/2026-07-27-cleaning-rule-engine.md)。
@@ -148,6 +159,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 已知阻塞
 
+- P2 的隔离结论来自控制面活栈验收与 Go 客户端集成测试；**桌面端 UI 链路只验证了编译与类型**，真机「登录 → 上传 → 换账号看列表」需真实鼠标操作补验
+- **「此电脑 → EasyShare 网盘」入口不可用**：修 KI-2 移走 Core 的 RustFS 凭据后该挂载失去数据源（非"顺手清理"，是本轮的代价）。恢复它需要先定**空间授权与配额模型**——每账号一空间、用户空间由管理员设置、共享空间权限由管理员把控——该模型是 [ADR-0007 开放问题 6](adr/0007-account-control-plane-ruoyi.md) 记录的设计缺口，**前置是 P3 管理面板而非 P4**。此项属未经确认就缩减用户可见功能，待决策是否回退
 - macOS 托盘链接修复仍需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 

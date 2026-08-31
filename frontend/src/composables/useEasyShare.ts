@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
-import type { CoreSnapshot, TransferTask } from '../types/core'
+import type { AuthUser, CoreSnapshot, TransferTask } from '../types/core'
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
 const emptySnapshot = (): CoreSnapshot => ({
@@ -39,6 +39,10 @@ export function useEasyShare() {
   const droppedDirs = ref<string[]>([])
   const dropSending = ref(false)
   const activeView = ref('overview')
+  // 账号登录态（P1）。未登录一律 isAdmin=false，登出后必须回到此值以收起「管理」入口。
+  const emptyUser: AuthUser = { loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false }
+  const currentUser = ref<AuthUser>({ ...emptyUser })
+  const loggingIn = ref(false)
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
@@ -247,6 +251,11 @@ export function useEasyShare() {
       .then(path => { if (!disposed && path) logDirectory.value = path })
       .catch(value => reportError('resolve log directory', value))
 
+    // 拉取当前登录态（进程内若已登录，重开窗口后恢复头像）
+    void Promise.resolve(core.currentUser())
+      .then(user => { if (!disposed && user) currentUser.value = user })
+      .catch(() => undefined)
+
     void initialize().finally(() => {
       if (!inactive() && timer === undefined) {
         // 轮询降为 5s fallback：实时事件覆盖快速路径
@@ -278,6 +287,35 @@ export function useEasyShare() {
     dropSending,
     activeView,
     activeTasks,
+    currentUser,
+    loggingIn,
+    login: async (username: string, password: string): Promise<boolean> => {
+      loggingIn.value = true
+      try {
+        const user = await core.login(username, password)
+        currentUser.value = user
+        clearError()
+        return true
+      } catch (value) {
+        error.value = errorMessage(value)
+        errorSource = 'operation'
+        return false
+      } finally {
+        loggingIn.value = false
+      }
+    },
+    logout: async () => {
+      try { await core.logout() } catch { /* 本地清除即可 */ }
+      currentUser.value = { ...emptyUser }
+    },
+    openAdminConsole: async () => {
+      try {
+        await core.openAdminConsole()
+      } catch (value) {
+        error.value = errorMessage(value)
+        errorSource = 'operation'
+      }
+    },
     clearError,
     refresh,
     sendDropped,

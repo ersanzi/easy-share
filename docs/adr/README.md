@@ -19,6 +19,7 @@
 | [0004](0004-local-state-and-task-persistence.md) | 本地状态与任务持久化 | 提议 |
 | [0005](0005-cfapi-helper-boundary.md) | CfAPI Helper 与 Go Core 边界 | 提议 |
 | [0006](0006-rustfs-self-hosted-object-storage.md) | 自建优先并采用 RustFS 作为对象存储 | 接受（生产受门禁约束） |
+| [0007](0007-account-control-plane-ruoyi.md) | 账号控制面采用 RuoYi-Vue-Plus，与存储授权边界 | 接受（P0 已验证） |
 
 ## 新 ADR 模板
 

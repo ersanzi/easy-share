@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import ActivityDrawer from './components/ActivityDrawer.vue'
+import AdminPanel from './components/AdminPanel.vue'
 import CloudPanel from './components/CloudPanel.vue'
 import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
+import LoginView from './components/LoginView.vue'
 import PeerList from './components/PeerList.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -12,7 +14,7 @@ import { useEasyShare } from './composables/useEasyShare'
 import { taskKind, taskSection } from './utils/tasks'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
-type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'settings'
+type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'admin' | 'settings'
 
 const app = useEasyShare()
 const view = ref<View>('overview')
@@ -36,6 +38,10 @@ const completedCloudUploads = computed(() => app.snapshot.value.tasks
 
 // 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
 watch(view, value => { app.activeView.value = value })
+// 管理页停在前台时若换成非管理员账号登录，必须退回首页，否则工作区会空白。
+watch(() => app.currentUser.value.isAdmin, isAdmin => {
+  if (!isAdmin && view.value === 'admin') view.value = 'overview'
+})
 // 云上传完成后刷新已挂载的网盘列表；未进入网盘页时由组件挂载自行加载。
 watch(completedCloudUploads, (current, previous) => {
   if (previous !== undefined && current !== previous) cloudRef.value?.refresh()
@@ -59,10 +65,27 @@ const handleCloudDelete = async (key: string) => {
   await app.cloudDelete(key)
   cloudRef.value?.refresh()
 }
+
+const handleLogin = (username: string, password: string) => {
+  void app.login(username, password)
+}
+// 头像显示：优先昵称首字，其次账号首字
+const avatarText = computed(() => {
+  const u = app.currentUser.value
+  const name = u.nickName || u.userName || ''
+  return name ? Array.from(name)[0] : '我'
+})
 </script>
 
 <template>
-  <div :class="['app-shell', isMac ? 'is-mac' : '']">
+  <!-- 登录门禁：未登录只显示登录页（P1，见 ADR-0007） -->
+  <LoginView
+    v-if="!app.currentUser.value.loggedIn"
+    :loading="app.loggingIn.value"
+    :error="app.error.value"
+    @submit="handleLogin"
+  />
+  <div v-else :class="['app-shell', isMac ? 'is-mac' : '']">
     <!-- 拖拽发送：设备选择浮层 -->
     <DevicePicker
       v-if="app.droppedFiles.value.length || app.droppedDirs.value.length"
@@ -98,6 +121,15 @@ const handleCloudDelete = async (key: string) => {
           <b v-if="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
           <b v-if="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
         </button>
+
+        <!-- 当前账号：头像（点击进设置）+ 昵称 + 登出 -->
+        <div class="account-chip" :title="app.currentUser.value.nickName || app.currentUser.value.userName">
+          <button class="account-avatar" type="button" aria-label="账号设置" title="账号设置" @click="view = 'settings'">{{ avatarText }}</button>
+          <span class="account-name">{{ app.currentUser.value.nickName || app.currentUser.value.userName }}</span>
+          <button class="account-logout" type="button" aria-label="退出登录" title="退出登录" @click="app.logout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>
+          </button>
+        </div>
       </div>
       <div v-if="!isMac" class="window-controls">
         <button class="win-btn" type="button" aria-label="最小化" @click="WindowMinimise()">
@@ -137,6 +169,17 @@ const handleCloudDelete = async (key: string) => {
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
             文件
           </button>
+          <!-- 管理入口：仅管理员可见。页面在客户端内，账号与空间都在这里管 -->
+          <button
+            v-if="app.currentUser.value.isAdmin"
+            :class="['nav-item', view === 'admin' ? 'active' : '']"
+            type="button"
+            @click="view = 'admin'"
+          >
+            <svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 4.6 3.2 8.8 8 10 4.8-1.2 8-5.4 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            管理
+          </button>
+
           <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
             设置
@@ -166,6 +209,9 @@ const handleCloudDelete = async (key: string) => {
       <section class="workspace">
         <!-- ═══ 设置页 ═══ -->
         <SettingsPanel v-if="view === 'settings'" />
+
+        <!-- ═══ 管理页（仅管理员）═══ -->
+        <AdminPanel v-else-if="view === 'admin' && app.currentUser.value.isAdmin" />
 
         <!-- ═══ 服务已退出 ═══ -->
         <div v-else-if="app.stopped.value" class="stopped-view" role="status">

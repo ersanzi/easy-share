@@ -29,10 +29,12 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 type Status struct {
-	Core         bool `json:"core"`
-	Discovery    bool `json:"discovery"`
-	Receiver     bool `json:"receiver"`
-	WebDAV       bool `json:"webdav"`
+	Core      bool `json:"core"`
+	Discovery bool `json:"discovery"`
+	Receiver  bool `json:"receiver"`
+	WebDAV    bool `json:"webdav"`
+	// CloudEnabled 由桌面端按「已登录 + 控制面可达」判定后覆盖：
+	// Core 不再直连对象存储，无从得知个人云盘是否可用。
 	CloudEnabled bool `json:"cloudEnabled"`
 }
 

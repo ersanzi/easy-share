@@ -12,9 +12,6 @@ import (
 	"time"
 
 	"easyshare/internal/api"
-	"easyshare/internal/cloud"
-	"easyshare/internal/cloud/objectstore/s3store"
-	"easyshare/internal/cloud/webdavfs"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/discovery"
@@ -60,25 +57,11 @@ func main() {
 	server.ConfigureConfigPath(*configPath)
 	// 局域网共享 WebDAV 随 Core 自动启动，"此电脑"入口始终可用。
 	server.StartLANDrive()
-	// Cloud drive uses fixed build-time parameters; no user configuration needed.
-	cloudStore, cloudErr := s3store.New(s3store.Config{
-		Endpoint:          cloud.DefaultEndpoint,
-		Region:            cloud.DefaultRegion,
-		AccessKeyID:       cloud.DefaultAccessKeyID,
-		SecretAccessKey:   cloud.DefaultSecretAccessKey,
-		AllowInsecureHTTP: cloud.DefaultAllowInsecureHTTP,
-	})
-	if cloudErr != nil {
-		log.Printf("cloud drive disabled: %v", cloudErr)
-	} else {
-		server.ConfigureCloud(cloud.NewService(cloudStore, cloud.DefaultBucket))
-		// Expose cloud files via WebDAV so Windows Explorer can browse them.
-		cloudFS := webdavfs.New(cloudStore, cloud.DefaultBucket)
-		cloudDriveService := drive.NewCloudService(cloudFS)
-		server.ConfigureCloudDrive(cloudDriveService)
-		server.StartCloudDrive(ctx)
-		log.Printf("cloud drive enabled: endpoint=%s bucket=%s", cloud.DefaultEndpoint, cloud.DefaultBucket)
-	}
+	// 个人云盘不再由 Core 直连对象存储：存储凭据只留在账号控制面，Core 不持有任何
+	// RustFS AK/SK（ADR-0007 不变量 1）。桌面端经控制面预签名直传直取，见 internal/drive。
+	// 曾经的 19081 云盘 WebDAV 挂载随之下线——它以 bucket 根为挂载点，
+	// 在 users/{userId}/ 命名空间下会把所有用户的空间暴露成一个 users 目录。
+	// 按登录用户命名空间挂载的资源管理器入口属后续阶段。
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

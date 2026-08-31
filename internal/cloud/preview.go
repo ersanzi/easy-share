@@ -56,9 +56,18 @@ func (s *Service) PreviewInfo(ctx context.Context, key string) (Preview, error) 
 		return Preview{}, fmt.Errorf("preview read %s: %w", key, err)
 	}
 	defer object.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(object.Body, maxTextPreviewBytes+1))
-	if err != nil {
+	if err := FillTextPreview(&preview, object.Body); err != nil {
 		return Preview{}, fmt.Errorf("preview read %s: %w", key, err)
+	}
+	return preview, nil
+}
+
+// FillTextPreview 把对象内容限量读入预览的内联文本字段。
+// 超过上限时截断并回退到 UTF-8 字符边界；内容不是有效 UTF-8 时预览类型降级为不支持。
+func FillTextPreview(preview *Preview, body io.Reader) error {
+	data, err := io.ReadAll(io.LimitReader(body, maxTextPreviewBytes+1))
+	if err != nil {
+		return err
 	}
 	if int64(len(data)) > maxTextPreviewBytes {
 		data = data[:maxTextPreviewBytes]
@@ -70,10 +79,10 @@ func (s *Service) PreviewInfo(ctx context.Context, key string) (Preview, error) 
 	}
 	if !utf8.Valid(data) {
 		preview.Kind = PreviewUnsupported
-		return preview, nil
+		return nil
 	}
 	preview.Text = string(data)
-	return preview, nil
+	return nil
 }
 
 // OpenPreview 打开可流式预览的图片或 PDF，并拒绝潜在主动内容（例如 SVG）。
@@ -110,6 +119,12 @@ func DetectPreviewKind(contentType, key string) PreviewKind {
 	default:
 		return PreviewUnsupported
 	}
+}
+
+// ContentTypeForKey 按对象键的扩展名推断 MIME 类型。
+// 控制面列举对象不返回 contentType（S3 ListObjectsV2 本就没有该字段），故由客户端推断。
+func ContentTypeForKey(key string) string {
+	return normalizedContentType("", key)
 }
 
 func normalizedContentType(contentType, key string) string {

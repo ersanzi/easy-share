@@ -27,8 +27,13 @@ func TestPreviewInfoClassifiesAndReadsText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if preview.Kind != PreviewText || preview.Text != "hello\nworld" || preview.ContentType != "text/plain" {
+	// 不断言具体 MIME：.md 的映射取自系统注册表，Windows 上是 text/markdown、
+	// 缺少该项的机器上才走内置表的 text/plain。要紧的是归类为文本且内容完整。
+	if preview.Kind != PreviewText || preview.Text != "hello\nworld" {
 		t.Fatalf("unexpected preview: %+v", preview)
+	}
+	if !strings.HasPrefix(preview.ContentType, "text/") {
+		t.Fatalf("content type should be textual, got %q", preview.ContentType)
 	}
 }
 

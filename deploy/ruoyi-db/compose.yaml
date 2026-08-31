@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: easyshare-ruoyi-pg
+    environment:
+      POSTGRES_DB: ryvue
+      POSTGRES_USER: ruoyi
+      POSTGRES_PASSWORD: ruoyi123
+      TZ: Asia/Shanghai
+      # 关闭 SCRAM 之外的问题：使用默认 md5/scram，RuoYi JDBC 正常
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ruoyi-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ruoyi -d ryvue"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # RuoYi 专用 Redis（带密码），端口 6380 避开本机原生无密码 Redis(6379)
+  redis:
+    image: redis:7
+    container_name: easyshare-ruoyi-redis
+    command: ["redis-server", "--requirepass", "ruoyi123"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "ruoyi123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  ruoyi-pg-data:
