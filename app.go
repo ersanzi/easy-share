@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"easyshare/internal/account"
+	"easyshare/internal/clipboard"
 	"easyshare/internal/cloud"
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
@@ -24,6 +27,7 @@ import (
 	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
 	"easyshare/internal/namespace"
+	"easyshare/internal/plugin"
 	"easyshare/internal/update"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -67,6 +71,12 @@ type App struct {
 	updateAsset       *update.Asset
 	updateFilePath    string
 	updateDownloading bool
+	// 插件系统与剪切板服务（集成见 appplugin.go）
+	assetMux         *http.ServeMux
+	pluginManager    *plugin.Manager
+	pluginRegistry   *plugin.Registry
+	pluginSDK        fs.FS
+	clipboardService *clipboard.Service
 }
 
 // AuthUser 是下发给前端的登录态（不含 token）。
@@ -86,6 +96,7 @@ func NewApp() *App {
 		trayStatusCh: make(chan string, 1),
 		trayUserCh:   make(chan AuthUser, 1),
 		mounts:       newSpaceMounts(),
+		assetMux:     http.NewServeMux(),
 	}
 }
 
@@ -128,6 +139,8 @@ func (a *App) Startup(ctx context.Context) {
 	go a.eventStream()
 	// 静默检查更新（24h 节流，发现新版本发 update:available 事件）
 	go a.autoUpdateCheck()
+	// 插件系统 + 剪切板监听（失败不阻断主程序，见 appplugin.go）
+	a.initPluginSystem()
 
 	// Register EasyShare entries in Windows Explorer "此电脑" (This PC).
 	a.registerNamespace()
@@ -163,6 +176,9 @@ func (a *App) ProcessDroppedFiles(paths []string) FilesDroppedEvent {
 
 func (a *App) Shutdown(_ context.Context) {
 	a.logger.Printf("desktop window closing")
+	if a.clipboardService != nil {
+		a.clipboardService.Stop()
+	}
 	if a.logFile != nil {
 		_ = a.logFile.Close()
 		a.logFile = nil

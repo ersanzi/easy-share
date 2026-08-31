@@ -30,6 +30,9 @@ func main() {
 		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// fallback：/plugins/...（插件包+SDK）与 /clipboard-files/...（剪切板图片）
+			// 由宿主动态 serve（见 appplugin.go AssetHandler）。
+			Handler: app.AssetHandler(),
 		},
 		BackgroundColour: &options.RGBA{R: 233, G: 237, B: 243, A: 1},
 		OnStartup: func(ctx context.Context) {

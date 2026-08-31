@@ -1,0 +1,10 @@
+{
+  "id": "todo",
+  "name": "待办与周报",
+  "version": "1.0.0",
+  "description": "随手记待办，一键汇总生成本周周报——可复制或存入个人云盘。",
+  "icon": "✅",
+  "entry": "index.html",
+  "author": "EasyShare",
+  "permissions": ["storage", "clipboard.write", "notification", "drive.upload"]
+}

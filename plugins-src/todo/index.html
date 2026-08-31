@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>待办与周报</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <input id="newTodo" class="new-todo" type="text" maxlength="200" placeholder="记一条待办，回车添加…" />
+  <div class="filters">
+    <button class="chip" data-filter="all">全部</button>
+    <button class="chip" data-filter="open">未完成</button>
+    <button class="chip" data-filter="done">已完成</button>
+  </div>
+  <button id="weekly" class="primary">生成周报</button>
+</header>
+
+<main id="list" class="list"></main>
+<p id="empty" class="empty" hidden>还没有待办。把要做的事记下来，周五一键生成周报。</p>
+
+<div id="reportPanel" class="sheet" hidden>
+  <div class="sheet-card">
+    <header class="sheet-head">
+      <h2>本周周报</h2>
+      <button id="closeReport" class="ghost" aria-label="关闭">✕</button>
+    </header>
+    <pre id="reportBody" class="report-body"></pre>
+    <footer class="sheet-foot">
+      <button id="copyReport" class="primary">复制全文</button>
+      <button id="saveReport" class="secondary">存入我的云盘</button>
+      <span id="reportHint" class="hint"></span>
+    </footer>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/plugins/_sdk/eshare.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

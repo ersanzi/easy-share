@@ -8,16 +8,22 @@ import DrivePanel from './components/DrivePanel.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
 import LoginView from './components/LoginView.vue'
 import PeerList from './components/PeerList.vue'
+import PluginHost from './components/PluginHost.vue'
+import PluginMarket from './components/PluginMarket.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import TransferList from './components/TransferList.vue'
 import { useEasyShare } from './composables/useEasyShare'
+import { usePlugins } from './composables/usePlugins'
 import { taskKind, taskSection } from './utils/tasks'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
-type View = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'admin' | 'settings'
+// 内置视图 + 动态插件视图（plugin:{id}）
+type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'admin' | 'plugins' | 'settings'
+type View = BuiltinView | `plugin:${string}`
 
 const app = useEasyShare()
+const pluginSys = usePlugins()
 const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 const activityOpen = ref(false)
@@ -47,6 +53,21 @@ watch(() => app.currentUser.value.isAdmin, isAdmin => {
 watch(completedCloudUploads, (current, previous) => {
   if (previous !== undefined && current !== previous) cloudRef.value?.refresh()
 })
+
+// ─── 插件视图（动态）───
+// 侧边栏显示未禁用的插件；禁用/卸载当前插件时退回首页。
+const enabledPlugins = computed(() => pluginSys.plugins.value.filter(p => !p.disabled))
+const activePluginId = computed(() => {
+  const id = pluginSys.parsePluginView(view.value)
+  return id && pluginSys.plugins.value.some(p => p.id === id && !p.disabled) ? id : null
+})
+const activePlugin = computed(() =>
+  enabledPlugins.value.find(p => p.id === activePluginId.value) ?? null)
+watch(() => pluginSys.plugins.value.map(p => `${p.id}:${p.disabled}`).join('|'), () => {
+  if (view.value.startsWith('plugin:') && !activePluginId.value) view.value = 'overview'
+})
+// 插件图标：emoji 直接显示；包内文件路径（含 / 或 .png 等）用 img。
+const isIconPath = (icon: string) => !!icon && /[/.]/.test(icon)
 
 const showAllTasks = () => {
   view.value = 'transfers'
@@ -185,6 +206,27 @@ const avatarText = computed(() => {
             管理
           </button>
 
+          <!-- 插件中心：商城 + 已装管理 -->
+          <button :class="['nav-item', view === 'plugins' ? 'active' : '']" type="button" @click="view = 'plugins'">
+            <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
+            插件中心
+          </button>
+
+          <!-- 插件入口（动态）：内置插件（如剪切板）与已安装插件 -->
+          <button
+            v-for="p in enabledPlugins"
+            :key="p.id"
+            :class="['nav-item', view === `plugin:${p.id}` ? 'active' : '']"
+            type="button"
+            :title="p.description"
+            @click="view = `plugin:${p.id}` as View"
+          >
+            <span v-if="isIconPath(p.icon)" class="nav-plugin-icon"><img :src="`/plugins/${p.id}/${p.icon}`" alt=""></span>
+            <span v-else class="nav-plugin-icon">{{ p.icon || '🧩' }}</span>
+            {{ p.name }}
+            <span v-if="p.builtin" class="nav-plugin-builtin" title="内置插件">内</span>
+          </button>
+
           <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
             设置
@@ -212,7 +254,7 @@ const avatarText = computed(() => {
         </div>
       </aside>
 
-      <section class="workspace">
+      <section :class="['workspace', activePlugin ? 'is-plugin' : '']">
         <!-- ═══ 设置页 ═══ -->
         <SettingsPanel v-if="view === 'settings'" @logout="app.logout" />
 
@@ -347,6 +389,22 @@ const avatarText = computed(() => {
 
         <!-- ═══ 知识问答页 ═══ -->
         <KnowledgePanel v-else-if="view === 'knowledge'" />
+
+        <!-- ═══ 插件中心（商城 + 已装管理）═══ -->
+        <PluginMarket v-else-if="view === 'plugins'" />
+
+        <!-- ═══ 插件页（沙箱 iframe 宿主）═══ -->
+        <template v-else-if="activePlugin">
+          <header class="workspace-header">
+            <div>
+              <span class="section-label">插件</span>
+              <h1>{{ activePlugin.name }}</h1>
+              <p>{{ activePlugin.description }}</p>
+            </div>
+            <div class="plugin-version">v{{ activePlugin.version }}</div>
+          </header>
+          <PluginHost :info="activePlugin" />
+        </template>
 
         <!-- ═══ 网盘详情页 ═══ -->
         <template v-else-if="view === 'cloud'">

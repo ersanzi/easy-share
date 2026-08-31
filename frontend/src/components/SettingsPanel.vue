@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { QUOTA_UNSET } from '../types/core'
 import type { AuthUser, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
+import { usePlugins } from '../composables/usePlugins'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 
 // 登出走 App.vue 绑定的 app.logout：只有那条路径会清 composable 的登录态并切回登录页
@@ -18,6 +19,56 @@ const form = ref<SettingsForm>({ deviceName: '', receiveDir: '', webdavRoot: '' 
 const saving = ref(false)
 const saved = ref(false)
 const loadError = ref('')
+
+// ─── 插件管理 ───
+const pluginSys = usePlugins()
+const pluginError = ref('')
+const pluginBusy = ref('')
+// 图标：含 / 或扩展名的按包内文件处理
+const isIconPath = (icon: string) => !!icon && /[/.]/.test(icon)
+
+const installFromZip = async () => {
+  pluginError.value = ''
+  try {
+    const path = await core.selectFile()
+    if (!path) return
+    pluginBusy.value = 'install'
+    const info = await pluginSys.installFromPath(path)
+    pluginBusy.value = ''
+    // 安装成功提示挂在行内（列表即刷新），这里静默即可
+    void info
+  } catch (e) {
+    pluginBusy.value = ''
+    pluginError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+const togglePlugin = async (id: string, disabled: boolean, builtin: boolean) => {
+  if (builtin) return // 内置插件不可禁用（开关渲染为禁用态）
+  pluginError.value = ''
+  try {
+    pluginBusy.value = id
+    await pluginSys.setDisabled(id, disabled)
+  } catch (e) {
+    pluginError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
+const removePlugin = async (id: string) => {
+  if (!window.confirm('确定卸载该插件？其私有数据将被清除。')) return
+  pluginError.value = ''
+  try {
+    pluginBusy.value = id
+    await pluginSys.uninstall(id)
+  } catch (e) {
+    pluginError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    pluginBusy.value = ''
+  }
+}
+
 
 // ─── 账号资料 ───
 const user = ref<AuthUser | null>(null)
@@ -268,6 +319,50 @@ onBeforeUnmount(() => {
             <div class="setting-path">
               <span class="path-display">{{ form.webdavRoot || '未选择' }}</span>
               <button class="secondary-button compact" type="button" @click="pickShareDir">浏览…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 插件 -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <h2>插件</h2>
+          <button class="secondary-button compact" type="button" :disabled="pluginBusy === 'install'" @click="installFromZip">
+            {{ pluginBusy === 'install' ? '安装中…' : '从 zip 安装…' }}
+          </button>
+        </div>
+        <div class="settings-body">
+          <p v-if="pluginError" class="update-error">{{ pluginError }}</p>
+          <p v-if="!pluginSys.plugins.value.length" class="setting-hint">
+            暂无插件。可从插件包（zip）安装，内置插件会随程序自动提供。
+          </p>
+          <div v-for="p in pluginSys.plugins.value" :key="p.id" class="plugin-row">
+            <span class="plugin-row-icon" aria-hidden="true">
+              <img v-if="isIconPath(p.icon)" :src="`/plugins/${p.id}/${p.icon}`" alt="">
+              <template v-else>{{ p.icon || '🧩' }}</template>
+            </span>
+            <div class="plugin-row-body">
+              <strong>{{ p.name }} <span class="plugin-tag">v{{ p.version }}</span> <span v-if="p.builtin" class="plugin-tag">内置</span></strong>
+              <small>{{ p.description }}</small>
+            </div>
+            <div class="plugin-row-actions">
+              <button
+                :class="['plugin-switch', !p.disabled ? 'on' : '', p.builtin ? 'disabled' : '']"
+                type="button"
+                :aria-label="p.disabled ? '启用插件' : '禁用插件'"
+                :disabled="p.builtin"
+                @click="togglePlugin(p.id, !p.disabled, p.builtin)"
+              />
+              <button
+                v-if="!p.builtin"
+                class="secondary-button danger compact"
+                type="button"
+                :disabled="pluginBusy === p.id"
+                @click="removePlugin(p.id)"
+              >
+                卸载
+              </button>
             </div>
           </div>
         </div>

@@ -333,3 +333,14 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 3. **静默升级后开机自启被悄悄打开**：NSIS 静默模式下 `MessageBox MB_YESNO` 返回默认按钮 IDYES。凡是静默安装路径会经过的询问弹窗，必须包 `${IfNot} ${Silent}`。
 4. **检查更新一直转圈/报错**：控制面（`config.json` 的 platformBaseUrl）不可达，或 `security.excludes` 白名单没放行 `/easyshare/app/latest`（RuoYi 路由级 checkLogin 不认 `@SaIgnore`，只认白名单；且列表是整体替换，漏带基线条目会连登录都挂）。
 5. **下载完成但「重启并更新」不出现**：绿色版/非安装目录运行（注册表 `HKCU\Software\EasyShare\EasyShare\InstallDir` 与 exe 目录不一致）或 macOS——按设计只引导手动安装。
+
+## 14. 插件系统相关（2026-08-31 起）
+
+1. **插件静态资源 404**：`/plugins/{id}/...` 走 Wails AssetServer 的 fallback `Handler`（v2.13 语义：embed FS 返回 `os.ErrNotExist` 的 GET 才转发）。排查顺序：插件是否安装/被禁用（禁用一律 404，不给探测面）→ `plugins.json` 是否有登记 → 目录里文件名大小写（Windows 不敏感但打包自 macOS/Linux 的 zip 可能带不同大小写）。
+2. **改了 `easyshare-drive.yml` 的 excludes 后连登录都挂**：Spring 列表属性是整体替换语义，本文件重写了全部基线条目；漏带任何一条基线（如 `/auth/login` 所在的默认链）都会破坏原有放行。升级 platform/ 后按 jar 内 application.yml 重新对照（在线升级一节同坑）。
+3. **插件 iframe 里不能用 fetch/XHR 调宿主**：iframe 是 `sandbox="allow-scripts"`（无 `allow-same-origin`，opaque origin），与宿主唯一通道是 postMessage RPC（SDK `assets/sdk/eshare.js`）。`<img src="/clipboard-files/x.png">` 这类同源 subresource 可以正常加载。若未来需要插件直接 fetch，须重新评估安全边界，不要随手加 `allow-same-origin`。
+4. **宿主收到插件消息但能力被拒**：能力鉴权在 Go 侧按 manifest `permissions` 快照（`internal/plugin`），前端桥只做转发。新插件忘了在 manifest 声明对应权限、或装的是旧版本包，都会被拒——看返回的 error 文案（会写明需要哪个权限）。
+5. **剪切板记录了自己回写的内容**：防回环靠 `selfWrite` 标记（1 秒内同 hash 的更新事件忽略）。若复现，检查是否绕过 `Service.Write` 直接调 Win32 `SetClipboardData`——必须走 `Write`（它会打标记）。
+6. **剪切板监听失效（复制无记录）**：`AddClipboardFormatListener` 需要窗口存活；若桌面端被 taskkill 强杀后残留窗口句柄失效（重启即恢复）。另外确认「暂停记录」开关没开（设置在剪切板插件页顶部，暂停时不记录但监听仍在）。
+7. **Windows 剪贴板的 32bpp 图片显示成透明黑块**：很多截图 32bpp 但 alpha 通道全 0，`dibToPNG` 已做「全零 alpha 视为不透明」兜底；新增解析路径时别丢这个兜底。
+8. **插件包装不上（zip 解压报错）**：安装器有三重上限（解压总量 120MB/文件数 2000/单文件 64MB）与 zip-slip 防护（拒绝绝对路径、`..`、盘符）。用 `scripts/diag/plugin-smoke`（一次性冒烟工具）可本地复现安装链路。

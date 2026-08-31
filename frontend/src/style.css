@@ -1019,3 +1019,32 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 }
 .account-logout:hover { background: rgba(255, 59, 48, 0.12); color: var(--red); }
 .account-logout svg { width: 15px; height: 15px; }
+
+/* ═══════════ 插件系统（沙箱 iframe 宿主 + 动态导航）═══════════ */
+/* 插件页：workspace 切换为纵向 flex，header 固定、iframe 区域占满并内部滚动 */
+.workspace.is-plugin { display: flex; flex-direction: column; overflow: hidden; }
+.workspace.is-plugin .workspace-header { margin-bottom: 14px; }
+.plugin-version { flex: 0 0 auto; margin-top: 6px; padding: 5px 11px; color: var(--muted); background: white; border: 1px solid var(--border); border-radius: 12px; font-size: 11px; font-weight: 600; }
+
+/* 侧边栏插件入口：emoji/图片图标 + 内置角标 */
+.nav-plugin-icon { display: inline-flex; align-items: center; justify-content: center; width: 17px; font-size: 14px; line-height: 1; }
+.nav-plugin-icon img { width: 16px; height: 16px; border-radius: 4px; object-fit: cover; }
+.nav-plugin-builtin { padding: 0 5px; border-radius: 6px; background: rgba(10,132,255,.13); color: var(--blue); font-size: 9px; font-weight: 700; }
+
+/* 设置页插件管理卡 */
+.plugin-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.plugin-row:last-child { border-bottom: 0; }
+.plugin-row-icon { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 auto; background: rgba(10,132,255,.08); border-radius: 9px; font-size: 17px; }
+.plugin-row-icon img { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; }
+.plugin-row-body { flex: 1; min-width: 0; }
+.plugin-row-body strong { display: block; font-size: 13px; }
+.plugin-row-body small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plugin-row-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.plugin-tag { padding: 2px 7px; border-radius: 6px; background: rgba(10,132,255,.1); color: var(--blue); font-size: 10px; font-weight: 700; }
+.plugin-tag.gray { background: rgba(142,142,147,.14); color: var(--muted); }
+/* 简易开关（启用/禁用） */
+.plugin-switch { position: relative; width: 34px; height: 20px; flex: 0 0 auto; background: rgba(199,199,204,.6); border-radius: 999px; transition: background .18s; cursor: pointer; border: none; padding: 0; }
+.plugin-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .18s; }
+.plugin-switch.on { background: var(--green); }
+.plugin-switch.on::after { left: 16px; }
+.plugin-switch.disabled { opacity: .35; cursor: not-allowed; }

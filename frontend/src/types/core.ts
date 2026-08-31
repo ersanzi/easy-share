@@ -223,3 +223,49 @@ export interface UpdateProgress {
   total: number
   speed: number
 }
+
+// ─── 插件系统（appplugin.go / internal/plugin）───
+
+// 一个已安装插件的信息（含内置/禁用状态与授权权限）。
+export interface PluginInfo {
+  id: string
+  name: string
+  version: string
+  description: string
+  icon: string
+  entry: string
+  builtin: boolean
+  disabled: boolean
+  permissions: string[]
+}
+
+// PluginInvoke 统一返回：ok=false 时 error 给出原因（未授权/未知能力等）。
+export interface PluginInvokeResult {
+  ok: boolean
+  data?: unknown
+  error?: string
+}
+
+// ─── 插件商城（/easyshare/plugins，MarketItem/MarketAsset）───
+
+// 商城里一个插件包资产。
+export interface MarketAsset {
+  id: string
+  filename: string
+  sizeBytes: number
+  sha256: string
+}
+
+// 商城里一个插件的最新清单（updateAvailable 由 Go 侧按本地版本回填）。
+export interface MarketItem {
+  id: string
+  name: string
+  description: string
+  icon: string
+  author: string
+  version: string
+  notes: string
+  publishedAt: string
+  asset?: MarketAsset
+  updateAvailable?: boolean
+}

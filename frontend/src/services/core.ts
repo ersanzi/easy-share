@@ -43,6 +43,13 @@
   OpenFile,
   OpenReceiveFolder,
   OpenUpdatesFolder,
+  PluginInstallFromMarket,
+  PluginInstallFromPath,
+  PluginInvoke,
+  PluginList,
+  PluginMarketList,
+  PluginSetDisabled,
+  PluginUninstall,
   ProcessDroppedFiles,
   RejectTransfer,
   ReportFrontendError,
@@ -69,6 +76,9 @@ import type {
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
   ManagedUserPage,
+  MarketItem,
+  PluginInfo,
+  PluginInvokeResult,
   Space,
   UpdateCheckResult,
 } from '../types/core'
@@ -146,4 +156,15 @@ export const core = {
   startUpdateDownload: StartUpdateDownload,
   applyUpdate: ApplyUpdate,
   openUpdatesFolder: OpenUpdatesFolder,
+  // 插件系统（appplugin.go）：能力调用走动态通道，不随能力增减改绑定
+  pluginList: () => PluginList() as Promise<PluginInfo[]>,
+  pluginInvoke: (pluginId: string, api: string, args: unknown) =>
+    PluginInvoke(pluginId, api, JSON.stringify(args ?? {})) as Promise<PluginInvokeResult>,
+  pluginInstallFromPath: (path: string) => PluginInstallFromPath(path) as Promise<PluginInfo>,
+  pluginSetDisabled: PluginSetDisabled,
+  pluginUninstall: PluginUninstall,
+  // 插件商城（RuoYi /easyshare/plugins）：列表已按本地版本回填 updateAvailable
+  pluginMarketList: () => PluginMarketList() as Promise<MarketItem[]>,
+  pluginInstallFromMarket: (assetId: string, sha256: string, sizeBytes: number) =>
+    PluginInstallFromMarket(assetId, sha256, sizeBytes) as Promise<PluginInfo>,
 }

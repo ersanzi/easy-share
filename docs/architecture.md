@@ -130,6 +130,26 @@ Authorization: Bearer <apiToken>
 
 桌面端升级链路：启动 24h 节流自动检查（`update-state.json`）→ 设置页「关于与更新」手动检查 → 下载（SHA256 校验，`%LOCALAPPDATA%\EasyShare\updates\`）→ Windows 安装版「重启并更新」（`installer /S /update` → 优雅停 Core → NSIS taskkill 残留 → 覆盖安装 → 自动重启）；macOS 与绿色版仅引导下载。发布入口 `scripts/publish-release.ps1`。
 
+## 4c. 插件系统与商城接口（2026-08-31 起）
+
+**插件形态**：Web 插件包（zip：`manifest.json` + HTML/JS/CSS），UI 跑在桌面端前端 `<iframe sandbox="allow-scripts">`（opaque origin），经 postMessage RPC 调用宿主能力；公共 SDK 由宿主统一 serve（`/plugins/_sdk/eshare.js`）。**剪切板记录为内置插件**（`assets/builtin-plugins/clipboard/`，随主程序 embed 分发、不可卸载不可禁用、目录被删重启即恢复）；宿主侧监听在 `internal/clipboard`（Windows `AddClipboardFormatListener` + message-only 窗口，文本/图片(DIBV5→PNG)/文件路径，hash 去重、来源进程名、排除密码管理器标记格式）。
+
+**运行时边界**：插件能力调用走唯一动态通道 `PluginInvoke(pluginId, api, argsJSON)`（`appplugin.go`），Go 侧能力注册表（`internal/plugin/registry.go`）按 manifest `permissions` 鉴权——新增能力不改 Wails 绑定。首发能力：`storage.*`（按插件隔离 KV）、`clipboard.history/delete/clear/write/settings`、`clipboard.events`（变更推送）、`notification.show`、`drive.upload`（文本上传个人空间，走统一任务通道）。静态资源由 Wails AssetServer fallback Handler serve（`/plugins/{id}/...` 映射 `%LOCALAPPDATA%\EasyShare\plugins\{id}\`；`/clipboard-files/` 给剪切板图片）。安装：SHA256 校验 → 解压临时目录（zip-slip 防护）→ 原子换入 → `plugins.json` 登记；包上限 50MB。
+
+**商城（官方自营）**：插件/版本/资产放 PG（`es_plugin` / `es_plugin_release` / `es_plugin_release_asset`），zip 本体存 RustFS `plugins/{pluginId}/{version}/`，发布走与在线升级相同的两段式预签名直传。发布入口 `scripts/publish-plugin.ps1`（插件源码目录 `plugins-src/`）。
+
+| 方法 | 路径 | 鉴权 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/easyshare/plugins` | 匿名 | 商城列表（全部有已发布版本的插件，各带最新版） |
+| `GET` | `/easyshare/plugins/{pluginId}/latest` | 匿名 | 单插件最新清单（客户端检查更新） |
+| `GET` | `/easyshare/plugins/assets/{assetId}/url` | 匿名 | 现取预签名下载 URL（GET 10m） |
+| `POST` | `/easyshare/plugins/admin/uploads` | superadmin | 上传准备：upsert 插件登记 + 建版本与资产，返回预签名 PUT URL |
+| `POST` | `/easyshare/plugins/admin/assets/{assetId}/publish` | superadmin | 发布：校验对象存在且大小一致后置已发布 |
+| `GET` | `/easyshare/plugins/admin/releases?pluginId=` | superadmin | 版本列表（下架决策） |
+| `DELETE` | `/easyshare/plugins/admin/releases/{releaseId}` | superadmin | 下架版本（已装客户端不受影响） |
+
+前端入口：侧边栏「插件中心」（商城 tab + 已装管理）+ 已启用插件的动态导航项（视图名 `plugin:{id}`）；设置页有插件管理卡与「从 zip 安装」。
+
 ### WebSocket 事件类型
 
 | type | data | 触发时机 |
@@ -195,6 +215,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - 网盘文件存储在 RustFS（S3 兼容），凭据只在控制面（`deploy/rustfs/.env` → RuoYi 进程环境），客户端经预签名 URL 直传，不暴露给前端。
 - peers 是内存状态，Core 退出后丢失。
 - 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
+- 插件系统（桌面端进程，见 §4c）：登记表 `plugins.json`、插件包 `plugins/{id}/`、插件私有 KV `plugins-data/{id}.json`（均在 config.json 同目录）；剪切板历史 `clipboard/history.jsonl`（追加写 + 环形截断默认 1000 条）与图片 `clipboard/files/{sha256}.png`（默认 200MB LRU），设置在 `clipboard/settings.json`。
 
 ## 8. 云盘与对象存储
 

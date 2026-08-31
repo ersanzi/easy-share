@@ -70,6 +70,10 @@ export function ApplyUpdate() {
   return window['go']['main']['App']['ApplyUpdate']();
 }
 
+export function AssetHandler() {
+  return window['go']['main']['App']['AssetHandler']();
+}
+
 export function CheckUpdate() {
   return window['go']['main']['App']['CheckUpdate']();
 }
@@ -192,6 +196,34 @@ export function OpenReceiveFolder() {
 
 export function OpenUpdatesFolder() {
   return window['go']['main']['App']['OpenUpdatesFolder']();
+}
+
+export function PluginInstallFromMarket(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PluginInstallFromMarket'](arg1, arg2, arg3);
+}
+
+export function PluginInstallFromPath(arg1) {
+  return window['go']['main']['App']['PluginInstallFromPath'](arg1);
+}
+
+export function PluginInvoke(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PluginInvoke'](arg1, arg2, arg3);
+}
+
+export function PluginList() {
+  return window['go']['main']['App']['PluginList']();
+}
+
+export function PluginMarketList() {
+  return window['go']['main']['App']['PluginMarketList']();
+}
+
+export function PluginSetDisabled(arg1, arg2) {
+  return window['go']['main']['App']['PluginSetDisabled'](arg1, arg2);
+}
+
+export function PluginUninstall(arg1) {
+  return window['go']['main']['App']['PluginUninstall'](arg1);
 }
 
 export function ProcessDroppedFiles(arg1) {

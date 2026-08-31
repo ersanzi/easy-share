@@ -37,6 +37,12 @@ easyshare:
 # 只能走白名单）：
 #   /easyshare/app/latest            版本清单
 #   /easyshare/app/assets/*/url      下载 URL 现取
+# 插件商城（官方自营，插件包面向全部客户端公开）：
+#   /easyshare/plugins               商城列表（精确路径）
+#   /easyshare/plugins/*/latest      单插件最新清单
+#   /easyshare/plugins/assets/*/url  插件包下载 URL 现取
+#   admin 接口不在白名单（Ant * 不跨段，/admin/uploads 多段不命中），
+#   且 @SaCheckRole 注解独立于路由级 checkLogin，双重保护。
 security:
   excludes:
     - /*.html
@@ -52,4 +58,7 @@ security:
     - /api/snail/chat/**
     - /easyshare/app/latest
     - /easyshare/app/assets/*/url
+    - /easyshare/plugins
+    - /easyshare/plugins/*/latest
+    - /easyshare/plugins/assets/*/url
 

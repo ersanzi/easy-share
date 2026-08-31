@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>剪切板</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="filters">
+    <button class="chip" data-kind="">全部</button>
+    <button class="chip" data-kind="text">文本</button>
+    <button class="chip" data-kind="image">图片</button>
+    <button class="chip" data-kind="files">文件</button>
+  </div>
+  <input id="search" class="search" type="search" placeholder="搜索内容或路径…" />
+  <label class="pause" title="暂停后不再记录新的复制内容">
+    <input type="checkbox" id="paused"> 暂停记录
+  </label>
+  <button id="clear" class="danger">清空</button>
+</header>
+
+<main id="list" class="list"></main>
+<div id="empty" class="empty" hidden>
+  <div class="empty-icon">📋</div>
+  <p>还没有记录<br><span class="dim">复制点东西试试——文本、截图、文件都会出现在这里</span></p>
+</div>
+<div id="more" class="more" hidden><button id="loadMore">加载更多</button></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="/plugins/_sdk/eshare.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
