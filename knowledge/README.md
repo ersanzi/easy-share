@@ -86,11 +86,14 @@ Content-Type: application/json
   "version_id": "v1",
   "object_key": "uploads/file-001/v1/制度.docx",
   "filename": "制度.docx",
+  "owner": "xiaowang",
   "force": false
 }
 ```
 
 返回 `202` 和任务对象。相同 `file_id + version_id` 默认返回已有任务；`force=true` 才创建新任务。
+
+**文档归属（2b，2026-09-01 起）**：`owner`（用户名）决定检索可见性——空/缺失 = 共享文档（所有人可见），非空 = 仅本人与 admin。**带令牌调用时归属以令牌用户为准**，请求体 `owner` 仅服务无令牌的内部/测试调用（防伪造他人归属）；`/lab/api/uploads` 谁传归谁；watcher 监听目录入库为共享。owner 会写入任务响应、manifest 与索引 chunk metadata。
 
 任务状态：
 
@@ -122,7 +125,7 @@ GET /documents/{fileId}/versions/{versionId}/artifacts/manifest.json
 - `GET /health`：服务、Embedding、LLM、OCR capability、索引记录和任务计数。
 - `GET /cleaning/rules`：当前生效的清洗规则集（只读）。
 - `POST /ingest`：旧同步入库入口，仅保留用于手工验证。
-- `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`、`block_ids`、`source_locations` 和 `extraction_methods` 供引用溯源；`doc_ids` 预留给未来 Java 控制面传入已授权文档范围。
+- `POST /query`：检索与生成；contexts 携带 `file_id`/`version_id`、`block_ids`、`source_locations` 和 `extraction_methods` 供引用溯源；`doc_ids` 为显式文档范围。**权限感知（2c，2026-09-01 起）**：带令牌时服务端按用户裁剪可见集（共享文档所有人可见、owner 文档仅本人与 admin，与显式 `doc_ids` 求交集），未登录不过滤；桌面端/WPS 经 Core 网关透传令牌自动生效。
 
 ### 清洗规则引擎
 
@@ -201,7 +204,7 @@ python -m app.mcp_server
 
 ## 快速开始
 
-> 面向公司内部部署（非开发者）请直接看 [`../docs/company-rollout-guide.md`](../docs/company-rollout-guide.md)（含 30 分钟部署流程与同事使用一页纸）。
+> 面向公司内部部署（非开发者）：**一键向导** `powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1`（Python 检查/RustFS/依赖/配置/账号/防火墙/自启全代劳，约 5 分钟）；逐步说明与同事使用一页纸见 [`../docs/company-rollout-guide.md`](../docs/company-rollout-guide.md)。
 
 ```powershell
 cd knowledge

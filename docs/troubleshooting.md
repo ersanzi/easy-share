@@ -326,6 +326,19 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 5. 上传出现 `SignatureDoesNotMatch` 时，核对 `knowledge/.env` 与 `deploy/rustfs/.env`、当前 RustFS 实例使用的 access key/secret key 是否一致；修改后重启 Python 服务，让 Settings 重新加载。
 6. 实验台必须复用正式 `DocumentPipeline`，不要在 `lab` 包里复制解析、清洗或索引逻辑。
 
+### 12.8 入库 502 / 问答 500 的现场处置（2026-09-01 实战收录）
+
+1. **上传/入库报 502，日志见 `InvalidAccessKeyId`**：`knowledge/.env` 的 RustFS 凭据与**实际在跑的容器**漂移（容器重建/换镜像后 .env 不会跟着变，`deploy/rustfs/.env` 也不一定指向本机在用的实例）。以容器真值为准对齐后重启 Python 服务：
+
+   ```powershell
+   docker inspect easyshare-rustfs --format '{{range .Config.Env}}{{println .}}{{end}}' | findstr /i "access secret"
+   # 把输出的 RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY 对齐进 knowledge/.env，再重启 uvicorn
+   ```
+
+   注意本机开发栈可能存在多个 RustFS 容器（如 `easyshare-rustfs` 与旧的 `mineru-web-rustfs-1`），认准 9000 端口在监听的那个。
+
+2. **`POST /query` 整体 500，日志见 `429 ... tpm exhausted`**：LLM 供应商分钟级令牌限流，生成阶段异常上抛（检索阶段已成功）。这是 [KI-6](known-issues.md#ki-6llm-供应商限流时-query-整体-500不降级纯检索)（生成失败无降级路径）。现场处置：等 1-2 分钟 TPM 窗口恢复后重试，或换配额更高的 key；根治等 KI-6 修复。
+
 ## 13. 在线升级相关
 
 1. **Git Bash 里跑安装包 `/S` 变成了 `S:/`**：MSYS 会把以 `/` 开头的参数当路径转换（`CommandLine` 里可见 `installer.exe S:/`），安装器进入交互模式挂在向导页。用 `MSYS_NO_PATHCONV=1` 前缀或 PowerShell `Start-Process -ArgumentList '/S'` 跑。

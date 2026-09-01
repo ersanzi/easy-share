@@ -11,7 +11,7 @@ EasyShare 是一个面向 Windows 10/11 与 macOS 的局域网文件传输与云
 - **系统集成**：Windows「此电脑」品牌入口（Shell NameSpace 委托 WebDAV）：局域网共享常驻 + 登录后按账号挂载「<昵称> 的网盘」与「EasyShare 共享」两个云端盘（每个文件操作经控制面，配额与授权同样生效）；macOS Finder 挂载卷 + 原生菜单栏；系统托盘（含悬停浮窗，支持拖放上传到个人/共享空间）+ Frameless 窗口
 - **可靠性**：Core watchdog 自动恢复、配置热加载、WebSocket 实时事件 + 传输完成系统通知
 - **知识问答（桌面「知识」页）**：连接公司私有部署的知识服务器，登录一次即可会话式提问，答案附引用来源（文件名/相似度/入库时间/片段）；登录令牌由 Go Core 网关持有，不进前端
-- **知识计算面（Python 服务端）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/PDF/XLSX/PPTX 与图片，含 Office 真实格式预检、可选 PaddleOCR 扫描件识别）、来源感知切块、版本化索引和检索质量评测；`/lab` 支持上传观察与检索问答（引用可溯源）
+- **知识计算面（Python 服务端）**：RustFS 文档异步解析清洗（TXT/MD/DOCX/PDF/XLSX/PPTX 与图片，含 Office 真实格式预检、可选 PaddleOCR 扫描件识别）、来源感知切块、版本化索引和检索质量评测；`/lab` 支持上传观察与检索问答（引用可溯源）；权限感知检索——文档归属落库（共享文档所有人可见、个人文档仅本人与管理员），`/query` 按登录用户裁剪检索范围；公司部署有一键向导（`knowledge/scripts/deploy.ps1`，含账号/防火墙/自启）
 - **分发**：Windows NSIS 安装包 + 开机自启；macOS `.app`/DMG 构建脚本与 CI
 
 逐项完成情况、迭代记录与待开始优先级见 [`docs/progress.md`](docs/progress.md)（唯一真相源）。开始新迭代前先读 [`docs/version-iteration.md`](docs/version-iteration.md)。

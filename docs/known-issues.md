@@ -3,7 +3,7 @@
 > 登记已确认、尚未修复的实现缺陷。**只登记不复制**：细节和修复决策仍在各自的迭代记录、ADR 或代码注释中。
 > 与相邻文档的分工：产品级能力边界见 [`../README.md`](../README.md) 的「当前限制」；阻塞下一步推进的事项见 [`progress.md`](progress.md) 的「已知阻塞」；可复现的环境故障与解法见 [`troubleshooting.md`](troubleshooting.md)。
 >
-> 最后更新：2026-08-31
+> 最后更新：2026-09-01
 
 ## 登记表
 
@@ -14,6 +14,7 @@
 | [KI-3](#ki-3对象-key-直接使用文件名无身份与用户隔离) | 高 | 对象 key 直接使用文件名，无身份与用户隔离 | 多用户与文件版本的前置阻塞 | 部分修复（[P2](iterations/2026-08-29-account-p2-storage-isolation.md) 做完用户隔离；稳定文件身份仍未做） |
 | [KI-4](#ki-4预览测试依赖本机注册表的-mime-映射) | 中 | 预览测试依赖本机注册表的 MIME 映射 | 阻断本机完整构建流水线 | 已修复（[P2](iterations/2026-08-29-account-p2-storage-isolation.md)，取修复方向第 2 条） |
 | [KI-5](#ki-5core-侧云盘路由已无调用方但仍可绕过用户隔离) | 中 | Core 侧云盘路由已无调用方，但仍可绕过用户隔离 | 隔离边界的回归风险 | 已修复（[批次收尾](iterations/2026-08-31-account-plane-closure.md)） |
+| [KI-6](#ki-6llm-供应商限流时-query-整体-500不降级纯检索) | 中 | LLM 供应商限流时 `/query` 整体 500，不降级纯检索 | 公司使用高峰的问答可用性 | 未修复 |
 
 严重度口径：**高** = 阻塞既定路线的下一阶段；**中** = 影响可用性或可诊断性，但不阻塞开发；**低** = 体验瑕疵。
 
@@ -162,6 +163,20 @@ Get-ItemProperty 'HKCR:\.md' | Select-Object -ExpandProperty 'Content Type'
 删除后不存在任何"不经控制面"的云盘路径，隔离边界只能由控制面裁决。验收：`go build ./...`/`go vet`/`go test ./...` 18 包全绿，`vue-tsc`/`vitest` 33 条通过，`wails build` + Core 重编通过。
 
 **关联**　[P2 迭代记录](iterations/2026-08-29-account-p2-storage-isolation.md)「已知限制」；[ADR-0007](adr/0007-account-control-plane-ruoyi.md) 不变量 1、2。
+
+---
+
+## KI-6：LLM 供应商限流时 `/query` 整体 500，不降级纯检索
+
+**现象**　LLM 供应商返回 429（如 SenseNova `inference tpm exhausted`）时，`POST /query` 整体返回 500——检索阶段已成功完成（contexts 已构建），挂在生成阶段 `services.generator.generate()` 异常上抛，前端拿到的是报错而非降级答案。2026-09-01 权限切片冒烟时真实复现一次。
+
+**根因**　`app/api/routes.py` 的 `/query`：`generator is None` 时有降级（返回纯检索片段），但 generator 已配置而**运行时调用失败**（限流/网络/超时）没有降级路径——异常直接冒泡成 500。
+
+**影响**　公司多人使用高峰 TPM 用尽时，问答服务整体不可用，且用户看到的错误不可理解。Embedding 侧已有同类降级先例（BM25 fallback，1.9 切片），生成侧缺失。属于可用性问题，不阻塞功能路线，严重度中。
+
+**修复方向**　生成失败时捕获并降级：返回 `（LLM 暂不可用，以下为检索到的相关片段）` + contexts（复用 `generator is None` 的响应形态），日志记录异常详情。可选增强：连续失败次数进 `/health`。
+
+**关联**　[权限迭代记录](iterations/2026-09-01-permission-aware-retrieval.md)「已知问题」；[`troubleshooting.md`](troubleshooting.md) Python 文档处理任务异常节（现场处置）。
 
 ---
 
