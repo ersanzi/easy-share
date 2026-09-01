@@ -157,6 +157,30 @@ class MilvusVectorStore:
             )
             return [self._from_row(row) for row in rows]
 
+    def doc_owners(self) -> dict[str, str | None]:
+        """聚合 doc_id → owner 映射（权限感知检索的数据源），按 offset 分页拉全量。"""
+        owners: dict[str, str | None] = {}
+        page_size = 16384
+        with self.lock:
+            client = self._get_client()
+            offset = 0
+            while True:
+                rows = client.query(
+                    collection_name=self.collection_name,
+                    filter='doc_id != ""',
+                    output_fields=["doc_id", "metadata"],
+                    limit=page_size,
+                    offset=offset,
+                )
+                for row in rows:
+                    metadata_raw = row.get("metadata", "{}")
+                    metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+                    owners[row["doc_id"]] = (metadata or {}).get("owner")
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+        return owners
+
     def query(
         self,
         embedding: list[float],

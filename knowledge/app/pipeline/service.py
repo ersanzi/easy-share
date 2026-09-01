@@ -144,6 +144,7 @@ class DocumentPipeline:
                 "metadata": {
                     "filename": job.filename,
                     "object_key": job.object_key,
+                    "owner": job.owner,
                     "pipeline_version": PIPELINE_VERSION,
                     "ingested_at": processed_at,
                     **chunk.metadata(),
@@ -165,6 +166,7 @@ class DocumentPipeline:
             "version_id": job.version_id,
             "filename": job.filename,
             "object_key": job.object_key,
+            "owner": job.owner,
             "source_sha256": source_sha256,
             "source_bytes": len(content),
             "media_type": document.media_type,

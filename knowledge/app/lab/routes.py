@@ -176,6 +176,9 @@ async def upload_document(
         version_id=resolved_version_id,
         object_key=object_key,
         filename=resolved_filename,
+        # 2b 文件归属：lab 上传要求登录（auth 开启时），谁传的归谁；未登录（本地
+        # auth 关闭场景）落 None = 共享文档
+        owner=(getattr(request.state, "user", None) or {}).get("username"),
         force=force,
     )
     if created or job.status == "queued":

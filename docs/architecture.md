@@ -265,5 +265,6 @@ desktop eventStream (Go 协程，指数退避重连)
 - `/lab` 本地实验台（仅回环）：上传观察八阶段处理 + 检索问答（引用溯源 clean.md）
 - MCP Server（可选，`pip install mcp` 后 `python -m app.mcp_server`）：stdio 薄桥转发 `/query` 与 `/health`，任何 AI 工具（Claude Code/Cursor/OA 助手）可检索企业知识
 - 账号与登录（薄控制面 2a，`AUTH_ENABLED` 默认关闭）：SQLite 用户库 + PBKDF2，`/auth/bootstrap`（首管理员）/`/auth/login`（Bearer 令牌）/`/auth/users`（管理员）；启用后 `/documents`、`/query`、`/ingest`、`/lab/api/uploads` 需令牌（GET 支持 `?token=`），`/auth`、`/health`、`/lab`、`/debug` 白名单；/lab 内置登录条
+- 权限感知检索（2b/2c，2026-09-01）：文档归属 `owner`（用户名）贯通 `processing_jobs` 表、任务响应、manifest 与索引 chunk metadata；入库归属以**令牌用户为准**（lab 上传谁传归谁；`/documents/process` 带令牌时忽略请求显式 owner，防伪造；watcher 监听目录与无令牌调用落 None=共享）；`/query` 服务端按令牌计算可见集——owner 为 None/缺失的文档共享给所有人（存量数据天然共享），非空仅本人与 admin 可见，与请求显式 `doc_ids` 求交集（空交集短路返回无结果，不进检索层）；未登录不过滤（行为不变）；可见集数据源为向量库 `doc_owners()`（JSON/Milvus 双实现）；Core 知识网关已透传 Bearer 令牌，桌面端/WPS 问答链路零改动生效；`/debug/query` 驾驶舱不做权限过滤（回环管理员视角）
 - 目录监听自动入库（`WATCH_DIRS` 分号分隔，默认关闭）：轮询扫描（SMB 共享盘可靠）+ mtime 稳定性窗口 + 内容哈希版本去重 + 失败自动重试；与 lab 上传同链路（storage → job → pipeline）
 - WPS 加载项（`/wps/ribbon.xml`、`/wps/index.html`、`/wps/taskpane.html`）：知识服务自托管加载项页面，与 `/auth`、`/query` 同源免跨域；WPS 文字功能区「知识」页签一键查选中段落，任务窗格内登录（令牌存窗格 localStorage）。本机安装/卸载：`knowledge/scripts/install_wps_addon.ps1`（登记 `%APPDATA%\kingsoft\wps\jsaddons\jsplugins.xml`）

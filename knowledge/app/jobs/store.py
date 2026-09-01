@@ -35,6 +35,8 @@ class ProcessingJob:
     updated_at: str
     started_at: str | None
     finished_at: str | None
+    # 2b 文件归属：默认 None（共享文档）——放末尾带默认值，保证旧构造点零改动
+    owner: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -62,6 +64,7 @@ class JobStore:
                     version_id TEXT NOT NULL,
                     object_key TEXT NOT NULL,
                     filename TEXT NOT NULL,
+                    owner TEXT,
                     status TEXT NOT NULL,
                     stage TEXT NOT NULL,
                     progress INTEGER NOT NULL DEFAULT 0,
@@ -82,6 +85,13 @@ class JobStore:
             self.connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_processing_jobs_status ON processing_jobs(status, created_at)"
             )
+            # 2b 文件归属：旧库无 owner 列时补列（NULL = 共享文档），存量任务无需回填
+            columns = {
+                row["name"]
+                for row in self.connection.execute("PRAGMA table_info(processing_jobs)").fetchall()
+            }
+            if "owner" not in columns:
+                self.connection.execute("ALTER TABLE processing_jobs ADD COLUMN owner TEXT")
 
     def close(self) -> None:
         with self.lock:
@@ -94,6 +104,7 @@ class JobStore:
         version_id: str,
         object_key: str,
         filename: str,
+        owner: str | None = None,
         force: bool = False,
     ) -> tuple[ProcessingJob, bool]:
         with self.lock, self.connection:
@@ -114,11 +125,11 @@ class JobStore:
             self.connection.execute(
                 """
                 INSERT INTO processing_jobs (
-                    id, file_id, version_id, object_key, filename, status, stage,
+                    id, file_id, version_id, object_key, filename, owner, status, stage,
                     progress, retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)
                 """,
-                (job_id, file_id, version_id, object_key, filename, now, now),
+                (job_id, file_id, version_id, object_key, filename, owner, now, now),
             )
             return self.get(job_id), True
 
@@ -263,6 +274,7 @@ class JobStore:
             version_id=row["version_id"],
             object_key=row["object_key"],
             filename=row["filename"],
+            owner=row["owner"],
             status=row["status"],
             stage=row["stage"],
             progress=row["progress"],

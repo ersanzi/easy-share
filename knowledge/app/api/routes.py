@@ -21,6 +21,7 @@ from app.api.schemas import (
 from app.kb.chunker import chunk_text
 from app.parsing.extractor import extract_text
 from app.parsing.rules import load_rules
+from app.rag.permissions import effective_doc_ids, visible_doc_ids
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
@@ -66,11 +67,19 @@ def process_document(req: ProcessDocumentRequest, request: Request) -> Processin
     if not filename:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "无法从 object_key 推断文件名")
 
+    # 2b 文件归属：带令牌时以令牌用户为准（防伪造他人归属）；仅无令牌的
+    # 内部/测试调用可显式指定 owner；两者皆无为共享文档（None）
+    token_user = getattr(request.state, "user", None)
+    owner = (token_user or {}).get("username") or req.owner
+    if token_user and req.owner and req.owner != owner:
+        logger.info("入库归属以令牌用户为准: token=%s 请求 owner=%s 被忽略", owner, req.owner)
+
     job, created = services.job_store.create_or_get(
         file_id=req.file_id,
         version_id=req.version_id,
         object_key=req.object_key,
         filename=filename,
+        owner=owner,
         force=req.force,
     )
     if created or job.status == "queued":
@@ -187,7 +196,14 @@ def ingest(req: IngestRequest, request: Request) -> IngestResponse:
 @router.post("/query", response_model=QueryResponse)
 def query(req: QueryRequest, request: Request) -> QueryResponse:
     services = _services(request)
-    contexts = services.retriever.retrieve(req.question, top_k=req.top_k, doc_ids=req.doc_ids)
+    # 2c 权限感知：从请求令牌解析用户，服务端裁剪可见文档集合；
+    # 与显式 doc_ids 求交集，交集为空时短路（不进检索层，避免空列表被当作不过滤）
+    user = getattr(request.state, "user", None)
+    doc_ids = effective_doc_ids(req.doc_ids, visible_doc_ids(services.vector_store, user))
+    if doc_ids == []:
+        contexts: list[dict] = []
+    else:
+        contexts = services.retriever.retrieve(req.question, top_k=req.top_k, doc_ids=doc_ids)
     chunks = [
         RetrievedChunk(
             doc_id=context.get("doc_id"),

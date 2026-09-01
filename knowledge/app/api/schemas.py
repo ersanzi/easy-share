@@ -59,6 +59,8 @@ class ProcessDocumentRequest(BaseModel):
     version_id: str = Field(pattern=SAFE_ID_PATTERN)
     object_key: str = Field(min_length=1, max_length=1024)
     filename: str | None = Field(default=None, min_length=1, max_length=255)
+    # 文档归属（用户名）。仅未携带令牌的内部调用生效；带令牌时以令牌用户为准，防止伪造他人归属
+    owner: str | None = Field(default=None, min_length=1, max_length=64)
     force: bool = False
 
 
@@ -68,6 +70,7 @@ class ProcessingJobResponse(BaseModel):
     version_id: str
     object_key: str
     filename: str
+    owner: str | None = None
     status: Literal["queued", "processing", "completed", "failed"]
     stage: str
     progress: int
@@ -89,6 +92,7 @@ class ArtifactManifestResponse(BaseModel):
     version_id: str
     filename: str
     object_key: str
+    owner: str | None = None
     source_sha256: str
     source_bytes: int
     media_type: str

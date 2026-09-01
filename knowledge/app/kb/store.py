@@ -55,6 +55,21 @@ class VectorStore:
                 [record for record in self.records if record.get("doc_id") == doc_id]
             )
 
+    def doc_owners(self) -> dict[str, str | None]:
+        """聚合 doc_id → owner 映射（权限感知检索的数据源）。
+
+        owner 为 None/缺失表示共享文档；replace_doc 整体替换保证同一文档
+        的 owner 一致，聚合时取任一条即可。
+        """
+        with self.lock:
+            snapshot = list(self.records)
+        owners: dict[str, str | None] = {}
+        for record in snapshot:
+            doc_id = record.get("doc_id")
+            if doc_id:
+                owners[doc_id] = (record.get("metadata") or {}).get("owner")
+        return owners
+
     def query(self, embedding: list[float], top_k: int = 5, doc_ids: list[str] | None = None) -> list[dict]:
         with self.lock:
             candidates = list(self.records)
