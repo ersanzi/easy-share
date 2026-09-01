@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +29,14 @@ type Service struct {
 	lastHash  string    // 最近一次记录的内容 hash（去重）
 	selfWrite selfWrite // 自身回写标记（避免把自己的写入再记录一遍）
 
-	onChangeMu sync.RWMutex
-	onChange   func(Entry)
+	// 生命周期：剪切板插件可卸载/禁用，录制随插件在场状态反复启停。
+	lifeMu  sync.Mutex
+	running bool
+	stopCh  chan struct{}
 
-	stopOnce sync.Once
-	stopCh   chan struct{}
+	onChangeMu sync.RWMutex
+	onChange   func(Entry)     // 兼容保留的单槽回调（app 注入，转 Wails 事件）
+	onChangeFn []func(Entry)   // 多订阅回调（面板等附加观察者，AddOnChange 注册）
 }
 
 // WriteRequest 是回写剪贴板的请求（clipboard.write 能力入参）。
@@ -67,17 +71,62 @@ func (s *Service) SetOnChange(fn func(Entry)) {
 	s.onChangeMu.Unlock()
 }
 
+// AddOnChange 追加一个变更订阅者（面板窗口等附加观察者；与 SetOnChange 互不影响）。
+func (s *Service) AddOnChange(fn func(Entry)) {
+	s.onChangeMu.Lock()
+	s.onChangeFn = append(s.onChangeFn, fn)
+	s.onChangeMu.Unlock()
+}
+
 func (s *Service) notifyChange(e Entry) {
 	s.onChangeMu.RLock()
 	fn := s.onChange
+	fns := append([]func(Entry){}, s.onChangeFn...)
 	s.onChangeMu.RUnlock()
 	if fn != nil {
 		fn(e)
 	}
+	for _, f := range fns {
+		f(e)
+	}
 }
 
-// Start 启动平台监听（实现在 listener_windows.go / listener_other.go）。
-// Stop 停止监听（同上）。
+// Start 启动录制（平台监听实现在 listener_windows.go / listener_darwin.go /
+// listener_other.go）。可重入：剪切板插件可卸载/禁用，安装/卸载/启停会反复调用。
+func (s *Service) Start() error {
+	s.lifeMu.Lock()
+	if s.running {
+		s.lifeMu.Unlock()
+		return nil
+	}
+	// 上次 Stop 留下的已关闭 stopCh 复位，否则轮询协程会立即退出。
+	select {
+	case <-s.stopCh:
+		s.stopCh = make(chan struct{})
+	default:
+	}
+	s.lifeMu.Unlock()
+
+	if err := s.startListener(); err != nil {
+		return err
+	}
+	s.lifeMu.Lock()
+	s.running = true
+	s.lifeMu.Unlock()
+	return nil
+}
+
+// Stop 停止录制；未在运行时为 no-op。
+func (s *Service) Stop() {
+	s.lifeMu.Lock()
+	if !s.running {
+		s.lifeMu.Unlock()
+		return
+	}
+	s.running = false
+	s.lifeMu.Unlock()
+	s.stopListener()
+}
 
 // Settings 返回当前设置。
 func (s *Service) Settings() Settings { return s.settings }
@@ -189,6 +238,22 @@ func (s *Service) List(limit, offset int, kind, query string) []Entry {
 		limit = 100
 	}
 	return s.store.Query(limit, offset, kind, query)
+}
+
+// urlPattern 判定文本条目是否为纯链接（Stats 的链接分类，与插件端规则一致）。
+var urlPattern = regexp.MustCompile(`^https?://\S+$`)
+
+// Stats 返回各分类总数（侧栏统计用）。链接是从文本里再分出的类，text 计数含 url。
+func (s *Service) Stats() map[string]int {
+	entries := s.store.Entries()
+	out := map[string]int{"total": len(entries)}
+	for _, e := range entries {
+		out[e.Kind]++
+		if e.Kind == KindText && urlPattern.MatchString(strings.TrimSpace(e.Text)) {
+			out["url"]++
+		}
+	}
+	return out
 }
 
 // Delete 删除单条（连同图片文件）。

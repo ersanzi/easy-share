@@ -23,7 +23,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-//go:embed all:assets
+//go:embed all:assets all:plugins/clipboard
 var pluginAssets embed.FS
 
 // PluginInvokeResult 是 PluginInvoke 的统一返回（前端桥按 ok 分发 data/error）。
@@ -44,13 +44,17 @@ func (a *App) initPluginSystem() {
 		return
 	}
 
-	builtinFS, err := fs.Sub(pluginAssets, "assets/builtin-plugins")
+	// 剪切板是「首发插件」而非内置：源码在插件工程（plugins/clipboard），主仓
+	// embed 直读该目录做**首次运行的种子**——落成普通插件（可卸载可禁用），之后
+	// 更新走商城流程（含权限确认），卸载后不复活。注意：这使主仓对 plugins/ 存在
+	// 一处构建期引用，插件仓拆分时需把该目录留在主仓（见拆分计划的例外记录）。
+	clipFS, err := fs.Sub(pluginAssets, "plugins/clipboard")
 	if err != nil {
 		a.reportError("plugin assets", err)
 		return
 	}
-	if err := manager.EnsureBuiltin(builtinFS); err != nil {
-		a.reportError("ensure builtin plugins", err)
+	if err := manager.SeedPlugin("clipboard", clipFS); err != nil {
+		a.reportError("seed clipboard plugin", err)
 	}
 
 	sdkFS, err := fs.Sub(pluginAssets, "assets")
@@ -70,9 +74,6 @@ func (a *App) initPluginSystem() {
 				runtime.EventsEmit(a.ctx, "clipboard:changed", e)
 			}
 		})
-		if err := clipSvc.Start(); err != nil {
-			a.logger.Printf("clipboard listener: %v", err)
-		}
 	}
 
 	registry := plugin.NewRegistry()
@@ -88,6 +89,14 @@ func (a *App) initPluginSystem() {
 	if clipSvc != nil {
 		a.assetMux.Handle("/clipboard-files/", clipSvc.FilesHandler())
 	}
+	// 面板事件通道：剪切板变化并行推给快捷面板页（主窗 iframe 走 Wails 事件）。
+	if clipSvc != nil {
+		clipSvc.AddOnChange(func(e clipboard.Entry) {
+			a.panelEmitEvent("clipboard:changed", e)
+		})
+	}
+	// 剪切板插件的录制与快捷面板随插件在场状态启停（装/卸/启停都会重新对齐）。
+	a.syncClipboardSurface()
 	// 启动后延迟检查插件更新（发现新版 → plugin:updates-available 事件 → 插件中心红点）
 	go a.checkPluginUpdates()
 	a.logger.Printf("plugin system ready; installed=%d", len(manager.List()))
@@ -119,6 +128,9 @@ func (a *App) registerCapabilities(r *plugin.Registry, clip *clipboard.Service) 
 				return nil, fmt.Errorf("clipboard.delete 需要 {id}")
 			}
 			return true, clip.Delete(req.ID)
+		})
+		r.Register("clipboard.stats", plugin.PermClipboardRead, func(args json.RawMessage) (any, error) {
+			return clip.Stats(), nil
 		})
 		r.Register("clipboard.clear", plugin.PermClipboardRead, func(args json.RawMessage) (any, error) {
 			return true, clip.Clear()
@@ -274,6 +286,7 @@ func (a *App) PluginInstallFromMarket(assetID, expectedSHA256 string, expectedSi
 	if err != nil {
 		return plugin.Info{}, err
 	}
+	a.syncClipboardSurface() // 装的是剪切板插件时，恢复录制与快捷面板
 	info, ok := a.pluginManager.Get(man.ID)
 	if !ok {
 		return plugin.Info{}, fmt.Errorf("安装完成但读取插件信息失败")
@@ -343,6 +356,7 @@ func (a *App) PluginInstallFromPath(path string) (plugin.Info, error) {
 	if err != nil {
 		return plugin.Info{}, err
 	}
+	a.syncClipboardSurface() // 本地 zip 装/升级剪切板插件时同步录制与面板
 	info, ok := a.pluginManager.Get(man.ID)
 	if !ok {
 		return plugin.Info{}, fmt.Errorf("安装完成但读取插件信息失败")
@@ -355,7 +369,11 @@ func (a *App) PluginSetDisabled(id string, disabled bool) error {
 	if a.pluginManager == nil {
 		return fmt.Errorf("插件系统未初始化")
 	}
-	return a.pluginManager.SetDisabled(id, disabled)
+	if err := a.pluginManager.SetDisabled(id, disabled); err != nil {
+		return err
+	}
+	a.syncClipboardSurface() // 剪切板插件禁用/启用时同步录制与快捷面板
+	return nil
 }
 
 // PluginUninstall 卸载插件（内置插件不可卸载）。
@@ -363,5 +381,9 @@ func (a *App) PluginUninstall(id string) error {
 	if a.pluginManager == nil {
 		return fmt.Errorf("插件系统未初始化")
 	}
-	return a.pluginManager.Uninstall(id)
+	if err := a.pluginManager.Uninstall(id); err != nil {
+		return err
+	}
+	a.syncClipboardSurface() // 剪切板是普通插件：卸载即停录制、收面板、释放热键
+	return nil
 }

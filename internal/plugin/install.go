@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"easyshare/internal/update"
 )
 
 // 安装防护上限：插件包本身轻量（HTML/JS/CSS/图标），给足余量同时防压缩炸弹。
@@ -286,56 +288,66 @@ func (m *Manager) EnsureBuiltin(builtinFS fs.FS) error {
 		if !e.IsDir() {
 			continue
 		}
-		id := e.Name()
-		if err := ValidateID(id); err != nil {
-			return fmt.Errorf("内置插件目录名: %w", err)
-		}
-		manData, err := fs.ReadFile(builtinFS, id+"/manifest.json")
+		sub, err := fs.Sub(builtinFS, e.Name())
 		if err != nil {
-			return fmt.Errorf("读内置插件 %s 清单: %w", id, err)
+			return fmt.Errorf("取内置插件 %s 子树: %w", e.Name(), err)
 		}
-		var man Manifest
-		if err := json.Unmarshal(manData, &man); err != nil {
-			return fmt.Errorf("解析内置插件 %s 清单: %w", id, err)
-		}
-		if man.ID != id {
-			return fmt.Errorf("内置插件目录 %s 与清单 ID %s 不一致", id, man.ID)
-		}
-		if err := man.Validate(); err != nil {
-			return fmt.Errorf("内置插件 %s: %w", id, err)
-		}
-
-		m.mu.Lock()
-		if existing, registered := m.entries[id]; registered && existing.Version == man.Version {
-			if _, statErr := os.Stat(m.pluginDir(id)); statErr == nil {
-				// 已登记同版本且目录完好，无需重写
-				m.mu.Unlock()
-				continue
-			}
-		}
-		m.mu.Unlock()
-
-		staging := filepath.Join(m.PluginsDir(), stagingName(id))
-		if err := os.RemoveAll(staging); err != nil {
-			return fmt.Errorf("清理 staging: %w", err)
-		}
-		if err := copyFSToDir(builtinFS, id, staging); err != nil {
-			_ = os.RemoveAll(staging)
-			return fmt.Errorf("释放内置插件 %s: %w", id, err)
-		}
-		if err := swapIn(m.pluginDir(id), staging); err != nil {
-			return fmt.Errorf("放入内置插件 %s: %w", id, err)
-		}
-
-		m.mu.Lock()
-		m.upsertLocked(man, true)
-		err = m.persistLocked()
-		m.mu.Unlock()
-		if err != nil {
+		if err := m.EnsureBuiltinFS(e.Name(), sub); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// EnsureBuiltinFS 释放/升级单个内置插件：fsys 的根即插件目录，id 显式给定。
+// 除标准 embed 布局外，也供主仓直读插件工程目录（plugins/{id}）作为内置插件
+// 源的场景（剪切板旗舰插件即此形态：源码归插件工程，分发身份仍是内置）。
+func (m *Manager) EnsureBuiltinFS(id string, fsys fs.FS) error {
+	if err := ValidateID(id); err != nil {
+		return fmt.Errorf("内置插件目录名: %w", err)
+	}
+	manData, err := fs.ReadFile(fsys, "manifest.json")
+	if err != nil {
+		return fmt.Errorf("读内置插件 %s 清单: %w", id, err)
+	}
+	var man Manifest
+	if err := json.Unmarshal(manData, &man); err != nil {
+		return fmt.Errorf("解析内置插件 %s 清单: %w", id, err)
+	}
+	if man.ID != id {
+		return fmt.Errorf("内置插件目录 %s 与清单 ID %s 不一致", id, man.ID)
+	}
+	if err := man.Validate(); err != nil {
+		return fmt.Errorf("内置插件 %s: %w", id, err)
+	}
+
+	m.mu.Lock()
+	if existing, registered := m.entries[id]; registered && existing.Version == man.Version {
+		if _, statErr := os.Stat(m.pluginDir(id)); statErr == nil {
+			// 已登记同版本且目录完好，无需重写
+			m.mu.Unlock()
+			return nil
+		}
+	}
+	m.mu.Unlock()
+
+	staging := filepath.Join(m.PluginsDir(), stagingName(id))
+	if err := os.RemoveAll(staging); err != nil {
+		return fmt.Errorf("清理 staging: %w", err)
+	}
+	if err := copyFSToDir(fsys, ".", staging); err != nil {
+		_ = os.RemoveAll(staging)
+		return fmt.Errorf("释放内置插件 %s: %w", id, err)
+	}
+	if err := swapIn(m.pluginDir(id), staging); err != nil {
+		return fmt.Errorf("放入内置插件 %s: %w", id, err)
+	}
+
+	m.mu.Lock()
+	m.upsertLocked(man, true)
+	err = m.persistLocked()
+	m.mu.Unlock()
+	return err
 }
 
 // copyFSToDir 把 embed FS 的子树拷到目标目录。
@@ -358,4 +370,143 @@ func copyFSToDir(fsys fs.FS, sub, dest string) error {
 		}
 		return os.WriteFile(target, data, 0o600)
 	})
+}
+
+// seededMarkerFile 记录已种子过的插件 ID：卸载后不复活靠它（登记表条目随卸载
+// 消失，不能作为「是否种子过」的依据）。
+const seededMarkerFile = "plugins-seeded.json"
+
+// SeedPlugin 首次运行把随宿主分发的插件落成「普通插件」——可卸载、可禁用，
+// 后续更新走商城的正常流程（含权限确认），宿主不再包办。
+//
+// 与 EnsureBuiltin 的内置身份的关键差异：
+//   - 登记 builtin=false，用户可卸载；
+//   - 卸载后不复活（seeded 标记持久化，删掉 plugins-seeded.json 里的 ID 可重新种子）；
+//   - 历史版本曾把剪切板登记成 builtin，这里顺带降级迁移，并在 embed 版本更新时
+//     原地重写一次（老版本宿主承诺过「随宿主分发即升级」，降级那一次继续兑现）。
+func (m *Manager) SeedPlugin(id string, fsys fs.FS) error {
+	manData, err := fs.ReadFile(fsys, "manifest.json")
+	if err != nil {
+		return fmt.Errorf("读种子插件 %s 清单: %w", id, err)
+	}
+	var man Manifest
+	if err := json.Unmarshal(manData, &man); err != nil {
+		return fmt.Errorf("解析种子插件 %s 清单: %w", id, err)
+	}
+	if man.ID != id {
+		return fmt.Errorf("种子插件目录 %s 与清单 ID %s 不一致", id, man.ID)
+	}
+	if err := man.Validate(); err != nil {
+		return fmt.Errorf("种子插件 %s: %w", id, err)
+	}
+
+	m.mu.Lock()
+	e, registered := m.entries[id]
+	m.mu.Unlock()
+
+	if registered {
+		// 已有登记：商城装的（或历史 builtin）一律不再种子，只做 builtin 降级迁移。
+		if e.Builtin {
+			rewrite := update.CompareVersions(man.Version, e.Version) > 0
+			if rewrite {
+				staging := filepath.Join(m.PluginsDir(), stagingName(id))
+				if err := os.RemoveAll(staging); err != nil {
+					return fmt.Errorf("清理 staging: %w", err)
+				}
+				if err := copyFSToDir(fsys, ".", staging); err != nil {
+					_ = os.RemoveAll(staging)
+					return fmt.Errorf("重写种子插件 %s: %w", id, err)
+				}
+				if err := swapIn(m.pluginDir(id), staging); err != nil {
+					return fmt.Errorf("放入种子插件 %s: %w", id, err)
+				}
+			}
+			m.mu.Lock()
+			e := m.entries[id] // map 里是值类型：改副本后必须写回，否则降级不落盘
+			e.Builtin = false
+			if rewrite {
+				e.Version = man.Version
+				e.Permissions = append([]string(nil), man.Permissions...)
+			}
+			m.entries[id] = e
+			err = m.persistLocked()
+			m.mu.Unlock()
+			if err != nil {
+				return err
+			}
+		}
+		return m.markSeeded(id)
+	}
+
+	// 未登记但种子标记已在：用户卸载过，尊重选择不复活。
+	if m.seeded(id) {
+		return nil
+	}
+
+	staging := filepath.Join(m.PluginsDir(), stagingName(id))
+	if err := os.RemoveAll(staging); err != nil {
+		return fmt.Errorf("清理 staging: %w", err)
+	}
+	if err := copyFSToDir(fsys, ".", staging); err != nil {
+		_ = os.RemoveAll(staging)
+		return fmt.Errorf("释放种子插件 %s: %w", id, err)
+	}
+	if err := swapIn(m.pluginDir(id), staging); err != nil {
+		return fmt.Errorf("放入种子插件 %s: %w", id, err)
+	}
+
+	m.mu.Lock()
+	m.upsertLocked(man, false)
+	err = m.persistLocked()
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return m.markSeeded(id)
+}
+
+// seeded 查询种子标记。
+func (m *Manager) seeded(id string) bool {
+	data, err := os.ReadFile(filepath.Join(m.root, seededMarkerFile))
+	if err != nil {
+		return false
+	}
+	var ids []string
+	if json.Unmarshal(data, &ids) != nil {
+		return false
+	}
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+// markSeeded 落种子标记（幂等）。
+func (m *Manager) markSeeded(id string) error {
+	data, err := os.ReadFile(filepath.Join(m.root, seededMarkerFile))
+	if err == nil {
+		var ids []string
+		if json.Unmarshal(data, &ids) == nil {
+			for _, v := range ids {
+				if v == id {
+					return nil
+				}
+			}
+			ids = append(ids, id)
+			data, _ = json.Marshal(ids)
+		}
+	}
+	if data == nil {
+		data, _ = json.Marshal([]string{id})
+	}
+	if err := os.MkdirAll(m.root, 0o700); err != nil {
+		return fmt.Errorf("创建数据目录: %w", err)
+	}
+	tmp := filepath.Join(m.root, seededMarkerFile+".tmp")
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("写种子标记: %w", err)
+	}
+	return os.Rename(tmp, filepath.Join(m.root, seededMarkerFile))
 }

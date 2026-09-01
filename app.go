@@ -77,6 +77,13 @@ type App struct {
 	pluginRegistry   *plugin.Registry
 	pluginSDK        fs.FS
 	clipboardService *clipboard.Service
+
+	// 快捷面板（剪切板插件 ?panel=1 形态的宿主窗口，见 panel_surface.go 与平台实现）。
+	// panelEmit 由平台窗口就绪后注入：向面板页推送事件（clipboard:changed、panel:shown）。
+	panelListener net.Listener
+	panelURL      string
+	panelEmitMu   sync.RWMutex
+	panelEmit     func(event string, payload any)
 }
 
 // AuthUser 是下发给前端的登录态（不含 token）。

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>剪切板</title>
+<!-- 宿主统一分发的 SDK（勿自带副本）；纯浏览器调试时 SDK 调用会失败，属预期 -->
+<script src="/plugins/_sdk/eshare.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ═══════════ 完整形态（主窗口插件页）：侧栏 + 按天分组卡片流 ═══════════ -->
+<div class="shell">
+
+  <!-- 侧栏：品牌 / 记录状态 / 分类导航 / 本地容量 -->
+  <aside class="side">
+    <div class="brand">
+      <span class="brand-icon">📋</span>
+      <div class="brand-text">
+        <b>剪切板</b>
+        <span class="status" id="status"><i></i>记录中</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="navAll">
+      <span class="nav-ico">🗂</span><span class="nav-label">全部记录</span><span class="nav-count" id="countAll"></span>
+    </nav>
+    <nav class="nav" id="navFav">
+      <span class="nav-ico">💙</span><span class="nav-label">收藏</span><span class="nav-count" id="countFav"></span>
+    </nav>
+
+    <div class="side-label">分类</div>
+    <nav class="nav sub" data-navkind="text">
+      <span class="nav-ico">T</span><span class="nav-label">文字</span><span class="nav-count" id="countText"></span>
+    </nav>
+    <nav class="nav sub" data-navkind="image">
+      <span class="nav-ico">🖼</span><span class="nav-label">图片</span><span class="nav-count" id="countImage"></span>
+    </nav>
+    <nav class="nav sub" data-navkind="url">
+      <span class="nav-ico">🔗</span><span class="nav-label">链接</span><span class="nav-count" id="countUrl"></span>
+    </nav>
+    <nav class="nav sub" data-navkind="files">
+      <span class="nav-ico">📁</span><span class="nav-label">文件</span><span class="nav-count" id="countFiles"></span>
+    </nav>
+
+    <div class="side-foot">
+      <div class="quota-text">本地记录 <b id="quotaUsed">0</b> / <span id="quotaMax">—</span></div>
+      <div class="quota-bar"><i id="quotaFill"></i></div>
+    </div>
+  </aside>
+
+  <!-- 主区：搜索 + 动作 + 分组卡片流 -->
+  <main class="main">
+    <header class="top">
+      <div class="search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="text" placeholder="搜索复制过的内容" autocomplete="off" spellcheck="false">
+      </div>
+      <button class="ghost" id="pauseBtn" type="button" title="暂停/恢复记录">暂停</button>
+      <button class="ghost danger" id="clearBtn" type="button" title="清空全部记录">清空</button>
+    </header>
+
+    <div class="flow" id="flow">
+      <!-- 分组区块由 JS 按 天 渲染进这里 -->
+    </div>
+
+    <div class="empty" id="empty" hidden>
+      <div class="empty-ico">📋</div>
+      <b id="emptyTitle">还没有记录</b>
+      <span id="emptyHint">复制的文字、图片与文件会自动出现在这里</span>
+    </div>
+
+    <div class="more-wrap">
+      <button class="ghost" id="moreBtn" type="button" hidden>加载更多</button>
+    </div>
+  </main>
+</div>
+
+<!-- ═══════════ 面板形态（?panel=1，Win+V / ⌘⇧V 唤起）：紧凑速取列表 ═══════════ -->
+<div class="panel">
+  <div class="panel-top">
+    <div class="search compact">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="panelSearch" type="text" placeholder="搜索剪切板" autocomplete="off" spellcheck="false">
+    </div>
+  </div>
+  <div class="panel-chips" id="panelChips">
+    <button class="chip on" data-chipkind="" type="button">全部</button>
+    <button class="chip" data-chipkind="text" type="button">文字</button>
+    <button class="chip" data-chipkind="image" type="button">图片</button>
+    <button class="chip" data-chipkind="url" type="button">链接</button>
+    <button class="chip" data-chipkind="files" type="button">文件</button>
+  </div>
+  <div class="panel-list" id="panelList"><!-- 行由 JS 渲染 --></div>
+  <div class="panel-foot">
+    <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+    <span><kbd>Enter</kbd> 复制并粘贴</span>
+    <span><kbd>Esc</kbd> 关闭</span>
+  </div>
+  <div class="panel-empty" id="panelEmpty" hidden>暂无匹配记录</div>
+</div>
+
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

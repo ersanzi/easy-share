@@ -13,8 +13,13 @@ README 开发指南），与主程序只通过两个稳定契约耦合：
 1. **插件包规范**：manifest.json 字段与权限白名单（`internal/plugin/manifest.go`）
 2. **宿主能力 API**：SDK（主仓 `assets/sdk/eshare.js`，宿主内嵌统一分发）
 
-主仓对 `plugins/` **零代码级依赖**（`go build`、`wails build`、embed 均不引用；
-内置插件在 `assets/builtin-plugins/`，不属于本目录）。这是拆分零成本的技术前提。
+主仓对 `plugins/` 有**一处代码级依赖**（2026-09-01 起）：内置剪切板插件的源码
+就在 `plugins/clipboard/`（用户要求插件代码统一进插件工程管理），主仓
+`appplugin.go` 经 `//go:embed all:plugins/clipboard` 直读分发，插件版本 2.0.0。
+**这是记录在案的唯一例外**：拆分执行时该目录不随 subtree 走，需先搬回主仓
+（建议 `assets/builtin-plugins/clipboard/` + `EnsureBuiltin` 多目录路径，或保留
+embed 直读并把该目录留在主仓）——第 1 步的 grep 检查会命中 `appplugin.go`，
+按本段处置后再继续。
 
 **边界共识（拆后不变）**：主仓 = 宿主 + 内置插件（剪切板等随宿主分发的能力）；
 插件仓 = 商城插件（官方自营发布）。

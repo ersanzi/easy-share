@@ -78,8 +78,9 @@ var (
 	clipListenerHwnd uintptr // 监听窗口句柄（只在监听线程创建/销毁，Stop 时跨线程只读投递消息）
 )
 
-// Start 覆盖默认实现：起独立线程跑 message-only 窗口与消息循环。
-func (s *Service) Start() error {
+// startListener 起独立线程跑 message-only 窗口与消息循环。
+// 可重入调用（插件卸载后重装会再次启动）；类注册与全局实例在首次时初始化。
+func (s *Service) startListener() error {
 	ready := make(chan error, 1)
 	go s.runListener(ready)
 	return <-ready
@@ -161,14 +162,11 @@ func (s *Service) runListener(ready chan<- error) {
 	clipListenerHwnd = 0
 }
 
-// Stop 覆盖默认实现：投递 WM_CLOSE 让监听线程退出消息循环并销毁窗口。
-func (s *Service) Stop() {
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-		if hwnd := clipListenerHwnd; hwnd != 0 {
-			_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
-		}
-	})
+// stopListener 投递 WM_CLOSE 让监听线程退出消息循环并销毁窗口。
+func (s *Service) stopListener() {
+	if hwnd := clipListenerHwnd; hwnd != 0 {
+		_, _, _ = procPostMessageW.Call(hwnd, wmClose, 0, 0)
+	}
 }
 
 var (
