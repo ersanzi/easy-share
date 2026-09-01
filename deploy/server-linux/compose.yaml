@@ -1,0 +1,123 @@
+# EasyShare 生产服务器（Linux）：基础设施 + 控制面容器。
+#
+# 由 deploy.sh 拷贝到 /opt/easyshare/compose.yaml 运行，相对路径挂载 control-plane/：
+#   /opt/easyshare/
+#   ├── compose.yaml          ← 本文件
+#   ├── repo/                 ← git clone 本仓（knowledge/ 在其中，走 systemd 裸跑）
+#   └── control-plane/        ← ruoyi-admin.jar + easyshare-drive.yml + rustfs.env + sql/
+#
+# 完整流程见 deploy/server-linux/README.md。
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: easyshare-ruoyi-pg
+    environment:
+      POSTGRES_DB: ryvue
+      POSTGRES_USER: ruoyi
+      POSTGRES_PASSWORD: ruoyi123
+      TZ: Asia/Shanghai
+    ports:
+      # 仅本机：控制面走 compose 网络内 postgres:5432，宿主映射只为运维 psql 方便；
+      # 沿用 5433 与 dev（deploy/ruoyi-db）保持一致，避免两套端口心智
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - ruoyi-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ruoyi -d ryvue"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: easyshare-ruoyi-redis
+    command: ["redis-server", "--requirepass", "ruoyi123"]
+    ports:
+      # 仅本机，同上（控制面走 redis:6379）
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "ruoyi123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.10@sha256:60f4f2f41ce95216f8cac676e69f9d90c0bfec458a3bc7fd7fb9b7c2452ac57a
+    container_name: easyshare-rustfs
+    security_opt:
+      - no-new-privileges:true
+    env_file: control-plane/rustfs.env
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: info
+      RUSTFS_OBS_LOG_DIRECTORY: /logs
+    ports:
+      # ⚠ 9000 必须对局域网开放：控制面签发的预签名 URL 会把 RUSTFS_ENDPOINT
+      #   原样发给客户端（同事电脑直传文件），绑 0.0.0.0 并在防火墙放行
+      - "9000:9000"
+      # 9001 控制台（管理员用；服务器若暴露公网，务必在防火墙收口为办公网段）
+      - "9001:9001"
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # 控制面（RuoYi fat jar）。jar 在开发机构建（platform/ 源码树 gitignore，服务器建不了），
+  # 由 scripts/ship-control-plane.ps1 传到 control-plane/ruoyi-admin.jar。
+  ruoyi:
+    image: eclipse-temurin:21-jre-jammy
+    container_name: easyshare-ruoyi
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+    env_file: control-plane/rustfs.env
+    environment:
+      TZ: Asia/Shanghai
+      # 8G 服务器上与 PG/Redis/RustFS/知识服务共处，压住 JVM 默认 1/4 内存
+      JAVA_TOOL_OPTIONS: -Xmx1g
+    volumes:
+      - ./control-plane/ruoyi-admin.jar:/app/app.jar:ro
+      - ./control-plane/easyshare-drive.yml:/app/easyshare-drive.yml:ro
+    # 启动参数平移 deploy/ruoyi-db/run-ruoyi-admin.ps1（命令行参数优先级最高，
+    # 不依赖 profile 差异）；数据源/Redis 指到 compose 网络内的服务名。
+    # captcha/api-decrypt 关闭：桌面客户端 Login 不走验证码与接口加密（内网部署可接受）。
+    command:
+      - java
+      - -jar
+      - /app/app.jar
+      - --server.port=8090
+      - --spring.datasource.dynamic.datasource.master.url=jdbc:postgresql://postgres:5432/ryvue
+      - --spring.datasource.dynamic.datasource.master.driverClassName=org.postgresql.Driver
+      - --spring.datasource.dynamic.datasource.master.username=ruoyi
+      - --spring.datasource.dynamic.datasource.master.password=ruoyi123
+      - --spring.data.redis.host=redis
+      - --spring.data.redis.port=6379
+      - --spring.data.redis.password=ruoyi123
+      - --captcha.enable=false
+      - --api-decrypt.enabled=false
+      - --spring.config.additional-location=file:/app/easyshare-drive.yml
+    ports:
+      - "8090:8090"
+    restart: unless-stopped
+
+volumes:
+  ruoyi-pg-data:
+  rustfs-data:
+  rustfs-logs:

@@ -194,6 +194,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**Linux 生产服务器部署资产**（2026-09-02 开工，当日完成代码侧）— 公司部署观察期启动，服务器为 Linux，全套上线：新增 `deploy/server-linux/`（compose：PG/Redis/RustFS/RuoYi 容器化，RustFS 9000 对 LAN 开放修正预签名直传坑；deploy.sh 一键引导；update.sh 知识服务秒级更新+失败自动回退，跟 dev 分支）+ 开发机 `scripts/ship-control-plane.ps1`（jar 只能开发机构建，传包+建表+重启+探活）；客户端指向服务器改为**构建期注入**（`build.ps1 -PlatformUrl`，`internal/config` 默认地址 const→var 走 ldflags，同事开箱即用）。验证：go test 全绿 / bash -n / compose config / PS5.1 解析全过；**真实服务器端到端待明天部署时验收**。详见 [`iterations/2026-09-02-linux-server-deploy.md`](iterations/2026-09-02-linux-server-deploy.md)。
+
 **剪切板旗舰插件 + 全局快捷面板**（2026-09-01 开工，当日完成）— 插件系统批次 3 两项（插件独立小窗口 + darwin 剪切板）与插件旗舰化合并推进：剪切板插件重构 2.0（`plugins/clipboard/`，已改为**普通可卸载插件**：首启种子安装、更新走商城、卸载即停录制收面板；源码在插件工程，主仓 embed 直读做种子）——按天分组卡片/收藏/分类/搜索/明暗双主题，同一代码带 `?panel=1` 紧凑面板形态；宿主新增「快捷面板」表面——全局热键（Win+V，被占自动回退 Win+Shift+V；mac ⌘⇧V）唤起独立小窗（Win: Win32+WebView2，mac: NSPanel+WKWebView），面板内选中条目即复制并自动粘贴回之前的焦点窗（Win+V 语义）；macOS 侧 NSPasteboard 轮询监听补齐 darwin 剪切板能力。验证：Go 回归/wails build 全绿；**Windows 真机端到端冒烟通过**（热键回退链→面板弹出→实时历史→Enter 复制→焦点切回→自动粘贴落字）；macOS 编译由 CI 把关、运行行为待真机。详见 [`iterations/2026-09-01-clipboard-flagship-panel.md`](iterations/2026-09-01-clipboard-flagship-panel.md)。
 
 **桌面端插件系统 + 官方自营插件商城**（2026-08-31 开工，当日完成）— 插件 = Web 包（manifest + HTML/JS/CSS）跑在沙箱 iframe，经权限化能力 API（storage/剪切板/通知/云盘上传）调宿主，唯一动态通道 `PluginInvoke` 避开绑定级联；**剪切板记录为内置插件（不可卸载、目录被删重启即恢复）**，Win32 监听 + JSONL 环形截断 + 图片 LRU；商城由 platform-drive 承载（`es_plugin` 三表 + 两段式预签名发布，平移在线升级链路），前端「插件中心」商城/已装双 tab；**待办周报插件（`plugins/todo/`）已作为首个商城插件真实上架**（周报聚合 + 复制 + 存个人云盘）。验证：Go 18 包回归/前端构建/wails build 全绿；插件全链路冒烟（安装/鉴权/内置保护/serve 安全）通过；**商城端到端（发布→匿名列表→预签名下载→SHA256→Go 客户端安装）全部通过**。剩余：真机 UI 验收（剪切板实时记录/插件中心交互/iframe 桥，见迭代文档）。详见 [`iterations/2026-08-31-plugin-system.md`](iterations/2026-08-31-plugin-system.md)。
@@ -220,6 +222,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 6. **1.8 批量压测**（后置）：与其他测试统一做
 7. **知识平台里程碑 2 全量**（暂缓）：Java 控制面按需拆分（薄切片路径替代，见定位文档；登录权限迁 Java 已定长期方向；2b/2c 权限感知已由 2026-09-01 切片在 Python 侧落地，迁移时平移语义）
 8. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善
+9. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
 
 ## 已知阻塞
 

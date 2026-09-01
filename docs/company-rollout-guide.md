@@ -2,6 +2,8 @@
 
 > 面向"把 EasyShare 知识服务种进公司"的部署者和普通同事。目标：一台常开的电脑/服务器 + 共享目录 + 一页纸指引。
 > 开发者文档见 [`../knowledge/README.md`](../knowledge/README.md)；本册只讲部署和使用。
+>
+> **服务器是 Linux 的走这里**：[`../deploy/server-linux/README.md`](../deploy/server-linux/README.md)（全套：知识服务 + RustFS + RuoYi 控制面 + PG/Redis，含快速迭代更新管道）；本册下文的一键部署（`deploy.ps1`）适用于** Windows 机器**当服务器的场景。
 
 ## 一、部署（IT 同学，一键约 5 分钟）
 
@@ -100,6 +102,36 @@ powershell -ExecutionPolicy Bypass -File <仓库路径>\knowledge\scripts\instal
 
 ## 四、已知边界（部署前知悉）
 
-- 单 worker 运行（SQLite 状态），百人级团队足够；更大规模再演进。
+- 单 worker 运行（SQLite 状态），百人级团队足够；更大规模再演进（向量库切换条件见下「向量库演进」）。
+- 向量检索为知识服务**进程内实现**（JSON 文件 + numpy 余弦），不部署独立向量库——观察期部署清单不含 Milvus，切换条件与步骤见下「向量库演进」。
 - 监听目录删除不同步（显式设计，防误删）；`AUTH_ENABLED=true` 下 API 需令牌，/lab 页面走登录令牌，桌面端「知识」页与 WPS 窗格登录态分别由 Core 与窗格本地保存。
 - 桌面端（v0.1.0 起）已有「知识」页：登录公司知识服务器即可问答；WPS 插件按需逐台安装（见一·6）。
+
+### 向量库演进（后期优化项，观察期不执行）
+
+**现状**：向量存在知识服务进程内（`knowledge/data/vector_store.json`，内存 + numpy 余弦暴力扫描），不依赖独立向量库服务。Milvus 后端已预留：`app/kb/milvus_store.py` 与 JSON 实现（`app/kb/store.py`）同接口，`.env` 的 `MILVUS_URI` 留空即自动退回 JSON——`deploy.ps1` 默认部署不含 Milvus。
+
+**不默认启用的原因**：Milvus standalone 需 etcd + milvus 两个常驻容器（合计约 2~4G 内存），4C8G 服务器还要跑 PG/Redis/RustFS/控制面/知识服务；且项目定性「向量 = 可重建缓存」（源头文档在 RustFS），Milvus 的持久化/高可用在当前规模发挥不出价值。numpy 暴力扫描在 10 万 chunk 内为几十毫秒级，百人公司观察期远达不到。
+
+**切换触发条件（满足其一即重评估）**：
+
+1. 索引 chunk 数逼近 **10 万**（暴力扫描延迟随量线性增长）；
+2. 检索 P95 延迟 **> 500ms**（质量驾驶舱 `/lab/cockpit` 可观测）；
+3. 需要多 worker 横向扩展（届时与 SQLite 状态的单 worker 限制一并演进）。
+
+**切换步骤（资产已铺好，约十分钟）**：
+
+```powershell
+# 1) 起 Milvus（etcd + milvus 两容器，对象存储复用 RustFS，不额外跑 MinIO）
+cd knowledge
+docker compose -f docker-compose.milvus.yml up -d
+
+# 2) 装 pymilvus，.env 追加 MILVUS_URI（collection 默认 easyshare_chunks）
+.venv\Scripts\pip install -r requirements-milvus.txt
+#    MILVUS_URI=http://127.0.0.1:19530
+
+# 3) 重启知识服务，存量文档重灌向量——向量是可重建缓存，源头在 RustFS：
+#    对存量文件重跑 /ingest 或经入库目录重放触发新版本，索引按 replace_doc 语义整体替换
+```
+
+> 澄清：`deploy/ruoyi-db/README.md` 提到的 milvus/es 是 RuoYi-Vue-Plus 可选 snail-ai 模块的构建依赖（构建时已跳过），与知识服务的向量库无关。

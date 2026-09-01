@@ -1,0 +1,20 @@
+# EasyShare 知识服务 systemd 单元（Linux 服务器）。
+# 由 deploy.sh 安装到 /etc/systemd/system/；路径约定 /opt/easyshare（EASYSHARE_ROOT）。
+# 日志：journalctl -u easyshare-knowledge -f
+
+[Unit]
+Description=EasyShare Knowledge Service (FastAPI)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/easyshare/repo/knowledge
+ExecStart=/opt/easyshare/repo/knowledge/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+# 内网单机先以 root 跑通观察期；硬化时改 User=easyshare 并 chown 数据/入库目录
+User=root
+
+[Install]
+WantedBy=multi-user.target

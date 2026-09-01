@@ -21,12 +21,19 @@ const (
 	defaultDiscoveryPort = 9527
 	defaultTransferPort  = 9528
 	defaultWebDAVPort    = 19080
-	// 账号控制面默认地址（dev 本机 RuoYi，见 deploy/ruoyi-db）。
-	defaultPlatformBaseURL = "http://localhost:8090"
-	// RuoYi 自带 Web 后台（plus-ui）地址。客户端的管理页是自绘的，不依赖它；
-	// 此地址留给「需要完整后台才能做的运维动作」（如菜单/字典/定时任务）作次要出口。
-	defaultAdminConsoleURL = "http://localhost:8091"
 )
+
+// 账号控制面默认地址。公司部署构建时按参数注入（scripts/build.ps1 -PlatformUrl），
+// 让同事拿到的安装包开箱即指向公司服务器，无需手工改 config.json：
+//
+//	wails build -ldflags "-X easyshare/internal/config.defaultPlatformBaseURL=http://<服务器IP>:8090"
+//
+// dev/本地开发保持本机 RuoYi（见 deploy/ruoyi-db）。
+var defaultPlatformBaseURL = "http://localhost:8090"
+
+// RuoYi 自带 Web 后台（plus-ui）地址。客户端的管理页是自绘的，不依赖它；
+// 此地址留给「需要完整后台才能做的运维动作」（如菜单/字典/定时任务）作次要出口。
+var defaultAdminConsoleURL = "http://localhost:8091"
 
 // DefaultConfigPath 返回配置文件的默认路径。
 // Windows 沿用 %LOCALAPPDATA%\EasyShare\config.json（保持既有行为不变）；

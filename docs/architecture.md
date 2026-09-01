@@ -33,7 +33,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 
 关闭桌面窗口默认隐藏到托盘（OnBeforeClose 拦截），Core 继续运行。托盘菜单"退出"或界面"退出服务"才执行全量关闭。
 
-**账号控制面（RuoYi-Vue-Plus 6.0，Java，服务端部署）**：桌面端与 Core 均为其客户端。登录经控制面拿 JWT；云盘上传/下载由控制面模块 `platform-drive/` 验证身份后签发短期预签名 URL，客户端凭 URL 直传 RustFS，**不再持有任何对象存储静态凭据**（ADR-0007 不变量 1/3，`internal/cloud/defaults.go` 已删除）。客户端在线升级的版本清单与安装包也托管在控制面（匿名 `/easyshare/app/*`，安装包存 RustFS `releases/{version}/` 前缀、预签名直传，见第 4b 节）。环境组成：RuoYi admin（REST :8090）+ PostgreSQL 16（:5433，本机原生 PG 占用 5432 故容器映射 5433）+ Redis 7（:6380）+ plus-ui 管理后台（:8091，次要出口），dev 部署见 `deploy/ruoyi-db/`。
+**账号控制面（RuoYi-Vue-Plus 6.0，Java，服务端部署）**：桌面端与 Core 均为其客户端。登录经控制面拿 JWT；云盘上传/下载由控制面模块 `platform-drive/` 验证身份后签发短期预签名 URL，客户端凭 URL 直传 RustFS，**不再持有任何对象存储静态凭据**（ADR-0007 不变量 1/3，`internal/cloud/defaults.go` 已删除）。客户端在线升级的版本清单与安装包也托管在控制面（匿名 `/easyshare/app/*`，安装包存 RustFS `releases/{version}/` 前缀、预签名直传，见第 4b 节）。环境组成：RuoYi admin（REST :8090）+ PostgreSQL 16（:5433，本机原生 PG 占用 5432 故容器映射 5433）+ Redis 7（:6380）+ plus-ui 管理后台（:8091，次要出口），dev 部署见 `deploy/ruoyi-db/`；**生产 Linux 服务器**部署见 `deploy/server-linux/`（RuoYi 容器化 temurin 21-jre + 知识服务 systemd，LAN 暴露 8000/8090/9000；控制面默认地址可构建期注入客户端：`build.ps1 -PlatformUrl`）。
 
 ## 2. 主要代码入口
 

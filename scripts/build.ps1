@@ -1,7 +1,20 @@
+﻿param(
+    # 公司部署构建注入控制面地址：安装包开箱即指向公司服务器，同事免手工改 config.json
+    # 例：powershell -ExecutionPolicy Bypass -File scripts/build.ps1 -PlatformUrl http://192.168.1.10:8090
+    [string]$PlatformUrl = ""
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
+# 控制面默认地址的 ldflags 注入（internal/config.defaultPlatformBaseURL 由 const 改 var 即为此）
+$ldflags = ""
+if ($PlatformUrl) {
+    $ldflags = "-X easyshare/internal/config.defaultPlatformBaseURL=$PlatformUrl"
+    Write-Host "Platform URL baked in: $PlatformUrl" -ForegroundColor Cyan
+}
 
 # Ensure NSIS is in PATH for installer build
 if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
@@ -29,11 +42,13 @@ if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
 New-Item -ItemType Directory -Force -Path build/bin | Out-Null
-go build -o build/bin/easyshare-core.exe ./cmd/core
+if ($ldflags) { go build -ldflags $ldflags -o build/bin/easyshare-core.exe ./cmd/core }
+else { go build -o build/bin/easyshare-core.exe ./cmd/core }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $wails = Join-Path (go env GOPATH) 'bin\wails.exe'
-& $wails build --nsis
+if ($ldflags) { & $wails build --nsis -ldflags $ldflags }
+else { & $wails build --nsis }
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 foreach ($binary in 'build/bin/easyshare.exe', 'build/bin/easyshare-core.exe') {
