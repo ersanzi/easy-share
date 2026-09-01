@@ -77,6 +77,10 @@ type App struct {
 	pluginRegistry   *plugin.Registry
 	pluginSDK        fs.FS
 	clipboardService *clipboard.Service
+	// 插件系统就绪闸：initPluginSystem 退出（成功或失败）时关闭。
+	// 前端可能在 Startup 完成前就调绑定方法，PluginList 借此等到真实列表，
+	// 避免把「未就绪」当成「已装 0 个插件」返回给前端（插件入口全消失的根因）。
+	pluginReady chan struct{}
 
 	// 快捷面板（剪切板插件 ?panel=1 形态的宿主窗口，见 panel_surface.go 与平台实现）。
 	// panelEmit 由平台窗口就绪后注入：向面板页推送事件（clipboard:changed、panel:shown）。
@@ -104,6 +108,7 @@ func NewApp() *App {
 		trayUserCh:   make(chan AuthUser, 1),
 		mounts:       newSpaceMounts(),
 		assetMux:     http.NewServeMux(),
+		pluginReady:  make(chan struct{}),
 	}
 }
 

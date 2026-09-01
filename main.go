@@ -30,8 +30,11 @@ func main() {
 		},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
-			// fallback：/plugins/...（插件包+SDK）与 /clipboard-files/...（剪切板图片）
-			// 由宿主动态 serve（见 appplugin.go AssetHandler）。
+			// Middleware：/plugins/...（插件包+SDK）与 /clipboard-files/...（剪切板图片）
+			// 必须在链路最前由宿主接管——dev 下 Vite 对未知路径回 200，fallback
+			// Handler 永远轮不到（见 appplugin.go pluginAssetMiddleware）。
+			Middleware: pluginAssetMiddleware(app),
+			// fallback 兜底：Middleware 接管不到时（如未来新增前缀）仍走这里。
 			Handler: app.AssetHandler(),
 		},
 		BackgroundColour: &options.RGBA{R: 233, G: 237, B: 243, A: 1},

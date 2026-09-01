@@ -34,14 +34,33 @@ const pluginsLoaded = ref(false)
 // 启动检查发现的可更新插件（plugin:updates-available 事件，插件中心入口红点用）。
 const updateNotices = ref<PluginUpdateNotice[]>([])
 
+// 启动竞态兜底：App 在登录前、Core 子进程就绪前就会加载一次插件列表，
+// 失败不能锁死加载状态，否则侧边栏插件入口整个会话都不再出现。
+// 退避重试直到成功（上限 5 次），期间保持空列表不阻塞主界面。
+let pluginRetryTimer: ReturnType<typeof setTimeout> | undefined
+let pluginRetryCount = 0
+const PLUGIN_RETRY_MAX = 5
+const PLUGIN_RETRY_DELAY_MS = 3000
+
 function refreshPlugins(): Promise<void> {
+  if (pluginRetryTimer !== undefined) {
+    clearTimeout(pluginRetryTimer)
+    pluginRetryTimer = undefined
+  }
   return core.pluginList().then(list => {
     plugins.value = list ?? []
     pluginsLoaded.value = true
+    pluginRetryCount = 0
   }).catch(() => {
-    // 插件系统未就绪（如初始化失败）：保持空列表，不阻塞主界面
+    // 插件系统未就绪（如初始化失败或 Core 尚未拉起）：保持空列表，安排重试
     plugins.value = []
-    pluginsLoaded.value = true
+    if (pluginRetryCount < PLUGIN_RETRY_MAX) {
+      pluginRetryCount++
+      pluginRetryTimer = setTimeout(() => {
+        pluginRetryTimer = undefined
+        void refreshPlugins()
+      }, PLUGIN_RETRY_DELAY_MS)
+    }
   })
 }
 

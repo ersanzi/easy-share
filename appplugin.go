@@ -20,6 +20,7 @@ import (
 	"easyshare/internal/drive"
 	"easyshare/internal/plugin"
 	"easyshare/internal/update"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -36,6 +37,9 @@ type PluginInvokeResult struct {
 // initPluginSystem 在 Startup 时创建插件管理器与剪切板服务并注册能力。
 // 失败不阻断主程序（插件系统是增强能力），记入运行日志与错误面板。
 func (a *App) initPluginSystem() {
+	// 无论成败，退出即放行等待方（PluginList 等绑定），失败时它们拿到空列表而非挂死。
+	defer close(a.pluginReady)
+
 	dataRoot := filepath.Dir(a.configPath) // 与 config.json 同级（%LOCALAPPDATA%\EasyShare）
 
 	manager, err := plugin.NewManager(dataRoot)
@@ -311,8 +315,37 @@ func (a *App) AssetHandler() http.Handler {
 	return a.assetMux
 }
 
+// pluginAssetMiddleware 把宿主动态资源提到 AssetServer 链路最前。
+// 仅靠 fallback Handler 在 dev 下失效：wails dev 的前端由 Vite 提供，
+// 它对未知路径回 200（SPA fallback），请求永远到不了 fallback，
+// 插件 iframe 会加载到前端应用本身。因此这两个前缀必须在 Middleware
+// 阶段直接接管，dev 与生产行为才一致。
+// 注意保持包级函数：作为 App 导出方法会被 wails 绑定且其返回类型
+// （assetserver.Middleware 是函数类型）不会生成 models，前端 TS 必挂。
+func pluginAssetMiddleware(a *App) assetserver.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.Path
+			if strings.HasPrefix(path, "/plugins/") || strings.HasPrefix(path, "/clipboard-files/") {
+				a.AssetHandler().ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // PluginList 返回全部已安装插件（含内置与禁用状态）。
+// 前端可能在 initPluginSystem 完成前就发起本调用（生产启动实测存在），
+// 此时 manager 为 nil、空列表会被当成「已装 0 个」且前端不再重试——
+// 因此这里先等就绪闸，超时兜底放行。
 func (a *App) PluginList() []plugin.Info {
+	if a.pluginReady != nil {
+		select {
+		case <-a.pluginReady:
+		case <-time.After(3 * time.Second):
+		}
+	}
 	if a.pluginManager == nil {
 		return []plugin.Info{}
 	}
