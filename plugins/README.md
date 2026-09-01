@@ -127,6 +127,9 @@ powershell -ExecutionPolicy Bypass -File plugins\dev.ps1 -Plugin my-plugin
 
 ## 迁移为独立仓库时
 
+> 完整拆分计划（触发条件、五步执行清单、拆后协作约定、DoD）见
+> [`docs/plans/2026-09-01-plugin-repo-split.md`](../docs/plans/2026-09-01-plugin-repo-split.md)。
+
 - 本目录整体自包含，直接搬走即可；主仓库只通过**发布产物**（zip）与插件交互。
 - `scripts/publish-plugin.ps1` 随主仓（它依赖控制面凭据约定），迁移后可复制一份带走。
 - SDK 源在主仓 `assets/sdk/eshare.js`（宿主内嵌分发）；独立仓库如需 SDK 文档，
