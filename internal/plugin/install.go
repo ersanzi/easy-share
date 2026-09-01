@@ -24,22 +24,94 @@ const (
 	maxSingleFileBytes = 64 << 20  // 单文件上限
 )
 
-// InstallZip 从 zip 文件路径安装/更新插件。
+// InstallZip 从 zip 文件路径安装/更新插件（本地高级路径，无权限确认——
+// 用户主动选择的文件；商城路径走 PreviewInstall + InstallWithConsent）。
 // 流程：解压到临时 staging 目录 → 解析并校验 manifest → 原子换入 plugins/{id}/ → 登记。
 func (m *Manager) InstallZip(zipPath string) (Manifest, error) {
 	data, err := os.ReadFile(zipPath)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("读插件包: %w", err)
 	}
-	return m.install(data, "")
+	return m.install(data, "", nil)
 }
 
-// InstallBytes 从内存安装（商城下载流走这里，可带期望 SHA256 校验）。
+// InstallBytes 从内存安装（无权限确认，供本地 zip 高级路径与既有调用方使用）。
 func (m *Manager) InstallBytes(data []byte, expectedSHA256 string) (Manifest, error) {
-	return m.install(data, expectedSHA256)
+	return m.install(data, expectedSHA256, nil)
 }
 
-func (m *Manager) install(data []byte, expectedSHA256 string) (Manifest, error) {
+// PreviewResult 是安装预览结果：安装/更新前给用户看的新版本概要与需确认的权限。
+type PreviewResult struct {
+	ID               string   `json:"id"`
+	Name             string   `json:"name"`
+	Version          string   `json:"version"`      // 待安装版本
+	InstalledVersion string   `json:"installedVersion"` // 本地已装版本（首装为空）
+	IsUpdate         bool     `json:"isUpdate"`
+	NewPermissions   []string `json:"newPermissions"` // 需用户确认的权限：首装=全部声明，更新=相对本地新增
+}
+
+// PreviewInstall 校验并解压插件包（不落成安装），返回预览信息。
+// 商城安装的第一步：前端展示权限清单，用户确认后再走 InstallWithConsent。
+// 预览会丢弃 staging 目录——两次调用各自下载/解压，插件包很小，无状态最简单。
+func (m *Manager) PreviewInstall(data []byte, expectedSHA256 string) (PreviewResult, error) {
+	if expectedSHA256 != "" {
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != strings.ToLower(expectedSHA256) {
+			return PreviewResult{}, fmt.Errorf("插件包 SHA256 校验失败")
+		}
+	}
+	if len(data) > maxPluginZipBytes {
+		return PreviewResult{}, fmt.Errorf("插件包超过 %dMB 上限", maxPluginZipBytes>>20)
+	}
+	man, staging, err := m.unpackToStaging(data)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	defer os.RemoveAll(staging)
+
+	m.mu.Lock()
+	e, installed := m.entries[man.ID]
+	if installed && e.Builtin {
+		m.mu.Unlock()
+		return PreviewResult{}, fmt.Errorf("插件 ID %s 与内置插件冲突", man.ID)
+	}
+	localPerms := append([]string(nil), e.Permissions...)
+	localVersion := e.Version
+	m.mu.Unlock()
+
+	return PreviewResult{
+		ID:               man.ID,
+		Name:             man.Name,
+		Version:          man.Version,
+		InstalledVersion: localVersion,
+		IsUpdate:         installed,
+		NewPermissions:   diffNewPermissions(localPerms, man.Permissions),
+	}, nil
+}
+
+// InstallWithConsent 安装/更新并执行权限同意检查：包内 manifest 相对本地的
+// 新增权限必须全部在 acceptedPerms 中（即用户刚在确认框里看过并同意的集合），
+// 否则拒绝安装——防止插件借升级静默扩大权限面。
+func (m *Manager) InstallWithConsent(data []byte, expectedSHA256 string, acceptedPerms []string) (Manifest, error) {
+	return m.install(data, expectedSHA256, acceptedPerms)
+}
+
+// diffNewPermissions 返回 next 相对 installed 新增的权限（installed 为空时为 next 全部）。
+func diffNewPermissions(installed, next []string) []string {
+	set := make(map[string]bool, len(installed))
+	for _, p := range installed {
+		set[p] = true
+	}
+	var out []string
+	for _, p := range next {
+		if !set[p] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m *Manager) install(data []byte, expectedSHA256 string, acceptedPerms []string) (Manifest, error) {
 	if expectedSHA256 != "" {
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != strings.ToLower(expectedSHA256) {
@@ -59,6 +131,17 @@ func (m *Manager) install(data []byte, expectedSHA256 string) (Manifest, error) 
 	if e, ok := m.entries[man.ID]; ok && e.Builtin {
 		_ = os.RemoveAll(staging)
 		return Manifest{}, fmt.Errorf("插件 ID %s 与内置插件冲突", man.ID)
+	}
+	// 权限同意检查：新增权限必须都在用户确认过的集合里（acceptedPerms 为 nil
+	// 表示调用方明确选择了不做同意检查的直装路径，如本地 zip 高级安装）。
+	if acceptedPerms != nil {
+		local := append([]string(nil), m.entries[man.ID].Permissions...)
+		for _, p := range diffNewPermissions(local, man.Permissions) {
+			if !containsString(acceptedPerms, p) {
+				_ = os.RemoveAll(staging)
+				return Manifest{}, fmt.Errorf("插件申请了新权限 %q，需在确认后重试安装", p)
+			}
+		}
 	}
 	if err := swapIn(m.pluginDir(man.ID), staging); err != nil {
 		_ = os.RemoveAll(staging)

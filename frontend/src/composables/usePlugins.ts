@@ -8,7 +8,7 @@
 import { ref } from 'vue'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { core } from '../services/core'
-import type { PluginInfo } from '../types/core'
+import type { PluginInfo, PluginUpdateNotice } from '../types/core'
 
 // iframe ↔ 宿主协议（与 assets/sdk/eshare.js 对应）
 interface BridgeMessage {
@@ -30,6 +30,9 @@ let bridgeInstalled = false
 // 已装插件列表（App 启动时加载；安装/卸载/启停后刷新）。
 const plugins = ref<PluginInfo[]>([])
 const pluginsLoaded = ref(false)
+
+// 启动检查发现的可更新插件（plugin:updates-available 事件，插件中心入口红点用）。
+const updateNotices = ref<PluginUpdateNotice[]>([])
 
 function refreshPlugins(): Promise<void> {
   return core.pluginList().then(list => {
@@ -81,6 +84,11 @@ function installBridge(): void {
       }
     })
   })
+
+  // 启动检查发现插件更新 → 亮「插件中心」红点（进入插件中心即清除）
+  EventsOn('plugin:updates-available', (notices: PluginUpdateNotice[]) => {
+    updateNotices.value = notices ?? []
+  })
 }
 
 // PluginHost 挂载/卸载时登记 iframe。
@@ -108,6 +116,9 @@ export function usePlugins() {
   return {
     plugins,
     pluginsLoaded,
+    updateNotices,
+    // 进入插件中心后清除红点（页面内的「更新」按钮继续引导）
+    clearUpdateNotices() { updateNotices.value = [] },
     refreshPlugins,
     registerFrame,
     unregisterFrame,

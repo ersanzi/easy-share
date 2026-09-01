@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"easyshare/internal/clipboard"
 	"easyshare/internal/drive"
@@ -87,6 +88,8 @@ func (a *App) initPluginSystem() {
 	if clipSvc != nil {
 		a.assetMux.Handle("/clipboard-files/", clipSvc.FilesHandler())
 	}
+	// 启动后延迟检查插件更新（发现新版 → plugin:updates-available 事件 → 插件中心红点）
+	go a.checkPluginUpdates()
 	a.logger.Printf("plugin system ready; installed=%d", len(manager.List()))
 }
 
@@ -198,11 +201,7 @@ func (a *App) registerCapabilities(r *plugin.Registry, clip *clipboard.Service) 
 
 // PluginMarketList 拉取商城列表，并按本地已装版本回填「可更新」标记。
 func (a *App) PluginMarketList() ([]plugin.MarketItem, error) {
-	base := strings.TrimSpace(a.config.PlatformBaseURL)
-	if base == "" {
-		return nil, fmt.Errorf("未配置账号服务地址")
-	}
-	items, err := plugin.NewMarketClient(base).List(a.ctx)
+	items, err := a.marketItems()
 	if err != nil {
 		return nil, err
 	}
@@ -216,21 +215,62 @@ func (a *App) PluginMarketList() ([]plugin.MarketItem, error) {
 	return items, nil
 }
 
-// PluginInstallFromMarket 从商城安装/更新插件：下载（SHA256 校验）→ 解压安装 → 登记。
-func (a *App) PluginInstallFromMarket(assetID, expectedSHA256 string, expectedSizeBytes int64) (plugin.Info, error) {
+// marketItems 拉商城列表（带控制面地址校验）。
+func (a *App) marketItems() ([]plugin.MarketItem, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("未配置账号服务地址")
+	}
+	return plugin.NewMarketClient(base).List(a.ctx)
+}
+
+// checkPluginUpdates 启动后的插件更新检查（延迟执行避免与启动抢资源）。
+// 与主程序升级检查同思路：发现新版 → 事件通知前端在「插件中心」入口亮红点。
+// 无需落盘节流——单个匿名 GET 很轻，每次启动查一次即可。
+func (a *App) checkPluginUpdates() {
+	time.Sleep(15 * time.Second) // 延迟执行，避免与启动抢资源
+	items, err := a.marketItems()
+	if err != nil {
+		a.logger.Printf("plugin update check: %v", err) // 控制面不可达等：静默，下次启动再查
+		return
+	}
+	var notices []map[string]string
+	for _, it := range items {
+		info, ok := a.pluginManager.Get(it.ID)
+		if ok && update.CompareVersions(it.Version, info.Version) > 0 {
+			notices = append(notices, map[string]string{"id": it.ID, "name": it.Name, "version": it.Version})
+		}
+	}
+	if len(notices) > 0 && a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "plugin:updates-available", notices)
+		a.logger.Printf("plugin updates available: %d", len(notices))
+	}
+}
+
+// PluginPreviewFromMarket 商城安装第一步：下载并校验插件包（不落成安装），
+// 返回新版本概要与需用户确认的权限清单（首装=全部声明，更新=相对本地新增）。
+func (a *App) PluginPreviewFromMarket(assetID, expectedSHA256 string, expectedSizeBytes int64) (plugin.PreviewResult, error) {
+	if a.pluginManager == nil {
+		return plugin.PreviewResult{}, fmt.Errorf("插件系统未初始化")
+	}
+	data, err := a.downloadMarketAsset(assetID, expectedSHA256, expectedSizeBytes)
+	if err != nil {
+		return plugin.PreviewResult{}, err
+	}
+	return a.pluginManager.PreviewInstall(data, expectedSHA256)
+}
+
+// PluginInstallFromMarket 商城安装第二步：带权限同意完成安装。
+// acceptedPermissions 是用户在确认框里同意的权限集合；包内新增权限超出该集合时拒绝安装。
+func (a *App) PluginInstallFromMarket(assetID, expectedSHA256 string, expectedSizeBytes int64, acceptedPermissions []string) (plugin.Info, error) {
 	if a.pluginManager == nil {
 		return plugin.Info{}, fmt.Errorf("插件系统未初始化")
 	}
-	base := strings.TrimSpace(a.config.PlatformBaseURL)
-	if base == "" {
-		return plugin.Info{}, fmt.Errorf("未配置账号服务地址")
-	}
-	asset := plugin.MarketAsset{ID: assetID, SizeBytes: expectedSizeBytes, SHA256: expectedSHA256}
-	data, err := plugin.NewMarketClient(base).Download(a.ctx, asset)
+	data, err := a.downloadMarketAsset(assetID, expectedSHA256, expectedSizeBytes)
 	if err != nil {
 		return plugin.Info{}, err
 	}
-	man, err := a.pluginManager.InstallBytes(data, expectedSHA256)
+	man, err := a.pluginManager.InstallWithConsent(data, expectedSHA256, acceptedPermissions)
 	if err != nil {
 		return plugin.Info{}, err
 	}
@@ -239,6 +279,16 @@ func (a *App) PluginInstallFromMarket(assetID, expectedSHA256 string, expectedSi
 		return plugin.Info{}, fmt.Errorf("安装完成但读取插件信息失败")
 	}
 	return info, nil
+}
+
+// downloadMarketAsset 从商城下载插件包（大小与来源校验）。
+func (a *App) downloadMarketAsset(assetID, expectedSHA256 string, expectedSizeBytes int64) ([]byte, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("未配置账号服务地址")
+	}
+	asset := plugin.MarketAsset{ID: assetID, SizeBytes: expectedSizeBytes, SHA256: expectedSHA256}
+	return plugin.NewMarketClient(base).Download(a.ctx, asset)
 }
 
 // AssetHandler 返回挂到 Wails AssetServer fallback 的组合静态服务。

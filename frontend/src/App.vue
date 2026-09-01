@@ -206,10 +206,11 @@ const avatarText = computed(() => {
             管理
           </button>
 
-          <!-- 插件中心：商城 + 已装管理 -->
+          <!-- 插件中心：商城 + 已装管理（有插件更新时亮红点） -->
           <button :class="['nav-item', view === 'plugins' ? 'active' : '']" type="button" @click="view = 'plugins'">
             <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
             插件中心
+            <span v-if="pluginSys.updateNotices.value.length" class="nav-update-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
           </button>
 
           <!-- 插件入口（动态）：内置插件（如剪切板）与已安装插件 -->

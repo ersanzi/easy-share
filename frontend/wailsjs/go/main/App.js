@@ -198,8 +198,8 @@ export function OpenUpdatesFolder() {
   return window['go']['main']['App']['OpenUpdatesFolder']();
 }
 
-export function PluginInstallFromMarket(arg1, arg2, arg3) {
-  return window['go']['main']['App']['PluginInstallFromMarket'](arg1, arg2, arg3);
+export function PluginInstallFromMarket(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['PluginInstallFromMarket'](arg1, arg2, arg3, arg4);
 }
 
 export function PluginInstallFromPath(arg1) {
@@ -216,6 +216,10 @@ export function PluginList() {
 
 export function PluginMarketList() {
   return window['go']['main']['App']['PluginMarketList']();
+}
+
+export function PluginPreviewFromMarket(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PluginPreviewFromMarket'](arg1, arg2, arg3);
 }
 
 export function PluginSetDisabled(arg1, arg2) {

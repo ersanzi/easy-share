@@ -10,7 +10,9 @@ const plugin = usePlugins()
 
 const frame = ref<HTMLIFrameElement | null>(null)
 // 入口 URL：/plugins/{id}/{entry}；entry 缺省 index.html（目录访问也会回退）。
+// key 含版本号：插件原地更新后（目录已原子替换、响应 no-store）iframe 随 key 变化自动重载。
 const src = computed(() => `/plugins/${props.info.id}/${props.info.entry || 'index.html'}`)
+const frameKey = computed(() => `${props.info.id}:${props.info.version}`)
 
 const onLoad = () => {
   if (frame.value?.contentWindow) plugin.registerFrame(frame.value.contentWindow, props.info)
@@ -25,6 +27,7 @@ onBeforeUnmount(() => {
   <div class="plugin-host">
     <iframe
       ref="frame"
+      :key="frameKey"
       class="plugin-frame"
       :src="src"
       sandbox="allow-scripts"

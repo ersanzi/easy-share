@@ -3,11 +3,15 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing/fstest"
 
 	"easyshare/internal/plugin"
@@ -73,6 +77,30 @@ func main() {
 	}
 	fmt.Println("内置插件保护 OK（不可卸载/不可禁用）")
 
+	// 6.5) 权限同意：预览返回权限清单；未同意的新权限被拒、同意后放行
+	preview, err := m.PreviewInstall(readZip(os.Args[1]), "")
+	must("PreviewInstall", err)
+	if !preview.IsUpdate || preview.InstalledVersion != "1.0.0" {
+		fatalf("预览应识别为更新：isUpdate=%v installed=%q", preview.IsUpdate, preview.InstalledVersion)
+	}
+	// 构造带新权限的包：基于 todo zip 重打包，manifest 增加 clipboard.read
+	tampered := withExtraPermission(os.Args[1])
+	_, err = m.InstallWithConsent(tampered, "", []string{})
+	if err == nil {
+		fatalf("未同意的新权限应被拒绝")
+	}
+	fmt.Println("权限同意拒绝 OK:", err)
+	man2, err := m.InstallWithConsent(tampered, "", []string{"clipboard.read"})
+	must("InstallWithConsent(同意后)", err)
+	if man2.Version != "1.0.0" {
+		fatalf("更新后版本不符: %s", man2.Version)
+	}
+	got2, _ := m.Get("todo")
+	if !containsPerm(got2.Permissions, "clipboard.read") {
+		fatalf("同意后的新权限应生效")
+	}
+	fmt.Println("权限同意放行 OK（同意 clipboard.read 后更新生效）")
+
 	// 7) 卸载外部插件
 	if err := m.Uninstall("todo"); err != nil {
 		fatalf("卸载 todo 失败: %v", err)
@@ -113,6 +141,47 @@ func sdkFS() fstest.MapFS {
 	return fstest.MapFS{
 		"sdk/eshare.js": &fstest.MapFile{Data: []byte("// eshare sdk")},
 	}
+}
+
+// readZip 读入 zip 文件内容（PreviewInstall 用）。
+func readZip(path string) []byte {
+	data, err := os.ReadFile(path)
+	must("readZip", err)
+	return data
+}
+
+// withExtraPermission 基于 todo zip 重打包：manifest 权限里追加 clipboard.read，
+// 模拟「插件升级时申请新权限」的场景。
+func withExtraPermission(orig string) []byte {
+	src, err := zip.NewReader(bytes.NewReader(readZip(orig)), int64(len(readZip(orig))))
+	must("打开原包", err)
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, f := range src.File {
+		data, err := f.Open()
+		must("读包内文件", err)
+		content, _ := io.ReadAll(data)
+		data.Close()
+		if f.Name == "manifest.json" {
+			content = []byte(strings.Replace(string(content),
+				`"permissions": ["storage", "clipboard.write", "notification", "drive.upload"]`,
+				`"permissions": ["storage", "clipboard.write", "notification", "drive.upload", "clipboard.read"]`, 1))
+		}
+		out, err := w.Create(f.Name)
+		must("写包内文件", err)
+		_, _ = out.Write(content)
+	}
+	must("关闭 zip", w.Close())
+	return buf.Bytes()
+}
+
+func containsPerm(list []string, target string) bool {
+	for _, v := range list {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 func must(what string, err error) {

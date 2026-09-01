@@ -48,6 +48,7 @@
   PluginInvoke,
   PluginList,
   PluginMarketList,
+  PluginPreviewFromMarket,
   PluginSetDisabled,
   PluginUninstall,
   ProcessDroppedFiles,
@@ -79,6 +80,7 @@ import type {
   MarketItem,
   PluginInfo,
   PluginInvokeResult,
+  PluginPreview,
   Space,
   UpdateCheckResult,
 } from '../types/core'
@@ -165,6 +167,9 @@ export const core = {
   pluginUninstall: PluginUninstall,
   // 插件商城（RuoYi /easyshare/plugins）：列表已按本地版本回填 updateAvailable
   pluginMarketList: () => PluginMarketList() as Promise<MarketItem[]>,
-  pluginInstallFromMarket: (assetId: string, sha256: string, sizeBytes: number) =>
-    PluginInstallFromMarket(assetId, sha256, sizeBytes) as Promise<PluginInfo>,
+  // 商城安装两段式：先预览（返回需确认的权限），用户同意后带 acceptedPermissions 安装
+  pluginPreviewFromMarket: (assetId: string, sha256: string, sizeBytes: number) =>
+    PluginPreviewFromMarket(assetId, sha256, sizeBytes) as Promise<PluginPreview>,
+  pluginInstallFromMarket: (assetId: string, sha256: string, sizeBytes: number, acceptedPermissions: string[]) =>
+    PluginInstallFromMarket(assetId, sha256, sizeBytes, acceptedPermissions) as Promise<PluginInfo>,
 }

@@ -269,3 +269,20 @@ export interface MarketItem {
   asset?: MarketAsset
   updateAvailable?: boolean
 }
+
+// 商城安装预览（第一步）：返回需用户确认的权限，同意后带集合走安装。
+export interface PluginPreview {
+  id: string
+  name: string
+  version: string
+  installedVersion: string
+  isUpdate: boolean
+  newPermissions: string[]
+}
+
+// 启动检查发现的可更新插件（plugin:updates-available 事件载荷，插件中心红点用）。
+export interface PluginUpdateNotice {
+  id: string
+  name: string
+  version: string
+}

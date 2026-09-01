@@ -727,6 +727,28 @@ export namespace plugin {
 		    return a;
 		}
 	}
+	export class PreviewResult {
+	    id: string;
+	    name: string;
+	    version: string;
+	    installedVersion: string;
+	    isUpdate: boolean;
+	    newPermissions: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.installedVersion = source["installedVersion"];
+	        this.isUpdate = source["isUpdate"];
+	        this.newPermissions = source["newPermissions"];
+	    }
+	}
 
 }
 

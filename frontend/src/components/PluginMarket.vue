@@ -11,6 +11,9 @@ const pluginSys = usePlugins()
 
 const tab = ref<'market' | 'installed'>('market')
 const market = ref<MarketItem[]>([])
+
+// 进入插件中心即清除启动检查的红点（页面内「更新」按钮继续引导）
+pluginSys.clearUpdateNotices()
 const loading = ref(false)
 const loadError = ref('')
 const busyId = ref('') // 正在安装/更新的插件 ID
@@ -39,7 +42,20 @@ const install = async (item: MarketItem) => {
   busyId.value = item.id
   loadError.value = ''
   try {
-    await core.pluginInstallFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes)
+    // 两段式：先预览（下载校验但不落成安装），有需确认的权限时弹确认框
+    const preview = await core.pluginPreviewFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes)
+    if (preview.newPermissions.length) {
+      const permList = preview.newPermissions.map(p => `· ${permLabel(p)}`).join('\n')
+      const action = preview.isUpdate
+        ? `更新到 v${preview.version}`
+        : `安装 v${preview.version}`
+      const ok = window.confirm(
+        `${action}「${preview.name}」需要以下权限：\n\n${permList}\n\n是否继续？`,
+      )
+      if (!ok) return
+    }
+    // 同意过的权限集合传给安装器：包内新增权限超出该集合会被 Go 侧拒绝（防静默扩权）
+    await core.pluginInstallFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes, preview.newPermissions)
     await pluginSys.refreshPlugins()
     await load() // 刷新 updateAvailable 标记
   } catch (e) {
@@ -48,6 +64,16 @@ const install = async (item: MarketItem) => {
     busyId.value = ''
   }
 }
+
+// 权限的中文展示名（与 internal/plugin 的权限常量对应）
+const permLabel = (perm: string): string => ({
+  storage: '本地数据存储',
+  'clipboard.read': '读取剪切板历史',
+  'clipboard.write': '写入剪切板',
+  'clipboard.events': '剪切板变化通知',
+  notification: '系统通知',
+  'drive.upload': '上传到个人云盘',
+}[perm] ?? perm)
 
 const togglePlugin = async (id: string, disabled: boolean) => {
   await pluginSys.setDisabled(id, disabled)

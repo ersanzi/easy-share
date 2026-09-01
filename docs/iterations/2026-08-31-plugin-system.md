@@ -77,6 +77,16 @@
 - 排障记录：① SQL 曾在 release 表误引用 status 列建索引（已修正）；② publish-plugin.ps1 手抄 clientId 漏了 4 字符（`...06a7b32e`，正确 `...06ce24a7b32e`），服务端 500 且 sys_login_info 无失败记录——审计无记录+0ms 返回=校验前异常，clientId 已修并加注释；③ Maven `-T 1C` 并行构建后 `-rf` 恢复会因依赖未 install 失败，用全量 `install` 再 `-pl clean package`；④ ruoyi-admin fat jar 判定 up-to-date 不重打时，必须 `clean package`
 - 待真机验收（需 GUI）：剪切板实时记录（复制文本/图片/文件→历史出现→重启不丢→密码管理器格式不入）、插件中心商城页安装 todo、周报复制/上传云盘、删 `plugins/clipboard` 目录重启自动恢复、iframe 加载与 postMessage 桥（AssetServer fallback 在 wails build 下的人工确认）
 
+### 更新机制补全（2026-08-31 追加，用户提出"已装插件的后续升级"）
+
+批次 2 交付时更新链路已通（覆盖式安装 + 商城「更新」按钮 + 版本比对），但有三个缺口，当日补齐：
+
+1. **主动更新提醒**：启动后延迟 15s 检查商城（单个匿名 GET，不落盘节流）→ 发现新版 `EventsEmit("plugin:updates-available")` → 侧边栏「插件中心」红点（复用主程序升级红点样式）；进入插件中心即清除。
+2. **权限变更确认（安全补强）**：商城安装改两段式——`PluginPreviewFromMarket`（下载+校验+解压但**不落成**，返回 `PreviewResult{isUpdate, newPermissions}`，首装=全部声明权限、更新=相对本地新增）→ 前端 confirm 展示中文权限名 → `PluginInstallFromMarket(assetId, sha, size, acceptedPermissions)`；`InstallWithConsent` 强制校验「包内新增权限 ⊆ 用户同意集合」，防插件借升级静默扩权。本地 zip 安装（高级路径）保留直装不加确认（用户主动选的文件，风险自担）。预览与安装各自下载解压一次（包小，无状态实现最简）。
+3. **更新后热重载**：PluginHost 的 iframe `:key` 含版本号——目录已原子替换 + 响应 no-store，key 变化触发 iframe 自动重载，用户无需切页。
+
+验证：权限同意冒烟（篡改包追加 clipboard.read：未同意被拒 / 同意后放行，`scripts/diag/plugin-smoke` 6.5 节）；真实更新流（todo 1.0.0 预装 → 商城发布 1.0.1 → 预览识别更新 → 权限 diff 为空 → 升级生效，`scripts/diag/market-smoke`）；Go 18 包回归 + vue-tsc + wails build 全绿。todo 插件已随本次升版 1.0.1 真实上架。
+
 ### 后续（批次 3 候选）
 
 darwin 剪切板（NSPasteboard changeCount 轮询）、插件独立小窗口（tray_hover WebView2 模式）、开机自启记录、AI 周报（接知识服务网关）、更多能力 API（本地数据表/后台任务/消息中心）、插件遥测与付费授权（开放生态前的重评估项）。

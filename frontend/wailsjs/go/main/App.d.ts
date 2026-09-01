@@ -108,7 +108,7 @@ export function OpenReceiveFolder():Promise<void>;
 
 export function OpenUpdatesFolder():Promise<void>;
 
-export function PluginInstallFromMarket(arg1:string,arg2:string,arg3:number):Promise<plugin.Info>;
+export function PluginInstallFromMarket(arg1:string,arg2:string,arg3:number,arg4:Array<string>):Promise<plugin.Info>;
 
 export function PluginInstallFromPath(arg1:string):Promise<plugin.Info>;
 
@@ -117,6 +117,8 @@ export function PluginInvoke(arg1:string,arg2:string,arg3:string):Promise<main.P
 export function PluginList():Promise<Array<plugin.Info>>;
 
 export function PluginMarketList():Promise<Array<plugin.MarketItem>>;
+
+export function PluginPreviewFromMarket(arg1:string,arg2:string,arg3:number):Promise<plugin.PreviewResult>;
 
 export function PluginSetDisabled(arg1:string,arg2:boolean):Promise<void>;
 
