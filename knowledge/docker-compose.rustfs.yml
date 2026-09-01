@@ -1,0 +1,24 @@
+# EasyShare 知识服务配套 RustFS 对象存储（公司服务器一键部署用）
+# 用法（由 scripts/deploy.ps1 自动调用，也可手动）：
+#   docker compose --env-file .env -f docker-compose.rustfs.yml up -d
+# 说明：
+# - 数据落在 knowledge/rustfs-data/（bind mount，备份直接拷目录）
+# - 9000 API 只绑本机（知识服务访问，不暴露局域网）；9001 控制台局域网可达（用部署凭据登录）
+# - 国内拉取镜像慢可先换源：docker pull docker.m.daocloud.io/rustfs/rustfs:1.0.0-beta.10 && docker tag ...
+services:
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.10
+    container_name: easyshare-rustfs
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "0.0.0.0:9001:9001"
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?请在 knowledge/.env 配置 RUSTFS_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?请在 knowledge/.env 配置 RUSTFS_SECRET_KEY}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_VOLUMES: /data
+      RUSTFS_CONSOLE_ENABLE: "true"
+    volumes:
+      - ./rustfs-data:/data

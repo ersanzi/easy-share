@@ -3,13 +3,41 @@
 > 面向"把 EasyShare 知识服务种进公司"的部署者和普通同事。目标：一台常开的电脑/服务器 + 共享目录 + 一页纸指引。
 > 开发者文档见 [`../knowledge/README.md`](../knowledge/README.md)；本册只讲部署和使用。
 
-## 一、部署（IT 同学，约 30 分钟）
+## 一、部署（IT 同学，一键约 5 分钟）
 
-### 1. 准备一台常开的 Windows 机器
+> 前提：一台常开的 Windows 机器（4 核 8G 起步，文档多再加大硬盘），能被同事局域网访问。
 
-配置不用高（4 核 8G 起步，文档多再加大硬盘）；需要能被同事访问（同局域网）；RustFS 对象存储跑在同一台或邻近机器（已有 Docker 部署则复用）。
+### 一键部署（推荐）
 
-### 2. 安装服务
+把仓库（或至少 `knowledge/` 目录）拷到服务器，然后：
+
+```powershell
+cd knowledge
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
+```
+
+向导会依次完成并只问业务问题（缺什么问什么，全部支持参数无人值守）：
+
+1. **Python 检查**：缺 3.11+ 会给 winget/下载指引；
+2. **RustFS 对象存储**：本机已有则复用（填地址凭据）；没有则用 Docker 一键起新（`docker-compose.rustfs.yml`，数据落 `knowledge\rustfs-data\`，自动生成凭据）；
+3. **依赖安装**：venv + pip（默认走清华镜像，公司网络友好）；
+4. **生成 .env**：LLM/Embedding 凭据（可留空，降级纯检索/关键词模式）、入库目录（自动创建）、`AUTH_ENABLED=true` 默认开启；
+5. **启动探活**：自动起服务并做 /health 检查，失败打印日志尾部；
+6. **账号**：创建管理员 + 批量同事账号（逗号分隔用户名，随机初始口令打印）；
+7. **防火墙**：放行 8000（需管理员权限；非管理员会打印 netsh 命令自己跑）;
+8. **开机自启**：可选注册计划任务；
+9. **生成 `同事使用指引.txt`**：含局域网访问地址、入库目录、账号清单——直接发群里。
+
+无人值守示例：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1 -AdminPassword '<口令>' `
+  -ColleagueUsernames 'xiaowang,xiaoli' -WatchDir 'D:\公司共享盘\知识库入库' `
+  -RustfsAccessKey <k> -RustfsSecretKey <s> -LlmApiKey sk-xxx -LlmBaseUrl <url> -LlmModel <model> `
+  -EmbeddingApiKey sk-xxx -EmbeddingBaseUrl <url> -EmbeddingModel <model> -NonInteractive
+```
+
+### 进阶：手动分步部署（脚本不适用时）
 
 ```powershell
 # 在 knowledge/ 目录（代码从仓库拉取或拷贝）
@@ -17,29 +45,10 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 # 可选增强：扫描件支持 → pip install -r requirements-ocr.txt；MCP → pip install mcp
-Copy-Item .env.example .env
+Copy-Item .env.example .env   # 照 .env.example 注释逐项填写（RustFS/LLM/Embedding/AUTH/WATCH_DIRS）
 ```
 
-### 3. 配置 `.env`（最少必填）
-
-```ini
-RUSTFS_ENDPOINT=...        # 对象存储地址与凭证（已有部署照抄）
-RUSTFS_ACCESS_KEY=...
-RUSTFS_SECRET_KEY=...
-
-LLM_BASE_URL=...           # 生成回答用（OpenAI 兼容；不配则纯检索模式）
-LLM_API_KEY=...
-LLM_MODEL=...
-
-EMBEDDING_BASE_URL=...     # 语义检索用（不配则只剩关键词检索）
-EMBEDDING_API_KEY=...
-EMBEDDING_MODEL=...
-
-AUTH_ENABLED=true          # 公司多人使用务必开启
-WATCH_DIRS=D:\公司共享盘\知识库入库   # 指向共享目录（分号分隔可多个）
-```
-
-### 4. 启动与自启
+手动启动与自启：
 
 ```powershell
 # 手动启动（前台，先验证一切正常）
@@ -48,9 +57,12 @@ powershell -ExecutionPolicy Bypass -File scripts\start_server.ps1
 
 # 注册开机自启（当前用户登录即启动）
 powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1
+
+# 防火墙放行（管理员 PowerShell，同事能访问的必要条件）
+netsh advfirewall firewall add rule name="EasyShare Knowledge (8000)" dir=in action=allow protocol=TCP localport=8000
 ```
 
-### 5. 开通账号（首次）
+手动开账号（也可用向导代劳）：
 
 ```powershell
 curl -X POST http://localhost:8000/auth/bootstrap -H "Content-Type: application/json" -d '{"username":"admin","password":"<管理员口令>"}'
@@ -59,7 +71,7 @@ curl -X POST http://localhost:8000/auth/login -H "Content-Type: application/json
 curl -X POST http://localhost:8000/auth/users -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"username":"xiaowang","password":"<初始口令>"}'
 ```
 
-### 6. 开通 WPS 知识查询（可选，每台需要用的电脑各跑一次）
+### WPS 知识查询（可选，每台需要用的电脑各跑一次）
 
 ```powershell
 # 前提：能访问 knowledge\scripts\install_wps_addon.ps1（仓库任意位置改成相对/绝对路径均可）

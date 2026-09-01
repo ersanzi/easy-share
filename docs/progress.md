@@ -115,11 +115,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 控制面批次收尾（2026-08-31）：文档对账（本条 + architecture/README/known-issues/合并文档勘误——此前文档把 P4 误记为"剩余"）+ KI-5 死代码清理（`/api/cloud/*` 七路由、`cloud.Service`、`webdavfs`、desktop.Client Cloud* 方法，净删约 1390 行）+ 设置页「账号」资料卡片（头像/昵称/账号/管理员标识 + 空间用量 + 退出登录）。详见 [`iterations/2026-08-31-account-plane-closure.md`](iterations/2026-08-31-account-plane-closure.md)
 - [x] 悬浮窗布局重构与固定态（切片 2，2026-08-31 外部批次合入）：浮窗加高按内容分区、固定态（固定是文件拖放的前提）、托盘图标 GUID 持久化与窗口位置/固定状态持久化。详见 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)
 - [x] 2b 文件归属 / 2c 权限感知检索（2026-09-01）：owner 贯通任务表/manifest/索引元数据（令牌用户优先防伪造，watcher 监听目录为共享），`/query` 服务端按登录用户裁剪可见文档（共享文档所有人可见、owner 文档本人+admin、空交集短路），未登录行为不变；向量库双后端新增 `doc_owners()`；桌面端/WPS 经 Core 网关透传令牌零改动生效。pytest 新增 8 用例、全量 128 全绿；真实服务双账号冒烟隔离验证通过。详见 [`iterations/2026-09-01-permission-aware-retrieval.md`](iterations/2026-09-01-permission-aware-retrieval.md)
+- [x] 部署提效一键 bootstrap（2026-09-01）：`knowledge/scripts/deploy.ps1` 一键向导（Python 检查/RustFS 复用或 Docker 起新/venv 清华镜像/桶初始化/.env 生成/启动探活/管理员+批量同事账号/防火墙放行/自启/同事使用指引.txt），交互+无人值守双模式；`docker-compose.rustfs.yml`；`start_server.ps1`/`install_autostart.ps1` 加 -Port；**修存量缺口：requirements.txt 补 httpx（MinerU client 无条件 import，旧手册部署必炸）**；手册第一节重写为一键部署并补防火墙步骤。隔离目录真跑全流程 + 放文件自动入库 + 同事账号检索命中。详见 [`iterations/2026-09-01-deploy-bootstrap.md`](iterations/2026-09-01-deploy-bootstrap.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-01 | 部署提效一键 bootstrap — deploy.ps1 向导（RustFS 分支/venv 镜像/.env 生成/账号/防火墙/自启/使用一页纸）+ 修 httpx 依赖缺口 | 已完成（隔离目录全流程真跑 + 端到端入库/检索验证） |
 | 2026-09-01 | 2b 文件归属 / 2c 权限感知检索 — owner 落 job/manifest/索引元数据，/query 按登录用户过滤可见文档（多账号公司部署前置） | 已完成（pytest 128 全绿 + 双账号真实链路冒烟隔离验证） |
 | 2026-09-01 | 剪切板旗舰插件 + 全局快捷面板 — 插件 2.0 重构（天分组/收藏/分类/双形态）+ Win+V / ⌘⇧V 独立小窗 + 自动粘贴 + darwin 剪切板监听；当日追加：改普通可卸载插件（首启种子+商城更新）| 代码完成（回归绿+构建过+Windows GUI 冒烟过+已上架商城；macOS 运行行为待真机） |
 | 2026-08-31 | 插件系统 + 官方自营商城 — 沙箱 iframe 运行时 + 权限化能力 API + 内置剪切板插件（不可卸载）+ platform-drive 商城 + 待办周报插件 | 代码完成（回归绿+构建过+冒烟过；商城端到端与真机交互验收遗留） |
