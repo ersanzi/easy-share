@@ -51,7 +51,7 @@ def health(request: Request) -> dict:
         "auth": bool(services.config.auth_enabled),
         "watch_dirs": len(services.watcher.directories) if services.watcher else 0,
         "ocr": services.ocr.capability().to_dict() if services.ocr else {"available": False, "provider": "unknown", "reason": "OCR 服务未配置"},
-        "records": len(services.vector_store.records),
+        "records": services.vector_store.count(),
         "jobs": services.job_store.counts(),
     }
 
@@ -200,10 +200,12 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
     # 与显式 doc_ids 求交集，交集为空时短路（不进检索层，避免空列表被当作不过滤）
     user = getattr(request.state, "user", None)
     doc_ids = effective_doc_ids(req.doc_ids, visible_doc_ids(services.vector_store, user))
-    if doc_ids == []:
-        contexts: list[dict] = []
-    else:
-        contexts = services.retriever.retrieve(req.question, top_k=req.top_k, doc_ids=doc_ids)
+    outcome = (
+        services.orchestrator.retrieve(req.question, top_k=req.top_k, doc_ids=doc_ids)
+        if doc_ids != []
+        else None
+    )
+    contexts = outcome.contexts if outcome else []
     chunks = [
         RetrievedChunk(
             doc_id=context.get("doc_id"),
@@ -219,9 +221,30 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
         )
         for context in contexts
     ]
+    strategy = outcome.strategy if outcome else ""
+    degraded = outcome.degraded if outcome else None
     if not contexts:
-        return QueryResponse(answer="知识库中没有找到与该问题相关的内容。")
+        return QueryResponse(answer="知识库中没有找到与该问题相关的内容。", strategy=strategy, degraded=degraded)
     if services.generator is None:
-        return QueryResponse(answer="（未配置 LLM，以下为检索到的相关片段）", contexts=chunks)
+        return QueryResponse(
+            answer="（未配置 LLM，以下为检索到的相关片段）", contexts=chunks, strategy=strategy, degraded=degraded
+        )
     result = services.generator.generate(req.question, contexts)
-    return QueryResponse(answer=result["answer"], sources=result["sources"], contexts=chunks)
+    # 生产生成日志：用量与命中可观测（逐句忠实度分析属驾驶舱职责，生产链路不重复调 LLM）
+    try:
+        services.query_log.log_generation(
+            question=req.question,
+            strategy=strategy,
+            top_k=req.top_k,
+            result_count=len(contexts),
+            top_score=contexts[0].get("score") or 0.0,
+            file_ids_hit=[c.get("file_id", "") for c in contexts if c.get("file_id")],
+            answer_length=len(result.get("answer", "")),
+            faithfulness_avg=None,
+            unsupported_ratio=None,
+        )
+    except Exception:  # 日志失败不影响问答主流程
+        logger.warning("生产生成日志写入失败", exc_info=True)
+    return QueryResponse(
+        answer=result["answer"], sources=result["sources"], contexts=chunks, strategy=strategy, degraded=degraded
+    )

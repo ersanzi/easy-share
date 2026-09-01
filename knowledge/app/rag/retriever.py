@@ -32,10 +32,10 @@ class Retriever:
         return self.store.query(qvec, top_k=top_k, doc_ids=doc_ids)
 
     def _ensure_bm25_index(self) -> None:
-        """BM25 索引懒构建：与向量库记录数不一致时重建，自动跟随文档增删。"""
-        with self.store.lock:
-            record_count = len(self.store.records)
-        if self.bm25.n_docs != record_count:
-            with self.store.lock:
-                records = list(self.store.records)
-            self.bm25.rebuild(records)
+        """BM25 索引懒构建：与向量库记录数不一致时重建，自动跟随文档增删。
+
+        走 count()/snapshot_records() 双后端协议（JSON 与 Milvus 均实现），
+        不能直接读 store.records——Milvus 后端没有该属性。
+        """
+        if self.bm25.n_docs != self.store.count():
+            self.bm25.rebuild(self.store.snapshot_records())

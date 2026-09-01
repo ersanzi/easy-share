@@ -20,6 +20,7 @@ from app.parsing.mineru.base import MinerUProvider
 from app.parsing.pdf_router import build_pdf_router
 from app.rag.generator import Generator, build_generator
 from app.rag.multi_hop import MultiHopRetriever, build_multi_hop_retriever
+from app.rag.orchestrator import QueryOrchestrator
 from app.rag.retriever import Retriever
 from app.storage.base import ObjectStorage
 from app.storage.rustfs import RustFSStorage
@@ -38,6 +39,7 @@ class AppServices:
     query_log: QueryLog
     reranker: Reranker | NoopReranker
     retriever: Retriever
+    orchestrator: QueryOrchestrator
     generator: Generator | None
     job_store: JobStore
     pipeline: DocumentPipeline
@@ -93,6 +95,15 @@ def build_services(config: Settings = settings) -> AppServices:
     retriever = Retriever(embedder, vector_store, bm25=bm25)
     generator = build_generator(config)
     multi_hop = build_multi_hop_retriever(config, retriever, bm25, query_log=query_log)
+    orchestrator = QueryOrchestrator(
+        retriever=retriever,
+        store=vector_store,
+        bm25=bm25,
+        reranker=reranker,
+        multi_hop=multi_hop,
+        query_log=query_log,
+        strategy=config.query_strategy,
+    )
     job_store = JobStore(config.job_store_path)
     users = UserStore(config.auth_db_path, token_expiry_hours=config.auth_token_expiry_hours)
     pipeline = DocumentPipeline(
@@ -118,6 +129,7 @@ def build_services(config: Settings = settings) -> AppServices:
         query_log=query_log,
         reranker=reranker,
         retriever=retriever,
+        orchestrator=orchestrator,
         generator=generator,
         job_store=job_store,
         pipeline=pipeline,

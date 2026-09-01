@@ -55,6 +55,16 @@ class VectorStore:
                 [record for record in self.records if record.get("doc_id") == doc_id]
             )
 
+    def count(self) -> int:
+        """索引记录总数（双后端协议，供 BM25 等派生索引懒重建判断一致性）。"""
+        with self.lock:
+            return len(self.records)
+
+    def snapshot_records(self) -> list[dict]:
+        """索引记录快照（含 embedding），供 BM25 等派生索引全量重建。"""
+        with self.lock:
+            return list(self.records)
+
     def doc_owners(self) -> dict[str, str | None]:
         """聚合 doc_id → owner 映射（权限感知检索的数据源）。
 

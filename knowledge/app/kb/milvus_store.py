@@ -157,6 +157,37 @@ class MilvusVectorStore:
             )
             return [self._from_row(row) for row in rows]
 
+    def count(self) -> int:
+        """索引记录总数（双后端协议）：走 collection 统计，不拉数据。"""
+        client = self._get_client()
+        stats = client.get_collection_stats(self.collection_name) or {}
+        row_count = stats.get("row_count", 0) if isinstance(stats, dict) else 0
+        # 兼容旧版本把 row_count 包成列表的返回形态
+        if isinstance(row_count, (list, tuple)):
+            row_count = row_count[0] if row_count else 0
+        return int(row_count)
+
+    def snapshot_records(self) -> list[dict]:
+        """全量拉取索引记录（不含 embedding），供 BM25 等派生索引全量重建，按 offset 分页。"""
+        records: list[dict] = []
+        page_size = 16384
+        with self.lock:
+            client = self._get_client()
+            offset = 0
+            while True:
+                rows = client.query(
+                    collection_name=self.collection_name,
+                    filter="",
+                    output_fields=["id", "doc_id", "file_id", "version_id", "text", "metadata"],
+                    limit=page_size,
+                    offset=offset,
+                )
+                records.extend(self._from_row(row) for row in rows)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+        return records
+
     def doc_owners(self) -> dict[str, str | None]:
         """聚合 doc_id → owner 映射（权限感知检索的数据源），按 offset 分页拉全量。"""
         owners: dict[str, str | None] = {}

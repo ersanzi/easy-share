@@ -52,6 +52,8 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceRef] = Field(default_factory=list)
     contexts: list[RetrievedChunk] = Field(default_factory=list)
+    strategy: str = ""  # 实际执行的检索策略（vector/hybrid/hybrid_rerank/multi_hop，含降级后的实际值）
+    degraded: str | None = None  # 配置策略不可用时的降级说明
 
 
 class ProcessDocumentRequest(BaseModel):

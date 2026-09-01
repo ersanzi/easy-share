@@ -83,10 +83,10 @@ class QueryLog:
         top_score: float,
         file_ids_hit: list[str],
         answer_length: int,
-        faithfulness_avg: float,
-        unsupported_ratio: float,
+        faithfulness_avg: float | None,
+        unsupported_ratio: float | None,
     ) -> None:
-        """记录一次生成调用。"""
+        """记录一次生成调用。忠实度指标可传 None（生产链路不做逐句分析，仅驾驶舱审计计算）。"""
         with self.lock, self._connect() as conn:
             conn.execute(
                 """INSERT INTO queries
@@ -103,8 +103,8 @@ class QueryLog:
                     round(top_score, 4),
                     json.dumps(file_ids_hit, ensure_ascii=False),
                     answer_length,
-                    round(faithfulness_avg, 3),
-                    round(unsupported_ratio, 3),
+                    faithfulness_avg if faithfulness_avg is None else round(faithfulness_avg, 3),
+                    unsupported_ratio if unsupported_ratio is None else round(unsupported_ratio, 3),
                 ),
             )
             conn.commit()

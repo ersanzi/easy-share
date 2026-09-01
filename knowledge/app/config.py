@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     retrieval_top_k: int = 5
 
+    # 生产 /query 检索策略（部署级配置，不暴露给终端用户——技术参数自动推断）
+    # vector=单路向量（旧行为，embedding 故障自动降级 BM25）
+    # hybrid=向量+BM25 RRF 融合；hybrid_rerank=融合后 Cross-Encoder 精排（未配置 rerank 时等价 hybrid）
+    # multi_hop=分轮混合检索+LLM 充分性裁判（需 LLM，未配置自动降级 hybrid_rerank）
+    query_strategy: str = "hybrid"
+
     # Agent 多跳检索（需配置 LLM 做充分性裁判；预算控制防多跳上下文雪崩）
     multi_hop_max_hops: int = 3
     multi_hop_hop_top_k: int = 5

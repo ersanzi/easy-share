@@ -14,6 +14,7 @@ from app.kb.reranker import NoopReranker
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, UnavailableOCRProvider
+from app.rag.orchestrator import QueryOrchestrator
 from app.rag.retriever import Retriever
 from app.services import AppServices
 
@@ -64,7 +65,19 @@ def make_services(
     resolved_ocr = ocr_provider or UnavailableOCRProvider("OCR 已在测试配置中关闭")
     embedder = HashEmbedder(config.embedding_dim)
     vector_store = VectorStore(config.vector_store_path)
-    retriever = Retriever(embedder, vector_store, bm25=BM25Retriever())
+    # retriever 与编排层共用同一 BM25 实例（与生产 build_services 一致）
+    bm25 = BM25Retriever()
+    retriever = Retriever(embedder, vector_store, bm25=bm25)
+    reranker = NoopReranker()
+    query_log = QueryLog(str(tmp_path / "query_log.db"))
+    orchestrator = QueryOrchestrator(
+        retriever=retriever,
+        store=vector_store,
+        bm25=bm25,
+        reranker=reranker,
+        query_log=query_log,
+        strategy=config.query_strategy,
+    )
     job_store = JobStore(config.job_store_path)
     pipeline = DocumentPipeline(
         storage=resolved_storage,
@@ -84,10 +97,11 @@ def make_services(
         storage=resolved_storage,
         embedder=embedder,
         vector_store=vector_store,
-        bm25=BM25Retriever(),
-        query_log=QueryLog(str(tmp_path / "query_log.db")),
-        reranker=NoopReranker(),
+        bm25=bm25,
+        query_log=query_log,
+        reranker=reranker,
         retriever=retriever,
+        orchestrator=orchestrator,
         generator=None,
         job_store=job_store,
         pipeline=pipeline,

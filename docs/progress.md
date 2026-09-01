@@ -28,7 +28,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 里程碑 1 | 文档管线架构落地（清洗产物/版本化索引/评测集/结构感知切块/Milvus） | ✅ 2026-07-29 |
 | 里程碑 1.5 | /lab 问答页（检索+生成+引用溯源） | ✅ 2026-07-26 |
 | 里程碑 1.8 | 知识质量驾驶舱（单文档透视/策略对比/生成审计/健康度仪表盘） | 🔄 进行中 |
-| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳） | 待开始 |
+| 里程碑 1.9 | 混合检索加固（BM25 + Reranker + Agent 多跳；2026-09-01 回灌生产 /query） | ✅ 2026-09-01 |
 | 里程碑 2 | Java 控制面（账号/权限/文件登记/权限感知检索） | 暂缓（账号部分已由 ADR-0007 RuoYi 控制面落地） |
 | 里程碑 3 | WPS 插件（知识副驾驶/主动推送） | 暂缓 |
 
@@ -36,7 +36,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 **发芽路线：代码侧全部就绪，等公司部署观察（2026-09-01）**。三条线均到「代码完成」：
 
-- **知识平台**：发芽四步（2a 账号登录 / 目录监听 / 桌面端知识问答 / WPS 最小闭环）2026-08-21 完成；里程碑 1.9 检索加固 2026-08-20 完成；1.8 驾驶舱四 Tab 实现余压测；**2b/2c 权限感知检索 2026-09-01 完成**（owner 贯通入库链路，`/query` 按登录用户裁剪可见文档——公司多账号部署的隐私前提）；**一键部署向导 2026-09-01 完成**（`knowledge/scripts/deploy.ps1`，30 分钟手册变一条命令）。
+- **知识平台**：发芽四步（2a 账号登录 / 目录监听 / 桌面端知识问答 / WPS 最小闭环）2026-08-21 完成；里程碑 1.9 检索加固 2026-08-20 完成；1.8 驾驶舱四 Tab 实现余压测；**2b/2c 权限感知检索 2026-09-01 完成**（owner 贯通入库链路，`/query` 按登录用户裁剪可见文档——公司多账号部署的隐私前提）；**一键部署向导 2026-09-01 完成**（`knowledge/scripts/deploy.ps1`，30 分钟手册变一条命令）；**生产检索回灌 2026-09-01 完成**（混合/重排/多跳从驾驶舱接上生产 `/query`，策略部署级配置默认 hybrid，生产查询日志贯通——观察期数据源补齐；对标结论见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)）。
 - **账号控制面（阶段 4）**：外部批次 P0–P4 已合入并完成本仓回归（Go 18 包/vitest 33/pytest 120/wails build 全绿），KI-5 死代码已清、设置页账号资料已补。剩余真机鼠标验收（见已知阻塞）。
 - **插件生态**：插件系统 + 官方自营商城 + 剪切板旗舰插件 2.0（双形态 + Win+V 快捷面板）代码完成，Windows 冒烟过；插件仓拆分挂触发条件待执行（勿主动）。
 
@@ -116,11 +116,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 悬浮窗布局重构与固定态（切片 2，2026-08-31 外部批次合入）：浮窗加高按内容分区、固定态（固定是文件拖放的前提）、托盘图标 GUID 持久化与窗口位置/固定状态持久化。详见 [`iterations/2026-08-29-hover-widget-layout.md`](iterations/2026-08-29-hover-widget-layout.md)
 - [x] 2b 文件归属 / 2c 权限感知检索（2026-09-01）：owner 贯通任务表/manifest/索引元数据（令牌用户优先防伪造，watcher 监听目录为共享），`/query` 服务端按登录用户裁剪可见文档（共享文档所有人可见、owner 文档本人+admin、空交集短路），未登录行为不变；向量库双后端新增 `doc_owners()`；桌面端/WPS 经 Core 网关透传令牌零改动生效。pytest 新增 8 用例、全量 128 全绿；真实服务双账号冒烟隔离验证通过。详见 [`iterations/2026-09-01-permission-aware-retrieval.md`](iterations/2026-09-01-permission-aware-retrieval.md)
 - [x] 部署提效一键 bootstrap（2026-09-01）：`knowledge/scripts/deploy.ps1` 一键向导（Python 检查/RustFS 复用或 Docker 起新/venv 清华镜像/桶初始化/.env 生成/启动探活/管理员+批量同事账号/防火墙放行/自启/同事使用指引.txt），交互+无人值守双模式；`docker-compose.rustfs.yml`；`start_server.ps1`/`install_autostart.ps1` 加 -Port；**修存量缺口：requirements.txt 补 httpx（MinerU client 无条件 import，旧手册部署必炸）**；手册第一节重写为一键部署并补防火墙步骤。隔离目录真跑全流程 + 放文件自动入库 + 同事账号检索命中。详见 [`iterations/2026-09-01-deploy-bootstrap.md`](iterations/2026-09-01-deploy-bootstrap.md)
+- [x] 生产检索回灌（2026-09-01）：1.9 的混合检索/重排/多跳从 `/debug` 驾驶舱接上生产 `/query`——新增 `QueryOrchestrator` 编排层，`QUERY_STRATEGY` 部署级配置（默认 hybrid，vector 可回滚，multi_hop 无 LLM 自动降级），响应透出实际策略与降级说明；生产查询/生成事件落 `QueryLog`（观察期使用率/盲区数据源此前为空）；向量库双后端补 `count()`/`snapshot_records()` 协议，修 Milvus 无 `records` 属性导致 `/health`、BM25 降级、驾驶舱聚合崩溃的隐藏 bug。pytest 新增 5 用例、全量 133 全绿。对标背景与 P1/P2 后续（contextual chunking/OKF 化/FAQ 沉淀）见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)。详见 [`iterations/2026-09-01-production-retrieval-upgrade.md`](iterations/2026-09-01-production-retrieval-upgrade.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-01 | 生产检索回灌 — 混合/重排/多跳接上生产 /query（QueryOrchestrator + QUERY_STRATEGY + 生产查询日志）+ 修 Milvus records 隐藏 bug；附 Agent 知识库六年演进对标（agent-knowledge-benchmark.md） | 已完成（pytest 133 全绿） |
 | 2026-09-01 | 部署提效一键 bootstrap — deploy.ps1 向导（RustFS 分支/venv 镜像/.env 生成/账号/防火墙/自启/使用一页纸）+ 修 httpx 依赖缺口 | 已完成（隔离目录全流程真跑 + 端到端入库/检索验证） |
 | 2026-09-01 | 2b 文件归属 / 2c 权限感知检索 — owner 落 job/manifest/索引元数据，/query 按登录用户过滤可见文档（多账号公司部署前置） | 已完成（pytest 128 全绿 + 双账号真实链路冒烟隔离验证） |
 | 2026-09-01 | 剪切板旗舰插件 + 全局快捷面板 — 插件 2.0 重构（天分组/收藏/分类/双形态）+ Win+V / ⌘⇧V 独立小窗 + 自动粘贴 + darwin 剪切板监听；当日追加：改普通可卸载插件（首启种子+商城更新）| 代码完成（回归绿+构建过+Windows GUI 冒烟过+已上架商城；macOS 运行行为待真机） |
@@ -229,7 +231,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - **macOS 托盘链接修复重跑**：需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - **MinerU 冒烟**：三层解析路由代码已落地（2026-08-20），待真实 mineru-api 部署后冒烟（公司部署时可一并）
 - **1.8 批量压测**：2026-08-20 决策与其他测试统一做，保持后置
-- 本仓回归已于合入迭代完成（Go 18 包全绿 / vitest 33 / pytest 120 / wails build），后续以各迭代自验为准；2026-09-01 起 pytest 全量为 128（+权限切片 8）
+- 本仓回归已于合入迭代完成（Go 18 包全绿 / vitest 33 / pytest 120 / wails build），后续以各迭代自验为准；2026-09-01 起 pytest 全量为 133（+权限切片 8、+生产检索编排 5）
 - Windows CI（`build-windows.yml`）覆盖 master/PR/tag/手动触发，`dev` 推送刻意不触发以节省 runner 时长；日常 `dev` 开发仍依赖本地 `scripts/build.ps1` 全量验证与真机安装验收
 
 ## 版本约定

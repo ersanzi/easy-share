@@ -136,11 +136,9 @@ class DebugQueryRequest(BaseModel):
 
 
 def _ensure_bm25_index(services: AppServices) -> None:
-    """懒加载 BM25 索引：首次调用时从向量库记录构建。"""
-    if services.bm25.n_docs == 0:
-        with services.vector_store.lock:
-            records = list(services.vector_store.records)
-        services.bm25.rebuild(records)
+    """懒加载 BM25 索引：与向量库记录数不一致时重建（双后端协议，Milvus 亦可用的）。"""
+    if services.bm25.n_docs != services.vector_store.count():
+        services.bm25.rebuild(services.vector_store.snapshot_records())
 
 
 from app.kb.fusion import hybrid_fusion
@@ -442,9 +440,8 @@ async def knowledge_health(request: Request) -> dict:
     """知识健康度五维指标：规模、新鲜度、使用率、盲区、覆盖。"""
     services = _guard(request)
 
-    # 从向量库获取所有记录
-    with services.vector_store.lock:
-        all_records = list(services.vector_store.records)
+    # 从向量库获取所有记录（双后端协议，Milvus 亦可用的）
+    all_records = services.vector_store.snapshot_records()
 
     # 基础规模
     doc_ids: set[str] = set()

@@ -38,7 +38,7 @@ EasyShare 不做"又一个 RAG 平台"或"带 AI 的网盘"，而是**企业知�
 - **存储**（已有）：RustFS 对象存储，文件只存一份。
 - **解析清洗**：把 docx/pdf/xlsx/ppt/扫描件等转成干净、结构化的文本。整条管线质量的地基。
 - **知识萃取**：在切块之上提取原子化知识单元（事实/规则/流程/定义），携带出处、时效、关联关系。当前阶段以结构感知切块为基础，知识原子萃取为演进方向。
-- **混合检索**：向量语义检索（Milvus）+ 关键词精确检索（BM25）+ 重排序（Reranker）+ Agent 多跳（复杂问题分轮检索）。依据：2026 年行业共识，稳定事实型知识库仍用带重排序的向量 RAG，但需混合 + 多跳加固（参见 Agent-as-Retriever 趋势）。
+- **混合检索**：向量语义检索（Milvus）+ 关键词精确检索（BM25）+ 重排序（Reranker）+ Agent 多跳（复杂问题分轮检索）。依据：2026 年行业共识，稳定事实型知识库仍用带重排序的向量 RAG，但需混合 + 多跳加固（参见 Agent-as-Retriever 趋势）。**2026-09-01 起已回灌生产 `/query`**（`QueryOrchestrator` 编排，`QUERY_STRATEGY` 部署级配置默认 hybrid；对标依据见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)）。
 - **AI 生成**：检索上下文 + LLM 生成，答案逐句溯源到原文。忠实度检查：回答中的每个声明必须在检索上下文中有依据，无依据标为"疑似幻觉"。
 - **多端交付**：WPS 插件（知识副驾驶，主动推送）、Web 问答、MCP Server（任何 AI 工具可调用）。
 - **质量闭环**：知识质量驾驶舱持续监控管线各环节质量，知识健康度仪表盘度量覆盖率/新鲜度/一致性/使用率/盲区。
@@ -130,7 +130,7 @@ EasyShare 不做"又一个 RAG 平台"或"带 AI 的网盘"，而是**企业知�
 - **里程碑 1（已完成）**：TXT/Markdown/DOCX/PDF/XLSX/PPTX 与图片的统一解析、可选 PaddleOCR 扫描件识别、清洗产物、结构感知切块（标题边界 + 层级上下文 + 表格完整性）、来源追踪、异步任务、版本化索引、检索质量评测基线（42 条标注）和 Milvus 向量库迁移。
 - **里程碑 1.5（已完成）**：`/lab` 最简问答页——检索 + 生成 + 引用溯源，让价值闭环从"产物可看"走到"知识可问"，提前用真实文档验证检索与回答质量。
 - **里程碑 1.8（四 Tab 已实现，余批量压测与人工验收）**：知识质量驾驶舱——把 `/lab` 从冒烟台升级为产品质量验证工具。核心交互：输入真实业务问题 → 展示完整思考过程（意图理解→检索策略→排序→prompt→生成→溯源）→ 判断答案质量 → 一键定位瓶颈环节。含单文档透视、检索策略对比（向量/BM25/混合/多跳）、生成审计（忠实度 + context 充分性）、知识健康度仪表盘。详见 [`knowledge-quality-cockpit.md`](knowledge-quality-cockpit.md)。
-- **里程碑 1.9（已完成，2026-08-20）**：混合检索加固——Agent 多跳检索（分轮检索 + 预算控制 + hop 级日志）、BM25 降级（Embedding 故障自动切关键词检索）、Reranker 精排（OpenAI 兼容 rerank API，Noop 回退）、MCP Server 暴露（stdio 薄桥）。
+- **里程碑 1.9（已完成，2026-08-20；2026-09-01 回灌生产）**：混合检索加固——Agent 多跳检索（分轮检索 + 预算控制 + hop 级日志）、BM25 降级（Embedding 故障自动切关键词检索）、Reranker 精排（OpenAI 兼容 rerank API，Noop 回退）、MCP Server 暴露（stdio 薄桥）。各策略最初仅接驾驶舱；2026-09-01 起 `QueryOrchestrator` 编排层接入生产 `/query`（策略配置/降级链/生产查询日志），见 [`iterations/2026-09-01-production-retrieval-upgrade.md`](iterations/2026-09-01-production-retrieval-upgrade.md)。
 - **里程碑 2（薄切片路径执行中，全量暂缓）**：Java 控制面接入——账号已由 RuoYi 控制面落地（[ADR-0007](adr/0007-account-control-plane-ruoyi.md)，2026-08-31）；权限感知检索最小切片已在 Python 侧先行落地（2026-09-01，见 §3.4）；文件登记、租户/部门级权限、稳定文件身份仍属本里程碑全量范畴。
 - **里程碑 3（最小闭环已落地，2026-08-21）**：WPS 插件——「知识」页签选中段落一键查询 + 引用展示已真机验收；主动推送（知识副驾驶）未做。
 
@@ -155,6 +155,7 @@ knowledge/                  # Python AI 服务（计算面）
     kb/embedder.py          # 切块 → 向量（可替换网关）
     kb/store.py             # 向量库
     eval/retrieval.py       # 检索质量评测器（recall@k / MRR / 片段命中率）
+    rag/orchestrator.py     # 生产查询编排（策略调度 + 降级链 + 查询日志）
     rag/retriever.py        # 检索相关片段
     rag/generator.py        # 片段 + 问题 → LLM 回答
     storage/rustfs.py       # 从 RustFS 读文件
