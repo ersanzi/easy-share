@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>插件模板</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <h1>我的插件</h1>
+</header>
+
+<main>
+  <p id="hint">正在读取宿主数据…</p>
+  <button id="save">写入一条数据（storage 能力演示）</button>
+</main>
+
+<!-- 宿主统一分发的 SDK：勿自带副本 -->
+<script src="/plugins/_sdk/eshare.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

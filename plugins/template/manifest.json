@@ -1,0 +1,10 @@
+{
+  "id": "template",
+  "name": "插件模板",
+  "version": "0.1.0",
+  "description": "新插件起步模板：复制本目录改名后开始开发。manifest 权限按需删减。",
+  "icon": "🧩",
+  "entry": "index.html",
+  "author": "EasyShare",
+  "permissions": ["storage"]
+}

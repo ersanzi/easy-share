@@ -67,7 +67,7 @@
 - `easyshare-drive.yml` excludes 增 3 条匿名路径（Ant * 不跨段，admin 多段路径不命中；@SaCheckRole 注解独立于路由级白名单双重保护）
 - `scripts/publish-plugin.ps1`：读插件目录 manifest → Compress-Archive → 登录 → uploads → 直传 → publish → 匿名 latest 验证（UTF-8 带 BOM；PS5.1 中文显式 UTF8 字节）
 - 客户端商城消费：`internal/plugin/market.go`（匿名 HTTP 客户端 + 内存下载带大小校验）、PluginMarketList（按本地版本回填 updateAvailable，semver 复用 internal/update）、PluginInstallFromMarket（下载→SHA256→InstallBytes）
-- 待办周报插件 `plugins-src/todo/`（首个商城插件）：待办 CRUD（storage 持久化）+ 本周聚合周报（完成/进行中/下周计划）+ 复制（clipboard.write）+ 存云盘（drive.upload，走统一云上传任务通道）
+- 待办周报插件 `plugins/todo/`（首个商城插件）：待办 CRUD（storage 持久化）+ 本周聚合周报（完成/进行中/下周计划）+ 复制（clipboard.write）+ 存云盘（drive.upload，走统一云上传任务通道）
 
 ### 验证结果（2026-08-31）
 
@@ -86,6 +86,13 @@
 3. **更新后热重载**：PluginHost 的 iframe `:key` 含版本号——目录已原子替换 + 响应 no-store，key 变化触发 iframe 自动重载，用户无需切页。
 
 验证：权限同意冒烟（篡改包追加 clipboard.read：未同意被拒 / 同意后放行，`scripts/diag/plugin-smoke` 6.5 节）；真实更新流（todo 1.0.0 预装 → 商城发布 1.0.1 → 预览识别更新 → 权限 diff 为空 → 升级生效，`scripts/diag/market-smoke`）；Go 18 包回归 + vue-tsc + wails build 全绿。todo 插件已随本次升版 1.0.1 真实上架。
+
+### 插件工程独立化（2026-09-01，用户建议）
+
+- `plugins-src/` 更名 **`plugins/`**（根目录自包含插件工程，为将来 `git subtree split` 拆独立仓库做准备）：`README.md`（开发指南：包规范/权限表/SDK 速查/调试回路/发布流程/迁移指引）、`template/`（最小插件模板，复制改名即起步）、`todo/`、`dev/`（开发安装工具）与 `dev.ps1`（薄壳）
+- **开发热调回路**：junction 把开发目录映射进 `%LOCALAPPDATA%\EasyShare\plugins\{id}\` + 同步登记 plugins.json（宿主按登记表决定可见性与权限快照），改文件即时生效（no-store + 切页重载）；`-remove` 移除。已从商城正式安装的同名插件会被映射顶替，先卸载
+- **踩坑记录（重要，同类问题别再从头排查）**：Windows PowerShell 5.1 在本仓库 `plugins\` 目录以 `-File` 执行较大 .ps1（约 70+ 行）时 **param 块被解析丢弃**，报"找不到位置形式参数"；同字节文件在 Temp 目录执行正常、同目录最小脚本正常；删中文注释、换纯原生命令、改文件名、子进程 -Command 均绕不过（内容微调成败跳变，疑为宿主解析怪病或杀软按路径介入脚本流）。最终解法：**逻辑落 Go（`plugins/dev/main.go`，`go run`），`dev.ps1` 只做薄壳**；junction 建删走 `cmd /c mklink /J` 与 `rmdir`（Go exec 调用无此问题），幂等判断用 `os.Readlink` 成功与否（Go 对 junction 的 ModeSymlink 标记跨版本不稳）
+- 全仓回归 18 包绿；dev 工具三连验证（建立 → 幂等重跑 → 移除）通过
 
 ### 后续（批次 3 候选）
 

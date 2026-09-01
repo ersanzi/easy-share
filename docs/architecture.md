@@ -136,7 +136,7 @@ Authorization: Bearer <apiToken>
 
 **运行时边界**：插件能力调用走唯一动态通道 `PluginInvoke(pluginId, api, argsJSON)`（`appplugin.go`），Go 侧能力注册表（`internal/plugin/registry.go`）按 manifest `permissions` 鉴权——新增能力不改 Wails 绑定。首发能力：`storage.*`（按插件隔离 KV）、`clipboard.history/delete/clear/write/settings`、`clipboard.events`（变更推送）、`notification.show`、`drive.upload`（文本上传个人空间，走统一任务通道）。静态资源由 Wails AssetServer fallback Handler serve（`/plugins/{id}/...` 映射 `%LOCALAPPDATA%\EasyShare\plugins\{id}\`；`/clipboard-files/` 给剪切板图片）。安装：SHA256 校验 → 解压临时目录（zip-slip 防护）→ 原子换入 → `plugins.json` 登记；包上限 50MB。
 
-**商城（官方自营）**：插件/版本/资产放 PG（`es_plugin` / `es_plugin_release` / `es_plugin_release_asset`），zip 本体存 RustFS `plugins/{pluginId}/{version}/`，发布走与在线升级相同的两段式预签名直传。发布入口 `scripts/publish-plugin.ps1`（插件源码目录 `plugins-src/`）。
+**商城（官方自营）**：插件/版本/资产放 PG（`es_plugin` / `es_plugin_release` / `es_plugin_release_asset`），zip 本体存 RustFS `plugins/{pluginId}/{version}/`，发布走与在线升级相同的两段式预签名直传。发布入口 `scripts/publish-plugin.ps1`（插件源码目录 `plugins/`）。
 
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |

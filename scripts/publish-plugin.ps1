@@ -1,8 +1,8 @@
 ﻿# EasyShare 插件发布脚本（商城上架）：登录控制面 → 预签名直传插件 zip → 发布 → 验证清单。
 #
 # 用法（在仓库根目录）：
-#   powershell -ExecutionPolicy Bypass -File scripts/publish-plugin.ps1 -PluginDir plugins-src\todo
-#   powershell -ExecutionPolicy Bypass -File scripts/publish-plugin.ps1 -PluginDir plugins-src\todo -Version 1.0.1 -Notes "修复XX"
+#   powershell -ExecutionPolicy Bypass -File scripts/publish-plugin.ps1 -PluginDir plugins	odo
+#   powershell -ExecutionPolicy Bypass -File scripts/publish-plugin.ps1 -PluginDir plugins	odo -Version 1.0.1 -Notes "修复XX"
 #
 # 前置：控制面（RuoYi + platform-drive）已运行且已执行 easyshare-plugin.sql；RustFS 可达。
 # 流程：读取插件目录 manifest.json → 打 zip（manifest.json 必须在包根）→ 上传两段式 → 发布。
