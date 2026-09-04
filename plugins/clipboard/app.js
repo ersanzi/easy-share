@@ -525,6 +525,15 @@
   // ══════════ 面板形态初始化 ══════════
 
   function initPanel() {
+    // 宿主把实际注册到的全局热键放 URL 的 hk 参数（Win+V 被占时会静默回退，
+    // 这里展示出来，用户才找得到唤起入口；纯浏览器调试/无热键时隐藏）。
+    var hk = new URLSearchParams(location.search).get('hk');
+    if (hk) {
+      var hkEl = $('panelHotkey');
+      hkEl.querySelector('kbd').textContent = hk;
+      hkEl.hidden = false;
+    }
+
     var searchEl = $('panelSearch'), debounce;
     searchEl.addEventListener('input', function () {
       clearTimeout(debounce);

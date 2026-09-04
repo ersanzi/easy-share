@@ -17,6 +17,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -151,26 +152,40 @@ func (p *clipPanel) run(ready chan<- error) {
 		ready <- err
 		return
 	}
-	// 全局热键回退链：优先 Win+V（用户点名；会顶替系统自带的剪切板历史面板，
-	// 这正是本功能的意图）。逐级被占时回退，全失败则面板仍可用（无热键入口），
-	// 选中的组合记入日志便于告知用户。
+	// 全局热键回退链：优先 Win+V（与系统剪贴板历史同键——历史开着就抢不到，
+	// 抢到了则正是本功能的意图：顶替系统面板）。回退键刻意避开高频组合：
+	// Win+Shift+V（实测被占）与 Ctrl+Shift+V（浏览器/Office 的「粘贴为纯文本」，
+	// 全局注册会把它从所有应用手里抢走）都不进链。选中的组合会作为 hk 参数带给
+	// 面板页展示（面板底部显示实际生效快捷键），避免静默回退后用户找不到入口。
 	hotkeyCandidates := []struct {
 		mods uint32
 		vk   uint32
 		text string
 	}{
 		{winui.ModWin | winui.ModNoRepeat, winui.VKV, "Win+V"},
-		{winui.ModWin | winui.ModShift | winui.ModNoRepeat, winui.VKV, "Win+Shift+V"},
-		{winui.ModControl | winui.ModShift | winui.ModNoRepeat, winui.VKV, "Ctrl+Shift+V"},
-		{winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Alt+V"},
+		{winui.ModWin | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Win+Alt+V"},
+		{winui.ModControl | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Ctrl+Alt+V"},
+		{winui.ModAlt | winui.ModShift | winui.ModNoRepeat, winui.VKV, "Alt+Shift+V"},
 	}
+	hotkeyText := ""
 	for _, cand := range hotkeyCandidates {
 		if err := winui.RegisterHotKey(p.hwnd, p.hotkeyID, cand.mods, cand.vk); err == nil {
 			p.hotkeyMods, p.hotkeyVK = cand.mods, cand.vk
-			p.a.logger.Printf("panel: 全局热键 %s", cand.text)
+			hotkeyText = cand.text
+			if cand.text == "Win+V" {
+				p.a.logger.Printf("panel: 全局热键 %s", cand.text)
+			} else {
+				p.a.logger.Printf("panel: Win+V 被占用（Windows 剪贴板历史或其他软件），全局热键回退为 %s", cand.text)
+			}
 			break
 		}
 	}
+	if hotkeyText == "" {
+		p.a.logger.Printf("panel: 全局热键全部注册失败，快捷面板将无法用热键唤起")
+	}
+
+	// 加载面板页：带上实际注册到的热键（面板底部展示），静默回退不再让用户摸不着头脑。
+	p.chromium.Navigate(p.a.panelURL + "&hk=" + url.QueryEscape(hotkeyText))
 
 	// 事件通道：clipboard:changed / panel:shown 经此推给面板页。
 	p.a.panelEmitMu.Lock()
@@ -216,7 +231,7 @@ func (p *clipPanel) embedWebView() error {
 	if err := p.chromium.Show(); err != nil {
 		return fmt.Errorf("webview2 显示失败: %w", err)
 	}
-	chromium.Navigate(p.a.panelURL)
+	// Navigate 挪到 run() 热键注册之后：URL 需要带上实际生效的热键参数。
 	return nil
 }
 

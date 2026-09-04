@@ -478,16 +478,19 @@ func dibToPNG(dib []byte) (pngBytes []byte, width, height int, err error) {
 		return buf.Bytes(), w, h, nil
 	}
 	if bpp == 24 {
-		if len(dib) < offset+w*h*3 {
+		// DIB 每行按 4 字节对齐：行尾最多 3 字节填充（微信等按 24bpp 放图的应用
+		// 宽度常不对齐，此前按 w*3 紧凑读行导致逐行漂移——斜条纹 + 通道错位）。
+		stride := (w*3 + 3) &^ 3
+		if len(dib) < offset+stride*(h-1)+w*3 {
 			return nil, 0, 0, fmt.Errorf("24bpp 数据不足")
 		}
 		img := image.NewNRGBA(image.Rect(0, 0, w, h))
 		for y := 0; y < h; y++ {
 			srcY := y
 			if !topDown {
-				srcY = h - 1 - y
+				srcY = h - 1 - y // bottom-up 翻转
 			}
-			row := dib[offset+srcY*w*3:]
+			row := dib[offset+srcY*stride:]
 			for x := 0; x < w; x++ {
 				b, g, r := row[x*3], row[x*3+1], row[x*3+2]
 				img.SetNRGBA(x, y, colorNRGBA(r, g, b, 255))

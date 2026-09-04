@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-01
+> 每次迭代开始和结束时更新。最后更新：2026-09-02
 
 ## 路线总览
 
@@ -38,7 +38,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 - **知识平台**：发芽四步（2a 账号登录 / 目录监听 / 桌面端知识问答 / WPS 最小闭环）2026-08-21 完成；里程碑 1.9 检索加固 2026-08-20 完成；1.8 驾驶舱四 Tab 实现余压测；**2b/2c 权限感知检索 2026-09-01 完成**（owner 贯通入库链路，`/query` 按登录用户裁剪可见文档——公司多账号部署的隐私前提）；**一键部署向导 2026-09-01 完成**（`knowledge/scripts/deploy.ps1`，30 分钟手册变一条命令）；**生产检索回灌 2026-09-01 完成**（混合/重排/多跳从驾驶舱接上生产 `/query`，策略部署级配置默认 hybrid，生产查询日志贯通——观察期数据源补齐；对标结论见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)）。
 - **账号控制面（阶段 4）**：外部批次 P0–P4 已合入并完成本仓回归（Go 18 包/vitest 33/pytest 120/wails build 全绿），KI-5 死代码已清、设置页账号资料已补。剩余真机鼠标验收（见已知阻塞）。
-- **插件生态**：插件系统 + 官方自营商城 + 剪切板旗舰插件 2.0（双形态 + Win+V 快捷面板）代码完成，Windows 冒烟过；插件仓拆分挂触发条件待执行（勿主动）。
+- **插件生态**：插件系统 + 官方自营商城 + 剪切板旗舰插件 2.0（双形态 + Win+V 快捷面板）代码完成，Windows 冒烟过，2026-09-02 真机修复热键回退链与微信 24bpp 图片损坏；插件仓拆分挂触发条件待执行（勿主动）。
 
 产品核心命题："万级文档灌进去，AI 答案能不能直接用？"先验证"值不值得上线"，再解决"能不能上线"。详见 [`knowledge-platform.md`](knowledge-platform.md) 与 [`knowledge-quality-cockpit.md`](knowledge-quality-cockpit.md)；下一步唯一关键路径是照 [`company-rollout-guide.md`](company-rollout-guide.md) 公司部署两周观察。
 
@@ -122,6 +122,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-02 | 剪切板真机修复 — 热键回退链重排（Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V，面板底部显示实际生效热键）+ 微信 24bpp DIB 行对齐（图片斜纹/通道错位根因） | 已完成（单测+全量回归绿+安装版真机冒烟过：热键弹出/脚注展示/合成 DIB 全像素/真实微信截图无损） |
 | 2026-09-01 | 生产检索回灌 — 混合/重排/多跳接上生产 /query（QueryOrchestrator + QUERY_STRATEGY + 生产查询日志）+ 修 Milvus records 隐藏 bug；附 Agent 知识库六年演进对标（agent-knowledge-benchmark.md） | 已完成（pytest 133 全绿） |
 | 2026-09-01 | 部署提效一键 bootstrap — deploy.ps1 向导（RustFS 分支/venv 镜像/.env 生成/账号/防火墙/自启/使用一页纸）+ 修 httpx 依赖缺口 | 已完成（隔离目录全流程真跑 + 端到端入库/检索验证） |
 | 2026-09-01 | 2b 文件归属 / 2c 权限感知检索 — owner 落 job/manifest/索引元数据，/query 按登录用户过滤可见文档（多账号公司部署前置） | 已完成（pytest 128 全绿 + 双账号真实链路冒烟隔离验证） |
@@ -196,7 +197,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 **Linux 生产服务器部署资产**（2026-09-02 开工，当日完成代码侧）— 公司部署观察期启动，服务器为 Linux，全套上线：新增 `deploy/server-linux/`（compose：PG/Redis/RustFS/RuoYi 容器化，RustFS 9000 对 LAN 开放修正预签名直传坑；deploy.sh 一键引导；update.sh 知识服务秒级更新+失败自动回退，跟 dev 分支）+ 开发机 `scripts/ship-control-plane.ps1`（jar 只能开发机构建，传包+建表+重启+探活）；客户端指向服务器改为**构建期注入**（`build.ps1 -PlatformUrl`，`internal/config` 默认地址 const→var 走 ldflags，同事开箱即用）。验证：go test 全绿 / bash -n / compose config / PS5.1 解析全过；**真实服务器端到端待明天部署时验收**。详见 [`iterations/2026-09-02-linux-server-deploy.md`](iterations/2026-09-02-linux-server-deploy.md)。
 
-**剪切板旗舰插件 + 全局快捷面板**（2026-09-01 开工，当日完成）— 插件系统批次 3 两项（插件独立小窗口 + darwin 剪切板）与插件旗舰化合并推进：剪切板插件重构 2.0（`plugins/clipboard/`，已改为**普通可卸载插件**：首启种子安装、更新走商城、卸载即停录制收面板；源码在插件工程，主仓 embed 直读做种子）——按天分组卡片/收藏/分类/搜索/明暗双主题，同一代码带 `?panel=1` 紧凑面板形态；宿主新增「快捷面板」表面——全局热键（Win+V，被占自动回退 Win+Shift+V；mac ⌘⇧V）唤起独立小窗（Win: Win32+WebView2，mac: NSPanel+WKWebView），面板内选中条目即复制并自动粘贴回之前的焦点窗（Win+V 语义）；macOS 侧 NSPasteboard 轮询监听补齐 darwin 剪切板能力。验证：Go 回归/wails build 全绿；**Windows 真机端到端冒烟通过**（热键回退链→面板弹出→实时历史→Enter 复制→焦点切回→自动粘贴落字）；macOS 编译由 CI 把关、运行行为待真机。详见 [`iterations/2026-09-01-clipboard-flagship-panel.md`](iterations/2026-09-01-clipboard-flagship-panel.md)。
+**剪切板旗舰插件 + 全局快捷面板**（2026-09-01 开工，当日完成）— 插件系统批次 3 两项（插件独立小窗口 + darwin 剪切板）与插件旗舰化合并推进：剪切板插件重构 2.0（`plugins/clipboard/`，已改为**普通可卸载插件**：首启种子安装、更新走商城、卸载即停录制收面板；源码在插件工程，主仓 embed 直读做种子）——按天分组卡片/收藏/分类/搜索/明暗双主题，同一代码带 `?panel=1` 紧凑面板形态；宿主新增「快捷面板」表面——全局热键（Win+V，被占自动回退 Win+Shift+V；mac ⌘⇧V）唤起独立小窗（Win: Win32+WebView2，mac: NSPanel+WKWebView），面板内选中条目即复制并自动粘贴回之前的焦点窗（Win+V 语义）；macOS 侧 NSPasteboard 轮询监听补齐 darwin 剪切板能力。验证：Go 回归/wails build 全绿；**Windows 真机端到端冒烟通过**（热键回退链→面板弹出→实时历史→Enter 复制→焦点切回→自动粘贴落字）；macOS 编译由 CI 把关、运行行为待真机。**2026-09-02 真机修复**：热键回退链重排为 Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V（Win+V 被系统剪贴板历史占、旧回退 Ctrl+Shift+V 抢走各应用「粘贴为纯文本」），实际生效热键在面板底部展示；微信 24bpp DIB 行尾对齐填充解析修复（图片斜纹+通道错位根因）。详见 [`iterations/2026-09-02-clipboard-hotkey-image-fix.md`](iterations/2026-09-02-clipboard-hotkey-image-fix.md) 与 [`iterations/2026-09-01-clipboard-flagship-panel.md`](iterations/2026-09-01-clipboard-flagship-panel.md)。
 
 **桌面端插件系统 + 官方自营插件商城**（2026-08-31 开工，当日完成）— 插件 = Web 包（manifest + HTML/JS/CSS）跑在沙箱 iframe，经权限化能力 API（storage/剪切板/通知/云盘上传）调宿主，唯一动态通道 `PluginInvoke` 避开绑定级联；**剪切板记录为内置插件（不可卸载、目录被删重启即恢复）**，Win32 监听 + JSONL 环形截断 + 图片 LRU；商城由 platform-drive 承载（`es_plugin` 三表 + 两段式预签名发布，平移在线升级链路），前端「插件中心」商城/已装双 tab；**待办周报插件（`plugins/todo/`）已作为首个商城插件真实上架**（周报聚合 + 复制 + 存个人云盘）。验证：Go 18 包回归/前端构建/wails build 全绿；插件全链路冒烟（安装/鉴权/内置保护/serve 安全）通过；**商城端到端（发布→匿名列表→预签名下载→SHA256→Go 客户端安装）全部通过**。剩余：真机 UI 验收（剪切板实时记录/插件中心交互/iframe 桥，见迭代文档）。详见 [`iterations/2026-08-31-plugin-system.md`](iterations/2026-08-31-plugin-system.md)。
 
