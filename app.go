@@ -444,6 +444,11 @@ func (a *App) SaveServiceConfig(knowledgeURL string) error {
 	if base == "" {
 		return fmt.Errorf("未配置账号服务地址")
 	}
+	knowledgeURL = strings.TrimSpace(knowledgeURL)
+	// 前置校验给管理员友好文案；控制面仍会校验（两侧双保险），此处拦住最常见的笔误
+	if knowledgeURL != "" && !strings.HasPrefix(knowledgeURL, "http://") && !strings.HasPrefix(knowledgeURL, "https://") {
+		return fmt.Errorf("地址必须以 http:// 或 https:// 开头，例如 http://192.168.1.10:8000")
+	}
 	a.accountMu.Lock()
 	session := a.accountSession
 	a.accountMu.Unlock()

@@ -19,7 +19,7 @@
 
 | 事项 | 说明 |
 | --- | --- |
-| 公司 Linux 服务器部署端到端验收 | 2026-09-02 资产已写完（deploy/server-linux + ship-control-plane.ps1），待真实服务器部署验收； MinerU 冒烟、WPS 真机随部署一并做；**2026-09-06 起加：部署时应用 `deploy/ruoyi-db/easyshare-file.sql` 与 `easyshare-upload-session.sql`（目录层 + 上传会话 DDL）再 ship 新 jar** |
+| 公司 Linux 服务器部署端到端验收 | 2026-09-02 资产已写完（deploy/server-linux + ship-control-plane.ps1），待真实服务器部署验收； MinerU 冒烟、WPS 真机随部署一并做；~~部署时手动应用 DDL~~ **2026-09-06 已修：ship 脚本每次投递自动重放全部 7 个幂等 DDL（含 es_file/上传会话/部门授权），本地 Docker 演练已验** |
 | 当前未提交改动的审阅与提交推送 | ✅ 已处理（2026-09-04 用户拍板）：剪切板修复以 14c531d 提交（提交前 go build/test 全绿复验），自动化文档随本批 docs 提交入库，双远程推送 |
 | 真机鼠标验收欠账 | 登录→上传→换账号、空间盘挂载/卸载、悬浮窗交互、设置页账号卡片（见 progress.md 已知阻塞） |
 | 插件仓拆分 | 挂触发条件（插件≥3 / 外部协作者 / 发布节奏倒挂 / 客户定制），**勿主动执行**，计划在 plans/2026-09-01-plugin-repo-split.md |
@@ -86,6 +86,7 @@
 | 2026-09-06 | 用户直配轮 8（片 2 文档级可见性） | A | 数据面全量落地：es_file.visible_depts + 上传声明 + 设置端点（上传者校验）+ /objects 过滤收口（网盘/挂载盘/快搜自动生效）。/query 联动核验：/query 走知识服务本地 auth 无 deptId（原假设不成立）→ 拆片 2b（auth 部门模型 + ingest metadata 链），设计结论入迭代文档 §5。Java 39 全绿 +2 |
 | 2026-09-06 | 用户直配轮 9（片 2b 检索联动） | A | 三步全栈落地：auth dept 列（存量库自动补列/登录会话下发）→ /documents/process 透传 visible_depts（job CSV 列/metadata/manifest）→ doc_visible_depts 双后端 + visible_doc_ids 过滤。pytest 147 全绿 +3（端到端：同部门可见/异部门与无部门不可见/admin 全见）。「这文档只有研发能看」问答链路端到端生效 |
 | 2026-09-06 | 用户直配轮 10（分发冲刺：部署发安装包，员工视角痛点） | A | 五痛点全处理：租户服务发现（/easyshare/service/config，sys_config 零 DDL，知识页免手填+账号预填+管理页登记，推导回退 :8000）+ 登录页去 admin 预填/错误带地址 + NSIS 防火墙按程序放行（修互搜不到设备）+ v0.2.0 三处对齐 + build.ps1 全量跑通烧录实证 + 同事一页纸 company-desktop-guide + 分发清单六项。go 全绿 +6/vitest 40/Java 39（重踩 maven.test.skip 坑）；防火墙 UAC 真机点验与公司版构建待真实 IP |
+| 2026-09-06 | 用户直配轮 11（续轮：真机冒烟 + Docker 演练） | A | 真机静默安装 0.1.1→0.2.0 升级路径 + computer-use 首启点验三验过（空账号框/EasyShare 品牌/报错带地址指引）；**修 ship 脚本 DDL 缺口**（9-06 四个新 DDL 未入清单=部署日缺表地雷，7 个幂等 DDL 改为每次投递重放）；**控制面容器栈本地 Docker 隔离演练全绿**（11 SQL/表断言/探活 200/服务发现 API 6/6 含 403 反例/sys_config 行 DB 级核验），顺手修 ftp:// 500 文案（Go 前置校验）。新坑：Git Bash 调安装包 /S 须 MSYS_NO_PATHCONV=1（已入 AGENTS 坑表）；pytest 147 绿 |
 
 ## 自动化运行规则
 

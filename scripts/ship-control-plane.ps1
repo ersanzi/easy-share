@@ -59,7 +59,12 @@ foreach ($f in @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry
     if (-not (Test-Path $p)) { Write-Fail "缺 RuoYi 基础 SQL：$p（platform/ 工程不完整）"; exit 1 }
     $sqlSources += $p
 }
-foreach ($f in @("easyshare-space.sql", "easyshare-app-release.sql", "easyshare-plugin.sql")) {
+# EasyShare 业务表 DDL：全部 IF NOT EXISTS 幂等，每次投递都重放——
+# 新服务器建表，存量服务器随 ship 自动补新表（es_file/上传会话/部门授权等），无需手工灌增量
+$easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-visibility.sql",
+    "easyshare-space-member-type.sql", "easyshare-upload-session.sql",
+    "easyshare-app-release.sql", "easyshare-plugin.sql")
+foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }
 }
@@ -68,20 +73,26 @@ scp -q $jarLocal "${SshTarget}:$cpRemote/ruoyi-admin.jar.new"
 if ($LASTEXITCODE -ne 0) { Write-Fail "scp 传输失败（检查免密 ssh 与磁盘空间）"; exit 1 }
 Write-Ok "已传输 $($sqlSources.Count + 1) 个文件"
 
-# ── 3) 建表（幂等：库里有 sys_user 就跳过基础 SQL） ──
+# ── 3) 建表（幂等：RuoYi 基础 SQL 库里有 sys_user 就跳过；EasyShare 业务表幂等每次重放） ──
 Write-Step "检查并初始化数据库表"
 $hasSchema = ssh $SshTarget "docker exec easyshare-ruoyi-pg psql -U ruoyi -d ryvue -tAc 'select 1 from sys_user limit 1' >/dev/null 2>&1 && echo yes || echo no"
 if ($hasSchema -eq "yes") {
-    Write-Ok "基础表已存在，跳过建表（增量 SQL 请手动：docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < 文件）"
+    Write-Ok "基础表已存在，跳过 RuoYi 基础 SQL"
 } else {
-    foreach ($f in @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry_job.sql", "postgres_ry_ai.sql",
-                     "easyshare-space.sql", "easyshare-app-release.sql", "easyshare-plugin.sql")) {
+    foreach ($f in @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry_job.sql", "postgres_ry_ai.sql")) {
         $remoteSql = "$cpRemote/sql/$f"
         ssh $SshTarget "test -f $remoteSql && docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue -v ON_ERROR_STOP=1 < $remoteSql || echo skip"
         if ($LASTEXITCODE -ne 0) { Write-Fail "灌入 $f 失败"; exit 1 }
         Write-Ok "$f"
     }
-    Write-Ok "建表完成（默认账号 admin/admin123，上线后尽快在客户端管理页改密）"
+    Write-Ok "基础表完成（默认账号 admin/admin123，上线后尽快在客户端管理页改密）"
+}
+# EasyShare 业务表全部 IF NOT EXISTS：每次都重放，存量库自动补增量表
+foreach ($f in $easyshareSql) {
+    $remoteSql = "$cpRemote/sql/$f"
+    ssh $SshTarget "test -f $remoteSql && docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue -v ON_ERROR_STOP=1 < $remoteSql || echo skip"
+    if ($LASTEXITCODE -ne 0) { Write-Fail "灌入 $f 失败"; exit 1 }
+    Write-Ok "$f"
 }
 
 # ── 4) 换包重启 ──
