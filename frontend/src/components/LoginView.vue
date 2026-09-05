@@ -1,15 +1,25 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { core } from '../services/core'
 
 defineProps<{ loading: boolean; error: string }>()
 const emit = defineEmits<{ (e: 'submit', username: string, password: string): void }>()
 
 const username = ref('')
 const password = ref('')
+const platformUrl = ref('')
 const passwordInput = ref<HTMLInputElement | null>(null)
 
 // 不预填 admin：公司部署里每个同事用自己账号，预填管理员名等于诱导试默认口令
-onMounted(() => passwordInput.value?.focus())
+onMounted(async () => {
+  passwordInput.value?.focus()
+  // 常显公司服务器地址：登录失败电话支持时，员工一眼能报出连的是谁
+  try {
+    platformUrl.value = (await core.serviceEndpoints()).platformBaseUrl
+  } catch {
+    /* 拿不到就空着，不阻塞登录 */
+  }
+})
 
 const submit = () => {
   if (!username.value.trim() || !password.value) return
@@ -45,6 +55,7 @@ const submit = () => {
         <button class="login-btn" type="submit" :disabled="loading">
           {{ loading ? '登录中…' : '登录' }}
         </button>
+        <p v-if="platformUrl" class="login-server">公司服务器：{{ platformUrl }}</p>
       </form>
 
       <p class="login-hint">首次使用请联系管理员开通账号</p>
@@ -88,6 +99,7 @@ const submit = () => {
 }
 .login-field input:focus { border-color: var(--blue); }
 .login-error { margin: 0; color: var(--red); font-size: 13px; }
+.login-server { margin: -4px 0 0; text-align: center; font-size: 11px; color: var(--muted); word-break: break-all; }
 .login-btn {
   height: 42px; margin-top: 4px; border: none; border-radius: 10px;
   background: var(--blue); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;

@@ -62,6 +62,7 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | wails build 文件锁定 | 先 `Stop-Process -Name easyshare` |
 | platform-drive 编译 | 顶层 Maven 模块的父 POM 指向 `platform/pom.xml`（RuoYi 源码工程，已 gitignore）——本仓 clone 后不能直接 `mvn`，需先按 `deploy/ruoyi-db/README.md` 准备 RuoYi 工程目录 |
 | 只跑 wails build 后新 API 不生效 | `wails build` 只编桌面端壳，`build/bin/easyshare-core.exe` 不会重编——桌面端冒烟前必须 `go build -o build/bin/easyshare-core.exe ./cmd/core` 或直接跑 `scripts/build.ps1` |
+| Git Bash 调安装包静默参数失效 | MSYS 会把 `/S` 当路径转换（装出交互界面挂住），须 `MSYS_NO_PATHCONV=1 installer.exe /S`；对二进制 grep 须加 `-a` |
 | AWS SDK PutObject 非 seekable 流 | 须加 `v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware` |
 | 此电脑入口显示名异常 | 删除 CLSID 下 LocalizedString/System.Category/TileInfo 等劫持显示名的旧值 |
 | WebClient 剥离 DavWWWRoot 前缀 | webdav.Handler 用 `Prefix:"/"` 即正确，不要设 `/DavWWWRoot` |

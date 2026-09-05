@@ -110,7 +110,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -PlatformUrl http://<
 **分发清单（发群前逐项过一遍）**：
 
 1. ☐ 服务器部署完成，`http://<IP>:8090` 与 `:8000` 从同事网段可达；
-2. ☐ admin 默认口令已改；同事账号已批量开通（管理页「账号」Tab，或 deploy.sh 向导）；
+2. ☐ admin 默认口令已改；同事账号已批量开通（管理页「账号」Tab，或 deploy.sh 向导）；**知识服务账号同步开通且与登录同名**（同事端会按登录名预填，deploy.ps1 向导已代劳）；
 3. ☐ 管理页「服务配置」已登记知识服务地址（不登记也行，同主机推导兜底）；
 4. ☐ `build.ps1 -PlatformUrl http://<IP>:8090` 产出的公司版安装包 **v0.2.0+**；
 5. ☐ 杀毒软件（360/火绒/Defender 企业控制台）把安装包与 `easyshare.exe`/`easyshare-core.exe` 加白，减少员工侧误报弹窗；
