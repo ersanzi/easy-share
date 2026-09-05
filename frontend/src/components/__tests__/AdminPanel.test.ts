@@ -10,6 +10,7 @@ const adminGrantShared = vi.fn()
 const adminListSpaces = vi.fn()
 const adminSharedMembers = vi.fn()
 const adminCapacity = vi.fn()
+const adminListDepts = vi.fn()
 
 vi.mock('../../services/core', () => ({
   core: {
@@ -28,6 +29,7 @@ vi.mock('../../services/core', () => ({
     adminRegisterEnabled: () => Promise.resolve(false),
     adminListSpaces: () => adminListSpaces(),
     adminSharedMembers: () => adminSharedMembers(),
+    adminListDepts: () => adminListDepts(),
     adminCapacity: () => adminCapacity(),
     adminSetPersonalQuota: (...args: unknown[]) => adminSetPersonalQuota(...args),
     adminSetSharedQuota: (...args: unknown[]) => adminSetSharedQuota(...args),
@@ -60,7 +62,8 @@ beforeEach(() => {
   adminSetPersonalQuota.mockResolvedValue(undefined)
   adminSetSharedQuota.mockResolvedValue(undefined)
   adminGrantShared.mockResolvedValue(undefined)
-  adminSharedMembers.mockResolvedValue({})
+  adminSharedMembers.mockResolvedValue([])
+  adminListDepts.mockResolvedValue([])
   adminListSpaces.mockResolvedValue([sharedSpace])
   adminCapacity.mockResolvedValue({
     enabled: true,
@@ -118,21 +121,31 @@ describe('AdminPanel 空间分配', () => {
   })
 
   it('共享权限按 无 → 只读 → 读写 → 无 轮转', async () => {
+    // 组件授权后会重新拉列表：mock 按调用次序返回逐步推进的授权行
+    const member = (permission: string) => [{
+      memberType: 'user', memberId: '1761300000000000042', permission, name: '',
+    }]
+    adminSharedMembers
+      .mockResolvedValueOnce(member(''))
+      .mockResolvedValueOnce(member('read'))
+      .mockResolvedValueOnce(member('write'))
+      .mockResolvedValueOnce(member(''))
+
     const wrapper = await mountSpaces()
     const perm = wrapper.find('.admin-perm')
     expect(perm.text()).toBe('无权限')
 
     await perm.trigger('click')
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(adminGrantShared).toHaveBeenLastCalledWith('1761300000000000042', 'read')
+    expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', 'read')
 
     await wrapper.find('.admin-perm').trigger('click')
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(adminGrantShared).toHaveBeenLastCalledWith('1761300000000000042', 'write')
+    expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', 'write')
 
     await wrapper.find('.admin-perm').trigger('click')
     await new Promise(resolve => setTimeout(resolve, 0))
-    expect(adminGrantShared).toHaveBeenLastCalledWith('1761300000000000042', '')
+    expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', '')
   })
 
   it('未分配空间的账号显示待开空间', async () => {

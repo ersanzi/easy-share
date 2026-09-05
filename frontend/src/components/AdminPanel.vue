@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
-import { QUOTA_UNLIMITED, QUOTA_UNSET, type Capacity, type ManagedUser, type Space } from '../types/core'
+import { QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminSharedMember, type Capacity, type ManagedUser, type Space } from '../types/core'
 
 type Tab = 'accounts' | 'spaces'
 
@@ -24,7 +24,9 @@ const fail = (e: unknown) => notify(e instanceof Error ? e.message : String(e), 
 
 // ═══ 空间 ═══
 const spaces = ref<Space[]>([])
-const sharedMembers = ref<Record<string, string>>({})
+const sharedMembers = ref<AdminSharedMember[]>([])
+const depts = ref<AdminDept[]>([])
+const deptForm = ref<{ deptId: string; permission: string }>({ deptId: '', permission: 'read' })
 const spacesLoading = ref(false)
 // 每个账号的配额输入框各自的草稿值（GB），键是 userId；共享空间用 'shared'。
 // 值可能是 number：Vue 的 v-model 对 <input type="number"> 会自动做数字转换，
@@ -73,14 +75,16 @@ const overcommitted = computed(() => {
 const loadSpaces = async () => {
   spacesLoading.value = true
   try {
-    const [list, members, cap] = await Promise.all([
+    const [list, members, cap, deptList] = await Promise.all([
       core.adminListSpaces(),
       core.adminSharedMembers(),
       core.adminCapacity(),
+      core.adminListDepts().catch(() => []),
     ])
     spaces.value = list ?? []
-    sharedMembers.value = members ?? {}
+    sharedMembers.value = members ?? []
     capacity.value = cap ?? null
+    depts.value = deptList ?? []
     // 草稿值以服务端为准重置，避免上次没提交的输入残留成假象
     const draft: Record<string, string> = {}
     for (const space of spaces.value) {
@@ -141,16 +145,20 @@ const savePersonalQuota = async (user: ManagedUser) => {
   }
 }
 
-// 共享空间权限三态轮转：无 → 只读 → 读写 → 无
+// 某账号的显式授权行（不含部门继承——生效规则是个人行与部门行取宽，见控制面 SpaceService）
+const userMemberRow = (userId: string) => sharedMembers.value.find(m => m.memberType === 'user' && m.memberId === userId)
+const deptMemberRows = computed(() => sharedMembers.value.filter(m => m.memberType === 'dept'))
+
+// 共享空间权限三态轮转：无 → 只读 → 读写 → 无（仅操作个人显式授权）
 const cycleSharedPermission = async (user: ManagedUser) => {
-  const current = sharedMembers.value[user.userId] ?? ''
+  const current = userMemberRow(user.userId)?.permission ?? ''
   const next = current === '' ? 'read' : current === 'read' ? 'write' : ''
   busyId.value = user.userId
   try {
-    await core.adminGrantShared(user.userId, next)
+    await core.adminGrantShared('user', user.userId, next)
     const label = next === '' ? '已撤销共享空间权限' : next === 'read' ? '已设为只读' : '已设为读写'
     notify(`${user.nickName || user.userName}：${label}`)
-    sharedMembers.value = { ...sharedMembers.value, [user.userId]: next }
+    await loadSpaces()
   } catch (e) {
     fail(e)
   } finally {
@@ -159,8 +167,46 @@ const cycleSharedPermission = async (user: ManagedUser) => {
 }
 
 const permissionLabel = (userId: string) => {
-  const perm = sharedMembers.value[userId] ?? ''
+  const perm = userMemberRow(userId)?.permission ?? ''
   return perm === 'write' ? '读写' : perm === 'read' ? '只读' : '无权限'
+}
+
+// ── 部门授权（片 1）：整部门生效，个人显式授权与其取宽 ──
+const deptBusy = ref(false)
+const addDeptAuth = async () => {
+  if (!deptForm.value.deptId) {
+    notify('请选择部门', 'error')
+    return
+  }
+  deptBusy.value = true
+  try {
+    await core.adminGrantShared('dept', deptForm.value.deptId, deptForm.value.permission)
+    notify(deptForm.value.permission === 'write' ? '部门已可读写共享空间' : '部门已可只读共享空间')
+    deptForm.value = { deptId: '', permission: 'read' }
+    await loadSpaces()
+  } catch (e) {
+    fail(e)
+  } finally {
+    deptBusy.value = false
+  }
+}
+const revokeDeptAuth = async (row: AdminSharedMember) => {
+  deptBusy.value = true
+  try {
+    await core.adminGrantShared('dept', row.memberId, '')
+    notify(`已撤销部门「${row.name || row.memberId}」的授权`)
+    await loadSpaces()
+  } catch (e) {
+    fail(e)
+  } finally {
+    deptBusy.value = false
+  }
+}
+const onDeptChange = (event: Event) => {
+  deptForm.value.deptId = (event.target as HTMLSelectElement).value
+}
+const onDeptPermChange = (event: Event) => {
+  deptForm.value.permission = (event.target as HTMLSelectElement).value
 }
 
 const creating = ref(false)
@@ -495,7 +541,7 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
 
             <!-- 共享空间权限：点击轮转 无 → 只读 → 读写 → 无 -->
             <button
-              :class="['admin-perm', sharedMembers[user.userId] || 'none']"
+              :class="['admin-perm', userMemberRow(user.userId)?.permission || 'none']"
               type="button" :disabled="busyId === user.userId"
               :title="`共享空间：${permissionLabel(user.userId)}，点击切换`"
               @click="cycleSharedPermission(user)"
@@ -512,6 +558,35 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
         <p class="setting-hint">
           容量留空即收回，账号在客户端会显示为「待开空间」。配额在控制面签发上传授权时校验。
         </p>
+
+        <div class="dept-auth">
+          <div class="admin-usage-head"><span>按部门授权</span></div>
+          <div class="dept-auth-form">
+            <select class="dept-select" :value="deptForm.deptId" @change="onDeptChange">
+              <option value="">选择部门…</option>
+              <option v-for="dept in depts" :key="dept.deptId" :value="dept.deptId">{{ dept.deptName }}</option>
+            </select>
+            <select class="dept-select" :value="deptForm.permission" @change="onDeptPermChange">
+              <option value="read">只读</option>
+              <option value="write">读写</option>
+            </select>
+            <button class="primary-button compact" type="button" :disabled="deptBusy || !deptForm.deptId" @click="addDeptAuth">授权</button>
+          </div>
+          <ul v-if="deptMemberRows.length" class="admin-user-list">
+            <li v-for="row in deptMemberRows" :key="row.memberId" class="admin-user-row">
+              <div class="admin-user-main">
+                <strong>🏢 {{ row.name || row.memberId }}</strong>
+                <span>{{ row.permission === 'write' ? '读写' : '只读' }} · 整部门生效</span>
+              </div>
+              <div class="admin-row-actions">
+                <button class="secondary-button compact" type="button" :disabled="deptBusy" @click="revokeDeptAuth(row)">撤销</button>
+              </div>
+            </li>
+          </ul>
+          <p class="setting-hint">
+            部门授权对该部门全部成员生效；账号的显式授权与部门授权取宽（读写优先于只读）。
+          </p>
+        </div>
       </section>
     </template>
   </div>

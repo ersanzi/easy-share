@@ -25,12 +25,22 @@ public class EsSpaceMember extends BaseEntity {
     /** 读写 */
     public static final String PERM_WRITE = "write";
 
+    /** 授权主体：账号（user_id 列 = 用户 ID，默认值，存量行即此型） */
+    public static final String TYPE_USER = "user";
+
+    /** 授权主体：部门（user_id 列 = 部门 ID，列名不动、语义复用） */
+    public static final String TYPE_DEPT = "dept";
+
     @TableId(value = "id")
     private Long id;
 
     private Long spaceId;
 
+    /** 主体 ID：user 型=用户 ID、dept 型=部门 ID（列名保持兼容） */
     private Long userId;
+
+    /** 授权主体类型：user / dept */
+    private String memberType;
 
     /** read / write */
     private String permission;

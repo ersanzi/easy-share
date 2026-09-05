@@ -156,6 +156,20 @@ export interface ManagedUserPage {
   rows: ManagedUser[]
 }
 
+// 共享空间授权主体（部门级权限：user=按账号、dept=按部门）
+export interface AdminSharedMember {
+  memberType: string
+  memberId: string
+  permission: string
+  name: string
+}
+
+// 管理页部门下拉条目（控制面只读投影 sys_dept）
+export interface AdminDept {
+  deptId: string
+  deptName: string
+}
+
 // 容量总览。逐空间配额看不出「承诺总量是否超过物理磁盘」，这个视图专为此存在。
 export interface Capacity {
   // enabled 为 false 表示控制面未配置容量探测路径，池上限不生效

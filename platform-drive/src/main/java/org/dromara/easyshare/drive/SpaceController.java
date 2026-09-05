@@ -44,6 +44,8 @@ public class SpaceController {
     private final SpaceUsageService usageService;
     private final CapacityService capacityService;
     private final DriveProperties properties;
+    private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper userDeptMapper;
+    private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper deptRowMapper;
 
     /**
      * 当前登录账号可见的空间：个人空间 + 有权限时的共享空间。
@@ -125,16 +127,42 @@ public class SpaceController {
     }
 
     /**
-     * 共享空间的成员授权，供管理页显示每个账号的读写状态。
+     * 共享空间的成员授权，供管理页显示（部门级权限片 1：主体含账号与部门两类）。
+     * name 为显示名（账号=昵称/登录名，部门=部门名），解析失败留空由前端兜底。
      *
-     * @return 账号 ID → read/write
+     * @return 授权主体列表
      */
     @SaCheckRole("superadmin")
     @GetMapping("/admin/shared-members")
-    public R<Map<String, String>> sharedMembers() {
-        Map<String, String> result = new java.util.HashMap<>();
-        spaceService.listSharedMembers().forEach(m ->
-            result.put(String.valueOf(m.getUserId()), m.getPermission()));
+    public R<List<MemberVo>> sharedMembers() {
+        List<MemberVo> result = new ArrayList<>();
+        for (org.dromara.easyshare.drive.domain.EsSpaceMember member : spaceService.listSharedMembers()) {
+            String name = "";
+            if (org.dromara.easyshare.drive.domain.EsSpaceMember.TYPE_DEPT.equals(member.getMemberType())) {
+                var dept = deptRowMapper.selectById(member.getUserId());
+                name = dept == null ? "" : dept.getDeptName();
+            } else {
+                var user = userDeptMapper.selectById(member.getUserId());
+                if (user != null) {
+                    name = user.getNickName() == null || user.getNickName().isBlank()
+                        ? user.getUserName() : user.getNickName();
+                }
+            }
+            result.add(new MemberVo(member.getMemberType(), String.valueOf(member.getUserId()),
+                member.getPermission(), name));
+        }
+        return R.ok(result);
+    }
+
+    /**
+     * 部门下拉数据源（启用中未删除）。
+     */
+    @SaCheckRole("superadmin")
+    @GetMapping("/admin/depts")
+    public R<List<DeptVo>> depts() {
+        List<DeptVo> result = new ArrayList<>();
+        spaceService.listDepts().forEach(dept ->
+            result.add(new DeptVo(String.valueOf(dept.getDeptId()), dept.getDeptName())));
         return R.ok(result);
     }
 
@@ -169,15 +197,17 @@ public class SpaceController {
     }
 
     /**
-     * 授予或撤销某账号对共享空间的权限。
+     * 授予或撤销某主体（账号/部门）对共享空间的权限。
      *
-     * @param body 账号 ID 与权限（permission 传空即撤销）
+     * @param body 主体类型/主体 ID 与权限（permission 传空即撤销）
      * @return 操作结果
      */
     @SaCheckRole("superadmin")
     @PostMapping("/admin/shared-grant")
     public R<Void> grantShared(@Validated @RequestBody GrantBo body) {
-        spaceService.grantShared(parseId(body.userId()), body.permission());
+        spaceService.grantSharedTo(body.memberType() == null || body.memberType().isBlank()
+            ? org.dromara.easyshare.drive.domain.EsSpaceMember.TYPE_USER
+            : body.memberType(), parseId(body.userId()), body.permission());
         return R.ok();
     }
 
@@ -225,8 +255,15 @@ public class SpaceController {
      * @param userId     账号 ID
      * @param permission read / write，空字符串表示撤销
      */
+    public record MemberVo(String memberType, String memberId, String permission, String name) {
+    }
+
+    public record DeptVo(String deptId, String deptName) {
+    }
+
     public record GrantBo(
-        @NotBlank(message = "账号标识不能为空") String userId,
+        @NotBlank(message = "主体标识不能为空") String userId,
+        String memberType,
         String permission) {
     }
 }

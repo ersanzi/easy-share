@@ -500,6 +500,38 @@ export namespace knowledge {
 
 export namespace main {
 	
+	export class AdminDept {
+	    deptId: string;
+	    deptName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminDept(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deptId = source["deptId"];
+	        this.deptName = source["deptName"];
+	    }
+	}
+	export class AdminSharedMember {
+	    memberType: string;
+	    memberId: string;
+	    permission: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminSharedMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memberType = source["memberType"];
+	        this.memberId = source["memberId"];
+	        this.permission = source["permission"];
+	        this.name = source["name"];
+	    }
+	}
 	export class AuthUser {
 	    loggedIn: boolean;
 	    userName: string;

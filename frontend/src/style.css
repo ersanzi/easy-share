@@ -1076,3 +1076,11 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .plugin-switch.on { background: var(--green); }
 .plugin-switch.on::after { left: 16px; }
 .plugin-switch.disabled { opacity: .35; cursor: not-allowed; }
+
+/* 管理页部门授权（2026-09-06） */
+.dept-auth { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(60,60,67,.08); }
+.dept-auth-form { display: flex; gap: 8px; align-items: center; padding: 4px 0 8px; }
+.dept-select {
+  padding: 6px 8px; border: 1px solid rgba(60,60,67,.14); border-radius: 8px;
+  background: #fff; color: var(--text); font-size: 11px; outline: none;
+}

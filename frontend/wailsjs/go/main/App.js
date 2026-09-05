@@ -22,8 +22,12 @@ export function AdminDeleteUser(arg1) {
   return window['go']['main']['App']['AdminDeleteUser'](arg1);
 }
 
-export function AdminGrantShared(arg1, arg2) {
-  return window['go']['main']['App']['AdminGrantShared'](arg1, arg2);
+export function AdminGrantShared(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AdminGrantShared'](arg1, arg2, arg3);
+}
+
+export function AdminListDepts() {
+  return window['go']['main']['App']['AdminListDepts']();
 }
 
 export function AdminListSpaces() {

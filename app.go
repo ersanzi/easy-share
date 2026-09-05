@@ -626,8 +626,22 @@ func (a *App) AdminCapacity() (*account.Capacity, error) {
 	return capacity, err
 }
 
-// AdminSharedMembers 取共享空间的成员授权：账号 ID → read/write。
-func (a *App) AdminSharedMembers() (map[string]string, error) {
+// AdminSharedMember 共享空间授权主体（管理页显示用）。
+type AdminSharedMember struct {
+	MemberType string `json:"memberType"`
+	MemberID   string `json:"memberId"`
+	Permission string `json:"permission"`
+	Name       string `json:"name"`
+}
+
+// AdminDept 管理页部门下拉条目。
+type AdminDept struct {
+	DeptID   string `json:"deptId"`
+	DeptName string `json:"deptName"`
+}
+
+// AdminSharedMembers 取共享空间授权主体（账号/部门）。
+func (a *App) AdminSharedMembers() ([]AdminSharedMember, error) {
 	client, token, err := a.adminSession()
 	if err != nil {
 		return nil, err
@@ -636,7 +650,31 @@ func (a *App) AdminSharedMembers() (map[string]string, error) {
 	defer cancel()
 	members, err := client.SharedMembers(ctx, token)
 	a.reportError("admin list shared members", err)
-	return members, err
+	result := make([]AdminSharedMember, 0, len(members))
+	for _, member := range members {
+		result = append(result, AdminSharedMember{
+			MemberType: member.MemberType, MemberID: member.MemberID,
+			Permission: member.Permission, Name: member.Name,
+		})
+	}
+	return result, err
+}
+
+// AdminListDepts 部门下拉数据源（启用中未删除）。
+func (a *App) AdminListDepts() ([]AdminDept, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	depts, err := client.ListDepts(ctx, token)
+	a.reportError("admin list depts", err)
+	result := make([]AdminDept, 0, len(depts))
+	for _, dept := range depts {
+		result = append(result, AdminDept{DeptID: dept.DeptID, DeptName: dept.DeptName})
+	}
+	return result, err
 }
 
 // AdminSetPersonalQuota 设定某账号的个人空间容量。0 收回、-1 不限。
@@ -674,17 +712,17 @@ func (a *App) AdminSetSharedQuota(quotaBytes int64) error {
 	return err
 }
 
-// AdminGrantShared 授予或撤销某账号对共享空间的权限。permission 传空即撤销。
-func (a *App) AdminGrantShared(userID, permission string) error {
+// AdminGrantShared 授予或撤销某主体（账号/部门）对共享空间的权限。permission 传空即撤销。
+func (a *App) AdminGrantShared(memberType, memberID, permission string) error {
 	client, token, err := a.adminSession()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	err = client.GrantShared(ctx, token, userID, permission)
+	err = client.GrantShared(ctx, token, memberType, memberID, permission)
 	if err == nil {
-		a.logger.Printf("admin set shared permission for %s to %q", userID, permission)
+		a.logger.Printf("admin set shared permission for %s(%s) to %q", memberType, memberID, permission)
 		// 撤销自己的授权时，共享盘要从「此电脑」里消失
 		go a.refreshSpaceMounts()
 	}

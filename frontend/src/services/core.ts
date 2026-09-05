@@ -13,6 +13,7 @@
   AdminSetRegisterEnabled,
   AdminSetSharedQuota,
   AdminSetUserStatus,
+  AdminListDepts,
   AdminSharedMembers,
   AppVersion,
   ApplyUpdate,
@@ -73,6 +74,8 @@ import type {
   CloudPreview as CloudPreviewData,
   CoreSnapshot,
   DroppedFiles,
+  AdminDept,
+  AdminSharedMember,
   KnowledgeAnswer,
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
@@ -146,10 +149,12 @@ export const core = {
   mySpaces: () => MySpaces() as Promise<Space[]>,
   adminListSpaces: () => AdminListSpaces() as Promise<Space[]>,
   adminCapacity: () => AdminCapacity() as Promise<Capacity>,
-  adminSharedMembers: () => AdminSharedMembers() as Promise<Record<string, string>>,
+  adminSharedMembers: () => AdminSharedMembers() as Promise<AdminSharedMember[]>,
+  adminListDepts: () => AdminListDepts() as Promise<AdminDept[]>,
+  adminGrantShared: (memberType: string, memberId: string, permission: string) =>
+    AdminGrantShared(memberType, memberId, permission) as Promise<void>,
   adminSetPersonalQuota: AdminSetPersonalQuota,
   adminSetSharedQuota: AdminSetSharedQuota,
-  adminGrantShared: AdminGrantShared,
   // RuoYi 自带后台：仅本产品不复刻的运维动作（菜单/字典/定时任务）用得到
   openAdminConsole: OpenAdminConsole,
   // 在线升级（appupdate.go）：检查 → 下载（进度经 update:progress 事件）→ 应用

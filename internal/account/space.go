@@ -1,6 +1,7 @@
 package account
 
 import (
+	"encoding/json"
 	"context"
 	"fmt"
 )
@@ -106,12 +107,49 @@ func (c *Client) ListSpaces(ctx context.Context, token string) ([]Space, error) 
 }
 
 // SharedMembers 取共享空间的成员授权：账号 ID → read/write。仅管理员可调。
-func (c *Client) SharedMembers(ctx context.Context, token string) (map[string]string, error) {
-	members := map[string]string{}
-	if err := c.getJSON(ctx, "/easyshare/space/admin/shared-members", token, &members); err != nil {
+// SharedMember 共享空间授权主体（部门级权限片 1，2026-09-06）。
+type SharedMember struct {
+	MemberType string `json:"memberType"` // user / dept
+	MemberID   string `json:"memberId"`
+	Permission string `json:"permission"`
+	Name       string `json:"name"`
+}
+
+// SharedMembers 取共享空间授权主体列表。部署窗口期兼容：老控制面返回
+// map[userId]permission（纯账号口径），自动转换为 user 型成员列表。
+func (c *Client) SharedMembers(ctx context.Context, token string) ([]SharedMember, error) {
+	var raw json.RawMessage
+	if err := c.getJSON(ctx, "/easyshare/space/admin/shared-members", token, &raw); err != nil {
 		return nil, err
 	}
+	var list []SharedMember
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list, nil
+	}
+	var legacy map[string]string
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return nil, fmt.Errorf("共享成员响应无法解析")
+	}
+	members := make([]SharedMember, 0, len(legacy))
+	for id, permission := range legacy {
+		members = append(members, SharedMember{MemberType: "user", MemberID: id, Permission: permission})
+	}
 	return members, nil
+}
+
+// Dept 管理页部门下拉条目。
+type Dept struct {
+	DeptID   string `json:"deptId"`
+	DeptName string `json:"deptName"`
+}
+
+// ListDepts 启用中的部门列表（控制面只读投影 sys_dept）。
+func (c *Client) ListDepts(ctx context.Context, token string) ([]Dept, error) {
+	var depts []Dept
+	if err := c.getJSON(ctx, "/easyshare/space/admin/depts", token, &depts); err != nil {
+		return nil, err
+	}
+	return depts, nil
 }
 
 // SetPersonalQuota 设定某账号的个人空间容量。
@@ -132,15 +170,18 @@ func (c *Client) SetSharedQuota(ctx context.Context, token string, quotaBytes in
 	return c.postValue(ctx, "/easyshare/space/admin/shared-quota", token, body, nil)
 }
 
-// GrantShared 授予或撤销某账号对共享空间的权限。permission 传空字符串即撤销。
-func (c *Client) GrantShared(ctx context.Context, token, userID, permission string) error {
-	if err := validateUserID(userID); err != nil {
+// GrantShared 授予或撤销某主体（账号/部门）对共享空间的权限。permission 传空字符串即撤销。
+func (c *Client) GrantShared(ctx context.Context, token, memberType, memberID, permission string) error {
+	if err := validateUserID(memberID); err != nil {
 		return err
 	}
 	if permission != "" && permission != PermRead && permission != PermWrite {
 		return fmt.Errorf("权限取值只能是 read 或 write")
 	}
-	body := map[string]any{"userId": userID, "permission": permission}
+	if memberType != "user" && memberType != "dept" {
+		return fmt.Errorf("授权主体类型非法")
+	}
+	body := map[string]any{"userId": memberID, "memberType": memberType, "permission": permission}
 	return c.postValue(ctx, "/easyshare/space/admin/shared-grant", token, body, nil)
 }
 

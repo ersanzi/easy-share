@@ -28,6 +28,8 @@ public class SpaceService {
     private final EsSpaceMemberMapper memberMapper;
     private final SpaceUsageService usageService;
     private final CapacityService capacityService;
+    private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
+    private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper sysDeptRowMapper;
 
     /**
      * 取个人空间，未开通返回 null。
@@ -121,12 +123,28 @@ public class SpaceService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void grantShared(Long userId, String permission) {
-        if (userId == null || userId <= 0) {
-            throw new ServiceException("账号标识非法");
+        grantSharedTo(EsSpaceMember.TYPE_USER, userId, permission);
+    }
+
+    /**
+     * 授予或撤销某主体（账号/部门）对共享空间的权限（部门级权限片 1，2026-09-06）。
+     *
+     * @param memberType user=账号、dept=部门
+     * @param memberId   主体 ID（账号 ID 或部门 ID）
+     * @param permission read 只读、write 读写、null/空 撤销
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void grantSharedTo(String memberType, Long memberId, String permission) {
+        if (!EsSpaceMember.TYPE_USER.equals(memberType) && !EsSpaceMember.TYPE_DEPT.equals(memberType)) {
+            throw new ServiceException("授权主体类型非法");
+        }
+        if (memberId == null || memberId <= 0) {
+            throw new ServiceException("授权主体标识非法");
         }
         EsSpaceMember existing = memberMapper.selectOne(Wrappers.<EsSpaceMember>lambdaQuery()
             .eq(EsSpaceMember::getSpaceId, EsSpace.SHARED_SPACE_ID)
-            .eq(EsSpaceMember::getUserId, userId));
+            .eq(EsSpaceMember::getMemberType, memberType)
+            .eq(EsSpaceMember::getUserId, memberId));
         if (permission == null || permission.isBlank()) {
             if (existing != null) {
                 memberMapper.deleteById(existing.getId());
@@ -139,13 +157,32 @@ public class SpaceService {
         if (existing == null) {
             EsSpaceMember member = new EsSpaceMember();
             member.setSpaceId(EsSpace.SHARED_SPACE_ID);
-            member.setUserId(userId);
+            member.setMemberType(memberType);
+            member.setUserId(memberId);
             member.setPermission(permission);
             memberMapper.insert(member);
             return;
         }
         existing.setPermission(permission);
         memberMapper.updateById(existing);
+    }
+
+    /**
+     * 部门下拉数据源：启用中且未删除的部门。
+     */
+    public List<org.dromara.easyshare.drive.domain.SysDeptRow> listDepts() {
+        return sysDeptRowMapper.selectList(Wrappers.<org.dromara.easyshare.drive.domain.SysDeptRow>lambdaQuery()
+            .eq(org.dromara.easyshare.drive.domain.SysDeptRow::getStatus, "0")
+            .eq(org.dromara.easyshare.drive.domain.SysDeptRow::getDelFlag, "0")
+            .orderByAsc(org.dromara.easyshare.drive.domain.SysDeptRow::getDeptId));
+    }
+
+    /**
+     * 用户所属部门 ID；无部门（超管/独立账号）返回 null。
+     */
+    public Long deptIdOf(Long userId) {
+        org.dromara.easyshare.drive.domain.SysUserDept user = sysUserDeptMapper.selectById(userId);
+        return user == null ? null : user.getDeptId();
     }
 
     /**
@@ -159,16 +196,39 @@ public class SpaceService {
     }
 
     /**
-     * 取某账号对共享空间的权限，未授权返回 null。
+     * 取某账号对共享空间的**生效权限**：显式个人行与所属部门行取宽（write > read）。
+     * 显式个人授权不会被部门只读压窄——收窄要么删个人行、要么删部门行，规则可预期。
      *
      * @param userId 账号 ID
-     * @return read / write / null
+     * @return read / write / null（未授权）
      */
     public String sharedPermissionOf(Long userId) {
+        String effective = memberPermissionOf(EsSpaceMember.TYPE_USER, userId);
+        Long deptId = deptIdOf(userId);
+        if (deptId != null && deptId > 0) {
+            effective = widen(effective, memberPermissionOf(EsSpaceMember.TYPE_DEPT, deptId));
+        }
+        return effective;
+    }
+
+    private String memberPermissionOf(String memberType, Long memberId) {
         EsSpaceMember member = memberMapper.selectOne(Wrappers.<EsSpaceMember>lambdaQuery()
             .eq(EsSpaceMember::getSpaceId, EsSpace.SHARED_SPACE_ID)
-            .eq(EsSpaceMember::getUserId, userId));
+            .eq(EsSpaceMember::getMemberType, memberType)
+            .eq(EsSpaceMember::getUserId, memberId));
         return member == null ? null : member.getPermission();
+    }
+
+    private static String widen(String current, String candidate) {
+        if (candidate == null) {
+            return current;
+        }
+        if (current == null) {
+            return candidate;
+        }
+        return EsSpaceMember.PERM_WRITE.equals(current) || EsSpaceMember.PERM_WRITE.equals(candidate)
+            ? EsSpaceMember.PERM_WRITE
+            : EsSpaceMember.PERM_READ;
     }
 
     /**
