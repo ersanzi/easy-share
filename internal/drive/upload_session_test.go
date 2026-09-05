@@ -200,4 +200,3 @@ func TestFingerprintChangesWithSizeAndTime(t *testing.T) {
 		t.Fatal("空间变化应换指纹")
 	}
 }
-

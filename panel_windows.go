@@ -47,6 +47,10 @@ const (
 type clipPanel struct {
 	a *App
 
+	// kind 表面类型：clip=剪切板快捷面板（既有）；search=全局搜索面板（2026-09-06）。
+	// URL/尺寸/热键链都按 kind 取自 panelSurfaceSpec。
+	kind string
+
 	hwnd     uintptr
 	chromium *edge.Chromium
 
@@ -71,7 +75,65 @@ var (
 	// panelAlive 面板线程存活标记：startPanel 幂等守卫，cleanup 时清除。
 	// 卸载剪切板插件时 stopPanel 销毁面板线程，重装后 startPanel 可再建。
 	panelAlive atomic.Bool
+
+	// searchPanelAlive 搜索面板存活标记（独立表面独立守卫）。
+	searchPanelAlive atomic.Bool
 )
+
+// panelSurfaceSpec 面板表面的窗口标题/尺寸/URL/热键链差异全部收拢在此。
+type panelSurfaceSpec struct {
+	title      string
+	width      int32
+	height     int32
+	hotkeyID   int32
+	candidates []struct {
+		mods uint32
+		vk   uint32
+		text string
+	}
+}
+
+func (p *clipPanel) spec() panelSurfaceSpec {
+	if p.kind == "search" {
+		return panelSurfaceSpec{
+			title:    "搜索",
+			width:    searchSurfaceWidth,
+			height:   searchSurfaceHeight,
+			hotkeyID: 1,
+			candidates: []struct {
+				mods uint32
+				vk   uint32
+				text string
+			}{
+				// Alt+Space 是 Windows 窗口系统菜单键，全局注册会把它抢走——
+				// 但那正是 Everything/uTools 们的既定惯例（呼出价值大于菜单键），
+				// 被占时回退组合键，回退结果同样在页面底部展示
+				{winui.ModAlt | winui.ModNoRepeat, VKSpace, "Alt+Space"},
+				{winui.ModControl | winui.ModAlt | winui.ModNoRepeat, VKSpace, "Ctrl+Alt+Space"},
+				{winui.ModWin | winui.ModAlt | winui.ModNoRepeat, VKSpace, "Win+Alt+Space"},
+			},
+		}
+	}
+	return panelSurfaceSpec{
+		title:    "剪切板",
+		width:    panelWidth,
+		height:   panelHeight,
+		hotkeyID: 1,
+		candidates: []struct {
+			mods uint32
+			vk   uint32
+			text string
+		}{
+			{winui.ModWin | winui.ModNoRepeat, winui.VKV, "Win+V"},
+			{winui.ModWin | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Win+Alt+V"},
+			{winui.ModControl | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Ctrl+Alt+V"},
+			{winui.ModAlt | winui.ModShift | winui.ModNoRepeat, winui.VKV, "Alt+Shift+V"},
+		},
+	}
+}
+
+// VKSpace Space 键虚拟码（winui 包未收录）。
+const VKSpace = 0x20
 
 // startPanel 拉起快捷面板（独立线程，失败只记日志不阻断主程序）。
 // 幂等：面板已存活时不重复创建。
@@ -83,11 +145,45 @@ func startPanel(a *App) {
 	if !panelAlive.CompareAndSwap(false, true) {
 		return // 已在运行
 	}
-	p := &clipPanel{a: a, hotkeyID: 1}
+	p := &clipPanel{a: a, kind: "clip", hotkeyID: 1}
 	ready := make(chan error, 1)
 	go p.run(ready)
 	if err := <-ready; err != nil {
 		a.logger.Printf("panel: %v", err)
+	}
+}
+
+// startSearchPanel 拉起全局搜索面板（独立线程窗口；失败只记日志）。
+// 与剪切板面板互不隶属：搜索表面不随插件启停，登录后常驻热键。
+func startSearchPanel(a *App) {
+	ensurePanelServer(a)
+	if a.searchURL == "" {
+		return
+	}
+	if !searchPanelAlive.CompareAndSwap(false, true) {
+		return
+	}
+	p := &clipPanel{a: a, kind: "search", hotkeyID: 1}
+	ready := make(chan error, 1)
+	go p.run(ready)
+	if err := <-ready; err != nil {
+		a.logger.Printf("search panel: %v", err)
+	}
+}
+
+// stopSearchPanel 销毁搜索面板（退出登录等场景）。
+func stopSearchPanel(a *App) {
+	panelInstanceMu.RLock()
+	var target *clipPanel
+	for _, cand := range panelInstances {
+		if cand.kind == "search" {
+			target = cand
+			break
+		}
+	}
+	panelInstanceMu.RUnlock()
+	if target != nil {
+		winui.PostMessage(target.hwnd, panelMsgDestroy, 0, 0)
 	}
 }
 
@@ -97,8 +193,10 @@ func stopPanel(a *App) {
 	panelInstanceMu.RLock()
 	var p *clipPanel
 	for _, cand := range panelInstances {
-		p = cand
-		break
+		if cand.kind == "clip" {
+			p = cand
+			break
+		}
 	}
 	panelInstanceMu.RUnlock()
 	if p != nil {
@@ -123,13 +221,14 @@ func (p *clipPanel) run(ready chan<- error) {
 		return
 	}
 
+	spec := p.spec()
 	// WS_EX_TOOLWINDOW：不出现在任务栏和 Alt-Tab。初始给非零尺寸——WebView2
 	// 嵌入阶段对零尺寸父窗口会报「参数不正确」，DPI 缩放后再挪到屏幕外待命。
 	hwnd, err := winui.CreateWindow(
 		winui.WSExToolWindow|winui.WSExTopMost,
-		panelWindowClass, "剪切板",
+		panelWindowClass, spec.title,
 		winui.WSPopup|winui.WSClipChildren,
-		0, 0, panelWidth, panelHeight, 0,
+		0, 0, spec.width, spec.height, 0,
 	)
 	if err != nil {
 		ready <- err
@@ -139,8 +238,8 @@ func (p *clipPanel) run(ready chan<- error) {
 
 	dpi := winui.DpiForWindow(hwnd)
 	scale := func(v int32) int32 { return v * dpi / 96 }
-	p.width = scale(panelWidth)
-	p.height = scale(panelHeight)
+	p.width = scale(spec.width)
+	p.height = scale(spec.height)
 	winui.MoveWindow(hwnd, -32000, -32000, p.width, p.height)
 
 	panelInstanceMu.Lock()
@@ -157,16 +256,7 @@ func (p *clipPanel) run(ready chan<- error) {
 	// Win+Shift+V（实测被占）与 Ctrl+Shift+V（浏览器/Office 的「粘贴为纯文本」，
 	// 全局注册会把它从所有应用手里抢走）都不进链。选中的组合会作为 hk 参数带给
 	// 面板页展示（面板底部显示实际生效快捷键），避免静默回退后用户找不到入口。
-	hotkeyCandidates := []struct {
-		mods uint32
-		vk   uint32
-		text string
-	}{
-		{winui.ModWin | winui.ModNoRepeat, winui.VKV, "Win+V"},
-		{winui.ModWin | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Win+Alt+V"},
-		{winui.ModControl | winui.ModAlt | winui.ModNoRepeat, winui.VKV, "Ctrl+Alt+V"},
-		{winui.ModAlt | winui.ModShift | winui.ModNoRepeat, winui.VKV, "Alt+Shift+V"},
-	}
+	hotkeyCandidates := spec.candidates
 	hotkeyText := ""
 	for _, cand := range hotkeyCandidates {
 		if err := winui.RegisterHotKey(p.hwnd, p.hotkeyID, cand.mods, cand.vk); err == nil {
@@ -185,16 +275,30 @@ func (p *clipPanel) run(ready chan<- error) {
 	}
 
 	// 加载面板页：带上实际注册到的热键（面板底部展示），静默回退不再让用户摸不着头脑。
-	p.chromium.Navigate(p.a.panelURL + "&hk=" + url.QueryEscape(hotkeyText))
+	navigateURL := p.a.panelURL
+	if p.kind == "search" {
+		navigateURL = p.a.searchURL
+	}
+	p.chromium.Navigate(navigateURL + "&hk=" + url.QueryEscape(hotkeyText))
 
-	// 事件通道：clipboard:changed / panel:shown 经此推给面板页。
-	p.a.panelEmitMu.Lock()
-	p.a.panelEmit = p.emitEvent
-	p.a.panelEmitMu.Unlock()
+	// 事件通道：剪切板面板注入事件流；搜索面板注入 Eval 通道（异步回投结果）。
+	if p.kind == "clip" {
+		p.a.panelEmitMu.Lock()
+		p.a.panelEmit = p.emitEvent
+		p.a.panelEmitMu.Unlock()
+	} else {
+		p.a.searchEmitMu.Lock()
+		p.a.searchEmit = p.evalScript
+		p.a.searchEmitMu.Unlock()
+	}
 
 	ready <- nil
 	winui.RunMessageLoop()
-	panelAlive.Store(false)
+	if p.kind == "search" {
+		searchPanelAlive.Store(false)
+	} else {
+		panelAlive.Store(false)
+	}
 	p.cleanup()
 }
 
@@ -264,6 +368,14 @@ func (p *clipPanel) handleWebMessage(message string, _ *edge.ICoreWebView2, _ *e
 	if dismiss {
 		p.hideOnOwnThread()
 	}
+}
+
+// evalScript 在面板页执行任意脚本；可见性守卫与 emitEvent 相同。任意线程可调。
+func (p *clipPanel) evalScript(script string) {
+	if p.chromium == nil || !p.visible {
+		return
+	}
+	p.chromium.Eval(script)
 }
 
 // emitEvent 向面板页推事件（clipboard:changed、panel:shown）。可从任意线程调用

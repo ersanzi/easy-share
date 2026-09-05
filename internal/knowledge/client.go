@@ -197,6 +197,15 @@ func (client *Client) Query(ctx context.Context, token, question string) (Answer
 	return answer, err
 }
 
+// Search 仅检索不生成（全局快搜面板用）：mode=search 时远端跳过 LLM，响应即时。
+func (client *Client) Search(ctx context.Context, token, question string) (Answer, error) {
+	var answer Answer
+	err := client.call(ctx, http.MethodPost, "/query", token, map[string]string{
+		"question": question, "mode": "search",
+	}, &answer)
+	return answer, err
+}
+
 // HealthWithTimeout 探测远端健康状态；超时由调用方给定（短探测，不等 LLM）。
 func (client *Client) HealthWithTimeout(parent context.Context, timeout time.Duration) (Health, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)

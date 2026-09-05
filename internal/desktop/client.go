@@ -160,6 +160,14 @@ func (client *Client) KnowledgeAsk(ctx context.Context, question string) (knowle
 	return result, err
 }
 
+// KnowledgeSearch 知识快搜：仅检索不生成（全局搜索面板用）。
+func (client *Client) KnowledgeSearch(ctx context.Context, question string) (knowledge.Answer, error) {
+	var result knowledge.Answer
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/query",
+		map[string]string{"question": question, "mode": "search"}, &result)
+	return result, err
+}
+
 // SubscribeEvents 通过 WebSocket 订阅 Core 的实时事件流。
 // 每收到一条 JSON 消息就调用 onEvent(rawJSON)。连接断开或 ctx 取消时返回。
 // 调用方负责重连逻辑。

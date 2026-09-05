@@ -38,7 +38,6 @@
 | --- | --- | --- | --- | --- |
 | P1 | 部门级权限（用户点名需要）：共享空间授权借 RuoYi sys_dept 加部门维度——片1 空间级（共享盘按部门授权进出）→ 片2 文档级（"这文档只有研发能看"：es_file 可见部门 + 检索/列表过滤联动） | 2026-09-06 用户拍板 | 片1：管理页可按部门授权+校验生效；片2：可见性贯通 /query 与网盘列表 | ✅（先设计后动数据模型） |
 | P1 | 管理员汇总页（用户拍板）：AdminPanel 加统计 Tab——谁在用/检索热度/存储趋势（query_log + SpaceUsage 数据源已贯通） | 2026-09-06 用户拍板 | 管理员可见汇总页，数据真实非占位 | ✅ |
-| P1 | 全局快捷搜索（用户点名）：Everything 式一键呼出搜知识/文件——复用快捷面板基建加搜索表面（多表面化 + host.search 聚合：知识 /query 网关 + 网盘按名过滤） | 2026-09-06 用户拍板 | 热键呼出→输入即搜→结果分组（知识/文件）→回车可用 | ✅ |
 | P2 | AI 周报接知识服务：todo 周报插件增加 AI 汇总（经 Core 网关调 /query，登录态复用） | progress.md 待开始 #5 | 插件冒烟 + 回归绿 | ✅ |
 | P2 | 空间整理算法：plans/2026-08-30-space-pool-and-organize.md 中「整理算法」待实施部分——实现前先读该 plan | progress.md 账号控制面段 | 按 plan 验收标准 | ✅ |
 | P2 | OKF 化切片一：derived/ 为唯一知识源的重建验证——写全量重建向量索引脚本并断言评测集指标不回退 | agent-knowledge-benchmark.md P1（derived/=知识源、向量=可重建缓存） | 脚本 + 重建前后指标留档 | ✅（大任务，只做此片） |
@@ -55,6 +54,7 @@
 
 | 完成日 | 任务 | 验证结果 |
 | --- | --- | --- |
+| 2026-09-06 | P1 全局快捷搜索（用户点名）：Alt+Space 呼出第二面板，知识+文件聚合搜索，Enter 打开/复制 | go build/test 全绿；知识服务 144 绿（mode=search 加法）；真机冒烟随下轮打包。见 [iterations/2026-09-06-global-quick-search.md](../docs/iterations/2026-09-06-global-quick-search.md) |
 | 2026-09-05 | P2 插件批次 3 余项：剪切板「开机自动记录」开关（边界确认后交付：缺口在 OS 自启链路的应用内可控，非录制恢复） | go build/test 全绿（+3 mock 用例，不写真注册表）；插件 JS 语法过；真机开关冒烟归真机验收欠账，存量安装需商城发布 2.1.0。见 [iterations/2026-09-05-clipboard-autostart-toggle.md](../docs/iterations/2026-09-05-clipboard-autostart-toggle.md) |
 | 2026-09-05 | P2 观察期周报脚本：QueryLog.windowed_stats + 五节中文周报（使用率/命中/盲区/生成质量/观察提示） | pytest 144 全绿（+4 用例）；空库兜底/旧库窗口过滤/有数据渲染三路冒烟过。见 [iterations/2026-09-05-querylog-weekly-report.md](../docs/iterations/2026-09-05-querylog-weekly-report.md) |
 | 2026-09-05 | P1 contextual chunking：切块注入文档级上下文（文档级定位摘要前缀，LLM→启发式回退链） | pytest 140 全绿（+7 新用例）；42 条评测对比留档：哈希口径噪声内持平（MRR −0.002=单个 trigram 碰撞，向量分解证明）、真实 embedding 口径双向饱和 1.000；LLM 真链路冒烟过。见 [iterations/2026-09-05-contextual-chunking.md](../docs/iterations/2026-09-05-contextual-chunking.md)。「有增益」在现评测集不可测（饱和），扩充难例已入收件箱 |
@@ -75,6 +75,7 @@
 | 2026-09-06 | 用户直配轮 2（定调 Java-first：后续逻辑优先控制面） | A | 网盘 P0 正主落地：es_file 目录层 + fileId（presignPut 登记/列表补账/删除双轨，模块单测 24 全绿；客户端透传向后兼容）。踩坑三条入迭代文档（maven.test.skip 默认 true/JAVA_HOME 指 21/Mockito 桩贴真实调用序）。DDL+jar 上服务器归 Linux 部署验收；下一步=Upload Session Multipart |
 | 2026-09-06 | 用户直配轮 3（Upload Session 开工指令） | A | Multipart 断点续传全栈落地：控制面 es_upload_session 记账 + 四端点（幂等 Complete/防孤儿分片/配额同口径/归属强校验），Go SessionStore 指纹持久化 + 续传 + 分片重试，UploadFile 32MB 自动分流零改动。Java 32 全绿 +8；go 全绿 +5。网盘 P0 三片合龙收官；DDL 上服务器归部署验收 |
 | 2026-09-06 | 用户直配轮 4（部署缺口评估拍板） | A | 三项转正（部门级权限/管理员汇总页/全局快捷搜索，均 P1 入待办池），四项挂起（HTTPS/Web 门户/通知/审计，重启条件已记）。顺序：快捷搜索（独立可先交付）→ 部门级权限（需设计先行，拆空间级/文档级两片）→ 管理员汇总页 |
+| 2026-09-06 | 用户直配轮 5（快捷搜索开工） | A | 全局快捷搜索全栈落地：面板多表面化（kind/spec/独立守卫/host.* 信封/异步 searchEmit 防卡窗）+ go:embed 搜索页 + /query mode=search 仅检索链路。go 全绿 + 知识服务 144 绿。三 P1 剩两项：部门级权限（需设计先行）→ 管理员汇总页 |
 
 ## 自动化运行规则
 

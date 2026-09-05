@@ -86,3 +86,11 @@ func easysharePanelShownScript() *C.char {
 	}
 	return C.CString(s)
 }
+
+// startSearchPanel 全局搜索面板 darwin 侧暂未实现（NSPanel 面板待真机批次）。
+func startSearchPanel(a *App) {
+	a.logger.Printf("search panel: darwin 待真机批次")
+}
+
+// stopSearchPanel darwin 侧暂无搜索面板可停。
+func stopSearchPanel(a *App) {}

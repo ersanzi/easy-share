@@ -86,8 +86,13 @@ type App struct {
 	// panelEmit 由平台窗口就绪后注入：向面板页推送事件（clipboard:changed、panel:shown）。
 	panelListener net.Listener
 	panelURL      string
-	panelEmitMu   sync.RWMutex
-	panelEmit     func(event string, payload any)
+	// searchURL 全局搜索表面（第二面板窗口，与剪切板面板共用了同一 loopback 静态服务）
+	searchURL string
+	// searchEmit 搜索面板的 Eval 通道（异步回投搜索结果；窗口就绪后注入）
+	searchEmitMu sync.RWMutex
+	searchEmit   func(script string)
+	panelEmitMu  sync.RWMutex
+	panelEmit    func(event string, payload any)
 }
 
 // AuthUser 是下发给前端的登录态（不含 token）。
@@ -102,7 +107,7 @@ type AuthUser struct {
 }
 
 func NewApp() *App {
-	return &App{
+	app := &App{
 		logger:       log.New(io.Discard, "", log.Ldate|log.Ltime|log.Lmicroseconds),
 		trayStatusCh: make(chan string, 1),
 		trayUserCh:   make(chan AuthUser, 1),
@@ -110,6 +115,9 @@ func NewApp() *App {
 		assetMux:     http.NewServeMux(),
 		pluginReady:  make(chan struct{}),
 	}
+	// 全局搜索表面页（go:embed 自包含 HTML，面板窗口经 loopback 加载）
+	app.assetMux.Handle("GET /search", http.HandlerFunc(app.serveSearchPage))
+	return app
 }
 
 func (a *App) Startup(ctx context.Context) {

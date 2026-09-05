@@ -101,6 +101,8 @@ func (a *App) initPluginSystem() {
 	}
 	// 剪切板插件的录制与快捷面板随插件在场状态启停（装/卸/启停都会重新对齐）。
 	a.syncClipboardSurface()
+	// 全局搜索面板：不随插件启停，启动即注册热键（未登录时搜索降级为仅文件路/空结果）。
+	startSearchPanel(a)
 	// 启动后延迟检查插件更新（发现新版 → plugin:updates-available 事件 → 插件中心红点）
 	go a.checkPluginUpdates()
 	a.logger.Printf("plugin system ready; installed=%d", len(manager.List()))

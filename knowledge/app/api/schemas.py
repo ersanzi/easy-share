@@ -27,6 +27,8 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1)
     top_k: int = Field(default=5, ge=1, le=100)
     doc_ids: list[str] | None = None
+    # ask=检索+生成（默认）；search=仅检索（快搜面板用，跳过生成与生成日志）
+    mode: str = Field(default="ask", pattern="^(ask|search)$")
 
 
 class SourceRef(BaseModel):

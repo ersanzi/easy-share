@@ -110,10 +110,14 @@ func (server *Server) knowledgeQuery(writer http.ResponseWriter, request *http.R
 	}
 	var input struct {
 		Question string `json:"question"`
+		Mode     string `json:"mode"`
 	}
 	if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.Question == "" {
 		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "question required"})
 		return
+	}
+	if input.Mode == "" {
+		input.Mode = "ask"
 	}
 	session := server.knowledge.Current()
 	if session.Token == "" {
@@ -128,7 +132,16 @@ func (server *Server) knowledgeQuery(writer http.ResponseWriter, request *http.R
 
 	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
 	defer cancel()
-	answer, err := knowledge.NewClient(session.ServerURL).Query(ctx, session.Token, input.Question)
+	var answer knowledge.Answer
+	var err error
+	if input.Mode == "search" {
+		// 快搜：仅检索，短超时（不等 LLM）
+		searchCtx, searchCancel := context.WithTimeout(request.Context(), 20*time.Second)
+		defer searchCancel()
+		answer, err = knowledge.NewClient(session.ServerURL).Search(searchCtx, session.Token, input.Question)
+	} else {
+		answer, err = knowledge.NewClient(session.ServerURL).Query(ctx, session.Token, input.Question)
+	}
 	if err != nil {
 		var remote *knowledge.RemoteError
 		if errors.As(err, &remote) && remote.Status == http.StatusUnauthorized {

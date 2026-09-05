@@ -1,6 +1,6 @@
 # EasyShare 当前架构
 
-> 更新基线：2026-09-06（云盘目录层 es_file + Upload Session 断点续传）。
+> 更新基线：2026-09-06（云盘 P0 三片 + 全局快捷搜索第二面板表面）。
 
 ## 1. 进程模型
 
@@ -112,7 +112,7 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话） |
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
-| `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底） |
+| `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
 
 ## 4b. 控制面升级接口（platform-drive，2026-08-31 起）

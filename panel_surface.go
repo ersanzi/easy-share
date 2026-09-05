@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 )
 
 // panelPluginID 面板固定服务的插件（首发剪切板插件；它是普通插件，可卸载——
@@ -44,12 +45,21 @@ func startPanelServer(a *App) {
 	a.panelListener = ln
 	a.panelURL = fmt.Sprintf("http://127.0.0.1:%d/plugins/%s/index.html?panel=1",
 		ln.Addr().(*net.TCPAddr).Port, panelPluginID)
+	a.searchURL = fmt.Sprintf("http://127.0.0.1:%d/search?panel=1",
+		ln.Addr().(*net.TCPAddr).Port)
 	go func() {
 		if err := http.Serve(ln, a.AssetHandler()); err != nil && err != http.ErrServerClosed {
 			a.logger.Printf("panel server: %v", err)
 		}
 	}()
 	a.logger.Printf("panel server ready: %s", a.panelURL)
+}
+
+// ensurePanelServer 面板 loopback 静态服务按需拉起（剪切板面板与搜索表面共用）。
+func ensurePanelServer(a *App) {
+	if a.panelListener == nil {
+		startPanelServer(a)
+	}
 }
 
 // syncClipboardSurface 让「剪切板录制 + 快捷面板」与剪切板插件的在场状态对齐：
@@ -75,9 +85,7 @@ func (a *App) syncClipboardSurface() {
 			a.logger.Printf("clipboard listener: %v", err)
 		}
 	}
-	if a.panelURL == "" {
-		startPanelServer(a)
-	}
+	ensurePanelServer(a)
 	startPanel(a)
 }
 
@@ -124,6 +132,54 @@ func panelProcessMessage(a *App, raw string) (replyJS string, dismiss bool, past
 	}
 	if env.Eshare != 1 || env.ID == nil || env.API == "" {
 		return "", false, false
+	}
+	// host.* 前缀 = 面板表面专用的宿主自有能力（如 host.search），不经插件权限体系；
+	// 面板窗口本就是宿主表面（loopback + 本机边界），与剪切板面板同级信任
+	if strings.HasPrefix(env.API, "host.") {
+		var data any
+		var errMessage string
+		switch env.API {
+		case "host.search":
+			// 搜索是慢 IO（知识检索+网盘列举），异步执行经 searchEmit 回投，
+			// 不阻塞面板线程消息循环（否则检索期间窗口无法隐藏/重绘）
+			var args struct {
+				Q string `json:"q"`
+			}
+			if err := json.Unmarshal(env.Args, &args); err != nil {
+				errMessage = "参数错误"
+			} else {
+				a.hostPanelSearchAsync(*env.ID, args.Q)
+				return "", false, false // 稍后异步投递，本次不回包
+			}
+		case "host.open":
+			// 网盘文件：签发下载链接交系统浏览器打开
+			var args struct {
+				Key   string `json:"key"`
+				Space string `json:"space"`
+			}
+			if err := json.Unmarshal(env.Args, &args); err != nil || args.Key == "" {
+				errMessage = "参数错误"
+			} else if err := a.hostPanelOpenFile(args.Key, args.Space); err != nil {
+				errMessage = err.Error()
+			}
+		case "host.copy":
+			// 知识片段：写入系统剪切板（回原窗口直接粘贴）
+			var args struct {
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(env.Args, &args); err != nil || args.Text == "" {
+				errMessage = "参数错误"
+			} else if err := a.hostPanelCopy(args.Text); err != nil {
+				errMessage = err.Error()
+			}
+		default:
+			errMessage = "未知宿主能力: " + env.API
+		}
+		raw, _ := json.Marshal(data)
+		reply, _ := json.Marshal(panelReply{
+			Eshare: 1, ID: *env.ID, OK: errMessage == "", Data: raw, Error: errMessage,
+		})
+		return "window.__eshareNative&&window.__eshareNative.deliver(" + string(reply) + ")", false, false
 	}
 	res := a.PluginInvoke(panelPluginID, env.API, string(env.Args))
 	data, err := json.Marshal(panelReply{

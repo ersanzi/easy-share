@@ -7,3 +7,7 @@ package main
 func startPanel(a *App) {}
 
 func stopPanel(a *App) {}
+
+func startSearchPanel(a *App) {}
+
+func stopSearchPanel(a *App) {}

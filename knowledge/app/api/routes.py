@@ -223,6 +223,9 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
     ]
     strategy = outcome.strategy if outcome else ""
     degraded = outcome.degraded if outcome else None
+    # 快搜模式（全局搜索面板）：只做检索，跳过生成与生成日志——响应即时
+    if req.mode == "search":
+        return QueryResponse(answer="", contexts=chunks, strategy=strategy, degraded=degraded)
     if not contexts:
         return QueryResponse(answer="知识库中没有找到与该问题相关的内容。", strategy=strategy, degraded=degraded)
     if services.generator is None:

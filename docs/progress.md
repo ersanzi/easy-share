@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-06（Upload Session）
+> 每次迭代开始和结束时更新。最后更新：2026-09-06（全局快捷搜索）
 
 ## 路线总览
 
@@ -123,11 +123,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 网盘目录导航（2026-09-06，用户指定网盘优化·Cloudreve 对标第一片）：文件夹进入/面包屑/跨目录搜索/时间·名称·大小排序/统计徽标/上传落当前目录——`driveFolder.ts` 从扁平 key 推导目录视图（权威目录层将来落控制面，本模块换数据源即可）；`CloudUpload/CloudUploadFolder` 加 targetDir 走完整 Wails 级联，拖拽/悬浮窗语义不变。详见 [`iterations/2026-09-06-drive-folder-navigation.md`](iterations/2026-09-06-drive-folder-navigation.md)
 - [x] 云盘目录层 es_file（2026-09-06，Java-first 首切片）：控制面 platform-drive 增设 es_file 元数据索引——稳定 fileId 与空间内路径绑定（不作为存在性真相源，列表以 RustFS 为准）；presignPut 幂等登记 + 列表惰性补账（存量对象自愈）+ 删除支持 fileId（含归属校验）/路径双轨；客户端 Go/前端透传 fileId 向后兼容。模块单测 24 全绿。详见 [`iterations/2026-09-06-drive-fileid-layer.md`](iterations/2026-09-06-drive-fileid-layer.md)
 - [x] Upload Session 断点续传（2026-09-06，网盘 P0 收官）：控制面 es_upload_session 记账 + 四端点（create/part/complete/abort），幂等 Complete（已完成会话直接返回 fileId）、同路径遗留会话先 Abort 防孤儿分片、配额同口径；Go SessionStore 本地指纹持久化（空间+路径+大小+mtime），续传跳过已完成分片、分片重试 3 次退避，UploadFile ≥32MB 自动分流调用方零改动。Java 32 全绿 + go 5 新用例。详见 [`iterations/2026-09-06-upload-session.md`](iterations/2026-09-06-upload-session.md)
+- [x] 全局快捷搜索（2026-09-06，用户点名三项之一）：Alt+Space 全局呼出搜索小窗，知识片段（仅检索不生成）与网盘文件聚合分组，Enter 打开文件/复制片段；面板基建多表面化（kind/spec/独立存活守卫/host.* 信封/异步 searchEmit），搜索页 go:embed 自包含。go 全绿。详见 [`iterations/2026-09-06-global-quick-search.md`](iterations/2026-09-06-global-quick-search.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-06 | 全局快捷搜索 — Everything 式第二面板表面：Alt+Space 呼出，知识（/query mode=search 仅检索）+ 网盘按名过滤聚合，Enter 打开/复制；面板基建多表面化 + host.* 信封 + 异步 RPC | 已完成（go 全绿；知识服务 144 绿；真机冒烟随下轮打包；darwin 随 NSPanel 批次） |
 | 2026-09-06 | Upload Session — Multipart 断点续传（控制面 es_upload_session 记账 + 幂等 Complete + 防孤儿分片；Go 会话本地持久化/续传/分片重试，UploadFile 32MB 自动分流） | 已完成（Java 32 全绿 +8；go 全绿 +5；大文件断网续传真机归 Linux 部署验收） |
 | 2026-09-06 | 云盘目录层 es_file — 控制面稳定 fileId（Cloudreve 对标 P0 正主，首个 Java-first 切片）：presignPut 幂等登记 + 列表惰性补账回填 fileId + 删除支持 fileId/路径双轨；客户端 JSON 加字段向后兼容 | 已完成（platform-drive 单测 24 全绿 +8；go/vitest/vue-tsc 全绿；DDL 与 jar 上服务器归 Linux 部署验收） |
 | 2026-09-06 | 网盘目录导航 — 文件夹进入/面包屑/跨目录搜索/排序/上传落当前目录（Cloudreve 对标「轻量目录层」客户端最小实现，视图推导不造第二真相源；targetDir 走 Wails 级联） | 已完成（vue-tsc 干净 + vitest 40 全绿 +7 用例 + go 绿；真机点验随下轮打包） |
