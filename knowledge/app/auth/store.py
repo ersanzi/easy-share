@@ -44,6 +44,10 @@ class UserStore:
                     created_at TEXT NOT NULL
                 )
             """)
+            # 部门级权限（片 2b）：存量库补 dept 列（''=未归属部门）
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+            if "dept" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN dept TEXT NOT NULL DEFAULT ''")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS tokens (
                     token TEXT PRIMARY KEY,
@@ -59,7 +63,7 @@ class UserStore:
         with self.lock, self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
-    def create_user(self, username: str, password: str, role: str = "member") -> dict:
+    def create_user(self, username: str, password: str, role: str = "member", dept: str = "") -> dict:
         if role not in ("member", "admin"):
             raise ValueError("role 只能是 member 或 admin")
         if not username.strip() or not password:
@@ -71,18 +75,18 @@ class UserStore:
         with self.lock, self._connect() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (username.strip(), password_hash, salt, role, datetime.now(timezone.utc).isoformat()),
+                    "INSERT INTO users (username, password_hash, salt, role, dept, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (username.strip(), password_hash, salt, role, (dept or "").strip(), datetime.now(timezone.utc).isoformat()),
                 )
                 conn.commit()
             except sqlite3.IntegrityError as exc:
                 raise ValueError(f"用户已存在：{username}") from exc
-        return {"username": username.strip(), "role": role}
+        return {"username": username.strip(), "role": role, "dept": (dept or "").strip()}
 
     def verify(self, username: str, password: str) -> dict | None:
         with self.lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT username, password_hash, salt, role FROM users WHERE username = ?",
+                "SELECT username, password_hash, salt, role, dept FROM users WHERE username = ?",
                 (username.strip(),),
             ).fetchone()
         if row is None:
@@ -92,19 +96,28 @@ class UserStore:
         ).hex()
         if not hmac.compare_digest(candidate, row["password_hash"]):
             return None
-        return {"username": row["username"], "role": row["role"]}
+        return {"username": row["username"], "role": row["role"], "dept": row["dept"]}
 
     def get_user(self, username: str) -> dict | None:
         with self.lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT username, role FROM users WHERE username = ?", (username.strip(),)
+                "SELECT username, role, dept FROM users WHERE username = ?", (username.strip(),)
             ).fetchone()
-        return {"username": row["username"], "role": row["role"]} if row else None
+        return {"username": row["username"], "role": row["role"], "dept": row["dept"]} if row else None
+
+    def set_user_dept(self, username: str, dept: str) -> None:
+        """设置用户所属部门（文档级可见性的过滤键，部门 ID 字符串）。"""
+        with self.lock, self._connect() as conn:
+            cursor = conn.execute("UPDATE users SET dept = ? WHERE username = ?",
+                                  ((dept or "").strip(), username.strip()))
+            conn.commit()
+        if cursor.rowcount != 1:
+            raise ValueError(f"用户不存在：{username}")
 
     def list_users(self) -> list[dict]:
         with self.lock, self._connect() as conn:
-            rows = conn.execute("SELECT username, role, created_at FROM users ORDER BY id").fetchall()
-        return [{"username": r["username"], "role": r["role"], "created_at": r["created_at"]} for r in rows]
+            rows = conn.execute("SELECT username, role, dept, created_at FROM users ORDER BY id").fetchall()
+        return [{"username": r["username"], "role": r["role"], "dept": r["dept"], "created_at": r["created_at"]} for r in rows]
 
     # ---------- 令牌 ----------
 
@@ -125,7 +138,7 @@ class UserStore:
             return None
         with self.lock, self._connect() as conn:
             row = conn.execute(
-                """SELECT t.username AS token_user, t.expires_at, u.role AS role
+                """SELECT t.username AS token_user, t.expires_at, u.role AS role, u.dept AS dept
                    FROM tokens t JOIN users u ON u.username = t.username
                    WHERE t.token = ?""",
                 (token,),
@@ -134,4 +147,4 @@ class UserStore:
             return None
         if row["expires_at"] < datetime.now(timezone.utc).isoformat():
             return None
-        return {"username": row["token_user"], "role": row["role"]}
+        return {"username": row["token_user"], "role": row["role"], "dept": row["dept"]}

@@ -27,18 +27,22 @@ class Credentials(BaseModel):
 
 class CreateUserRequest(Credentials):
     role: str = "member"
+    # 所属部门（部门 ID 字符串，与文档 visible_depts 同一表示；空=未归属）
+    dept: str = ""
 
 
 class LoginResponse(BaseModel):
     token: str
     username: str
     role: str
+    dept: str = ""
     expires_at: str
 
 
 class UserResponse(BaseModel):
     username: str
     role: str
+    dept: str = ""
 
 
 @router.post("/bootstrap", response_model=UserResponse)
@@ -51,7 +55,7 @@ def bootstrap(body: Credentials, request: Request) -> UserResponse:
         services.users.create_user(body.username, body.password, role="admin")
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    return UserResponse(username=body.username, role="admin")
+    return UserResponse(username=body.username, role="admin", dept="")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -61,20 +65,21 @@ def login(body: Credentials, request: Request) -> LoginResponse:
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或口令错误")
     token, expires_at = services.users.issue_token(user["username"])
-    return LoginResponse(token=token, username=user["username"], role=user["role"], expires_at=expires_at)
+    return LoginResponse(token=token, username=user["username"], role=user["role"],
+                         dept=user.get("dept", ""), expires_at=expires_at)
 
 
 @router.get("/me", response_model=UserResponse)
 def me(request: Request) -> UserResponse:
     user = _current_user(request)
-    return UserResponse(username=user["username"], role=user["role"])
+    return UserResponse(username=user["username"], role=user["role"], dept=user.get("dept", ""))
 
 
 @router.get("/users", response_model=list[UserResponse])
 def list_users(request: Request) -> list[UserResponse]:
     _require_admin(request)
     services = _services(request)
-    return [UserResponse(username=u["username"], role=u["role"]) for u in services.users.list_users()]
+    return [UserResponse(username=u["username"], role=u["role"], dept=u.get("dept", "")) for u in services.users.list_users()]
 
 
 @router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -82,10 +87,10 @@ def create_user(body: CreateUserRequest, request: Request) -> UserResponse:
     _require_admin(request)
     services = _services(request)
     try:
-        services.users.create_user(body.username, body.password, role=body.role)
+        services.users.create_user(body.username, body.password, role=body.role, dept=body.dept)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-    return UserResponse(username=body.username, role=body.role)
+    return UserResponse(username=body.username, role=body.role, dept=body.dept)
 
 
 def _require_admin(request: Request) -> None:

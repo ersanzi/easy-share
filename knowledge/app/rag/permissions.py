@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from app.kb.store import VectorStore
 
-# request.state.user 的形状：{"username": str, "role": str}（auth 中间件注入）
+# request.state.user 的形状：{"username": str, "role": str, "dept": str}（auth 中间件注入；
+# dept 为部门 ID 字符串，片 2b 起随登录态下发，参与文档级可见性过滤）
 ScopeUser = dict | None
 
 
@@ -27,7 +28,22 @@ def visible_doc_ids(store: VectorStore, user: ScopeUser) -> list[str] | None:
     if not username:
         return None
     owners = store.doc_owners()
-    return [doc_id for doc_id, owner in owners.items() if owner is None or owner == username]
+    visible_depts_map = store.doc_visible_depts()
+    dept = (user.get("dept") or "").strip()
+
+    result: list[str] = []
+    for doc_id, owner in owners.items():
+        if owner is not None:
+            # 私有文档：仅归属用户本人可见
+            if owner == username:
+                result.append(doc_id)
+            continue
+        # 共享文档：visible_depts 为空 = 全体可见；非空 = 部门命中才可见
+        allowed_depts = visible_depts_map.get(doc_id) or []
+        if allowed_depts and dept not in allowed_depts:
+            continue
+        result.append(doc_id)
+    return result
 
 
 def effective_doc_ids(requested: list[str] | None, allowed: list[str] | None) -> list[str] | None:

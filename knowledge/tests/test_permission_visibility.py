@@ -213,3 +213,77 @@ def test_job_store_migrates_legacy_db(tmp_path) -> None:
     )
     assert created and job.owner == "alice"
     store.close()
+
+
+def test_dept_visibility_filters_shared_docs(tmp_path) -> None:
+    """片 2b：共享文档声明 visible_depts 后，仅所属部门成员与 admin 可见。"""
+    texts = {
+        "doc-research": b"confidential research benchmark and roadmap details",
+        "doc-open": b"open company handbook about onboarding workflow",
+    }
+    app, services = _make_client(tmp_path, texts)
+
+    def make_user(username: str, dept: str = "") -> str:
+        services.users.create_user(username, "pw-test", dept=dept)
+        token, _ = services.users.issue_token(username)
+        return token
+
+    research_user = make_user("alice", dept="research")
+    sales_user = make_user("bob", dept="sales")
+    no_dept_user = make_user("carol")
+    admin_token = _user_token(services, "admin", role="admin")
+
+    with TestClient(app) as client:
+        _process(
+            client, "doc-research", b"",
+            visible_depts=["research"],
+        )
+        _process(client, "doc-open", b"")
+
+        seen_research = _context_doc_ids(client, "document", token=research_user)
+        assert seen_research == {"doc-research", "doc-open"}
+
+        seen_sales = _context_doc_ids(client, "document", token=sales_user)
+        assert seen_sales == {"doc-open"}
+
+        seen_no_dept = _context_doc_ids(client, "document", token=no_dept_user)
+        assert seen_no_dept == {"doc-open"}
+
+        seen_admin = _context_doc_ids(client, "document", token=admin_token)
+        assert seen_admin == {"doc-research", "doc-open"}
+
+
+def test_visible_depts_lands_in_metadata_and_manifest(tmp_path) -> None:
+    app, services = _make_client(tmp_path, {"file-a": b"alpha document about quarterly sales"})
+    with TestClient(app) as client:
+        _process(client, "file-a", b"", visible_depts=["research"])
+
+    manifest = services.pipeline.read_manifest("file-a", "v1")
+    assert manifest["visible_depts"] == "research"
+
+    records = services.vector_store.get_doc("file-a")
+    assert records and all(record["metadata"]["visible_depts"] == "research" for record in records)
+    assert services.vector_store.doc_visible_depts().get("file-a") == ["research"]
+
+
+def test_auth_store_round_trips_dept(tmp_path) -> None:
+    services_users = None
+    from app.auth.store import UserStore
+
+    store = UserStore(str(tmp_path / "auth.db"))
+    store.create_user("alice", "pw", dept="research")
+    assert store.get_user("alice")["dept"] == "research"
+
+    # 旧库（无 dept 列）自动补列
+    import sqlite3
+    legacy = str(tmp_path / "legacy.db")
+    conn = sqlite3.connect(legacy)
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', created_at TEXT NOT NULL)")
+    conn.commit()
+    conn.close()
+
+    store2 = UserStore(legacy)
+    store2.create_user("bob", "pw")
+    assert store2.get_user("bob")["dept"] == ""
+    store2.set_user_dept("bob", "sales")
+    assert store2.get_user("bob")["dept"] == "sales"

@@ -65,6 +65,25 @@ class VectorStore:
         with self.lock:
             return list(self.records)
 
+    def doc_visible_depts(self) -> dict[str, list[str]]:
+        """聚合 doc_id → 可见部门列表（文档级可见性的检索过滤数据源）。
+
+        visible_depts 为空/缺失 = 全体可见（聚合结果为空列表）。CSV 存储与
+        控制面 es_file.visible_depts 同一表示。
+        """
+        with self.lock:
+            snapshot = list(self.records)
+        result: dict[str, list[str]] = {}
+        for record in snapshot:
+            doc_id = record.get("doc_id")
+            if not doc_id:
+                continue
+            raw = (record.get("metadata") or {}).get("visible_depts")
+            if not raw:
+                continue
+            result[doc_id] = [part.strip() for part in str(raw).split(",") if part.strip()]
+        return result
+
     def doc_owners(self) -> dict[str, str | None]:
         """聚合 doc_id → owner 映射（权限感知检索的数据源）。
 

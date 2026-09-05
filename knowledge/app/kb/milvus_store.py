@@ -188,6 +188,41 @@ class MilvusVectorStore:
                 offset += page_size
         return records
 
+    def doc_visible_depts(self) -> dict[str, list[str]]:
+        """聚合 doc_id → 可见部门列表（与 JSON 库同语义，CSV 解析）。"""
+        rows_map: dict[str, str] = {}
+        page_size = 16384
+        with self.lock:
+            client = self._get_client()
+            offset = 0
+            while True:
+                rows = client.query(
+                    collection_name=self.collection_name,
+                    filter='doc_id != ""',
+                    output_fields=["doc_id", "metadata"],
+                    limit=page_size,
+                    offset=offset,
+                )
+                if not rows:
+                    break
+                for row in rows:
+                    doc_id = row.get("doc_id", "")
+                    metadata = row.get("metadata", "{}")
+                    try:
+                        parsed = json.loads(metadata) if isinstance(metadata, str) else (metadata or {})
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+                    raw = parsed.get("visible_depts")
+                    if raw:
+                        rows_map[doc_id] = str(raw)
+                offset += page_size
+        result: dict[str, list[str]] = {}
+        for doc_id, raw in rows_map.items():
+            depts = [part.strip() for part in raw.split(",") if part.strip()]
+            if depts:
+                result[doc_id] = depts
+        return result
+
     def doc_owners(self) -> dict[str, str | None]:
         """聚合 doc_id → owner 映射（权限感知检索的数据源），按 offset 分页拉全量。"""
         owners: dict[str, str | None] = {}

@@ -41,14 +41,26 @@
 - Go：`SetFileVisibility` 客户端 + `SetFileVisibility` 绑定（UI 入口待共享文件浏览片）；
 - 测试 +2：操作者归属校验、过滤语义（部门命中/不中/上传者恒可见）。
 
-## 5. /query 检索联动核验结论（拆片 2b）
+## 5. /query 检索联动（片 2b，同日完成）
 
-核验结果：`/query` 的鉴权是**知识服务本地 auth（2a auth.db）**，`request.state.user`
-只含 username/role——控制面 JWT 的 deptId claims 与此无关（核验了此前"JWT 带
-deptId"的假设，不成立）。联动前置 = 知识服务用户-部门模型：
-① auth 用户表加 dept 列 + 管理端同步；② ingest 请求透传 visible_depts 进 chunk
-metadata；③ `visible_doc_ids` 扩展部门过滤。三步独立成片（2b），随知识服务侧
-排期执行，数据面已先行兼容（列表/文件消费方已生效）。
+核验结论（先行核验，修正了"JWT 带 deptId"的原假设）：`/query` 的鉴权是**知识服务
+本地 auth（2a auth.db）**，`request.state.user` 原本只含 username/role。联动按
+三步全栈落地：
+
+1. **auth 用户表加 dept 列**（SQLite 存量库自动补列）：`create_user(dept=)`/
+   `set_user_dept`/`verify`/`get_user`/`resolve_token`/`list_users` 全链路携带；
+   登录响应、`/auth/me`、用户列表均下发 dept（部门 ID 字符串，与 es_file
+   visible_depts 同一表示）。
+2. **入库透传**：`/documents/process` 请求加 `visible_depts`（部门 ID 列表）→
+   job 行（visible_depts CSV，旧库自动补列）→ pipeline chunk metadata + manifest。
+   安全性：声明者即归属者（owner 已被令牌锁定），伪造声明只能"藏自己的文件"，
+   无越权读取面。
+3. **检索裁剪**：`doc_visible_depts()`（JSON + Milvus 双后端）+ `visible_doc_ids`
+   扩展——共享文档 visible_depts 非空时仅 `user.dept ∈ visible_depts` 可见；
+   私有文档规则不变；admin 全见；未登录不过滤。
+
+测试 +3：部门过滤端到端（同部门可见/异部门与无部门不可见/admin 全见）、
+metadata+manifest 落痕、auth store dept 往返与旧库自动补列。pytest **147 全绿**。
 
 
 es_file 加 `visible_depts`；网盘共享列表过滤；`/query` 检索按 visible_depts 裁剪

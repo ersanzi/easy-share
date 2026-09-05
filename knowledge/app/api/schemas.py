@@ -65,6 +65,9 @@ class ProcessDocumentRequest(BaseModel):
     filename: str | None = Field(default=None, min_length=1, max_length=255)
     # 文档归属（用户名）。仅未携带令牌的内部调用生效；带令牌时以令牌用户为准，防止伪造他人归属
     owner: str | None = Field(default=None, min_length=1, max_length=64)
+    # 文档可见部门（部门 ID 字符串列表；空/缺省=共享空间全体可见）。
+    # 声明者即入库归属者（owner 已被令牌锁定），伪造声明只能"藏自己的文件"，无越权面
+    visible_depts: list[str] | None = None
     force: bool = False
 
 

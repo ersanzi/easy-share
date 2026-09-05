@@ -37,6 +37,8 @@ class ProcessingJob:
     finished_at: str | None
     # 2b 文件归属：默认 None（共享文档）——放末尾带默认值，保证旧构造点零改动
     owner: str | None = None
+    # 文档可见部门（CSV，部门 ID 串；NULL/空=共享空间全体可见）
+    visible_depts: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -92,6 +94,9 @@ class JobStore:
             }
             if "owner" not in columns:
                 self.connection.execute("ALTER TABLE processing_jobs ADD COLUMN owner TEXT")
+            # 片 2b 文档级可见性：旧库补列（NULL/空 = 全体可见）
+            if "visible_depts" not in columns:
+                self.connection.execute("ALTER TABLE processing_jobs ADD COLUMN visible_depts TEXT")
 
     def close(self) -> None:
         with self.lock:
@@ -105,6 +110,7 @@ class JobStore:
         object_key: str,
         filename: str,
         owner: str | None = None,
+        visible_depts: str | None = None,
         force: bool = False,
     ) -> tuple[ProcessingJob, bool]:
         with self.lock, self.connection:
@@ -125,11 +131,11 @@ class JobStore:
             self.connection.execute(
                 """
                 INSERT INTO processing_jobs (
-                    id, file_id, version_id, object_key, filename, owner, status, stage,
-                    progress, retry_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)
+                    id, file_id, version_id, object_key, filename, owner, visible_depts,
+                    status, stage, progress, retry_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 'queued', 0, 0, ?, ?)
                 """,
-                (job_id, file_id, version_id, object_key, filename, owner, now, now),
+                (job_id, file_id, version_id, object_key, filename, owner, visible_depts, now, now),
             )
             return self.get(job_id), True
 
@@ -275,6 +281,7 @@ class JobStore:
             object_key=row["object_key"],
             filename=row["filename"],
             owner=row["owner"],
+            visible_depts=row["visible_depts"],
             status=row["status"],
             stage=row["stage"],
             progress=row["progress"],

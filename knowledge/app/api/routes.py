@@ -102,6 +102,8 @@ def process_document(req: ProcessDocumentRequest, request: Request) -> Processin
         object_key=req.object_key,
         filename=filename,
         owner=owner,
+        # 声明者即归属者（owner 已被令牌锁定），部门串归一为逗号分隔
+        visible_depts=",".join(req.visible_depts) if req.visible_depts else None,
         force=req.force,
     )
     if created or job.status == "queued":
