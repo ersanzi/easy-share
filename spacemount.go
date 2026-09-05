@@ -280,7 +280,7 @@ func (a *App) uploadDroppedToSpace(paths []string, report func(title, hint, kind
 			continue
 		}
 		if info.IsDir() {
-			a.uploadDir(core, driveClient, token, space, path)
+			a.uploadDir(core, driveClient, token, space, path, "")
 		} else {
 			a.uploadSingleFile(core, driveClient, token, space, path, filepath.Base(path))
 		}

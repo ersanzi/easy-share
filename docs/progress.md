@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-05
+> 每次迭代开始和结束时更新。最后更新：2026-09-06
 
 ## 路线总览
 
@@ -120,11 +120,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] Contextual Chunking（2026-09-05，P1a）：入库时为每块注入文档级定位摘要前缀（`[文档] 摘要` + `[标题路径]` 双层），对标 Anthropic Contextual Retrieval；LLM 每文档一次摘要、失败/未配置退启发式（永不阻塞入库），启发式仅注入无标题上下文段落；先装箱后加前缀消除边界漂移，manifest 留痕 `contextual`，`CONTEXTUAL_CHUNKING` 一键开关。42 条评测：哈希口径噪声内持平（MRR −0.002 为单个 trigram 碰撞事件，附向量分解证明）、真实 embedding 口径双向饱和 1.000——**现评测集无增益测量空间**，上下文敏感性难例扩充进收件箱。pytest 140 全绿。详见 [`iterations/2026-09-05-contextual-chunking.md`](iterations/2026-09-05-contextual-chunking.md)
 - [x] 观察期周报脚本（2026-09-05，P2）：`scripts/weekly_report.py` 从 QueryLog 严格窗口聚合（新 `windowed_stats`，与驾驶舱全时段口径分离）生成五节中文周报——使用率/检索命中/盲区查询/生成质量/事实触发的观察提示；空数据兜底、只读不改状态、UTC+8 显示。服务两周观察决策的周期输入，部署机上 `--days 14` 直接跑。pytest 144 全绿。详见 [`iterations/2026-09-05-querylog-weekly-report.md`](iterations/2026-09-05-querylog-weekly-report.md)
 - [x] 剪切板插件「开机自动记录」开关（2026-09-05，P2 批次 3 余项）：应用内读写 HKCU Run 键（与 NSIS 安装器同名同键，卸载自然清理），`clipboard.settings` 扩展 `autoStart/autoStartSupported`，插件侧栏新开关行（不支持平台隐藏），manifest 2.1.0；录制随应用启动恢复本就有（08-31 起），本切片补的是「开机 → 自启 → 记录」链路的应用内可控。go build/test 全绿。详见 [`iterations/2026-09-05-clipboard-autostart-toggle.md`](iterations/2026-09-05-clipboard-autostart-toggle.md)
+- [x] 网盘目录导航（2026-09-06，用户指定网盘优化·Cloudreve 对标第一片）：文件夹进入/面包屑/跨目录搜索/时间·名称·大小排序/统计徽标/上传落当前目录——`driveFolder.ts` 从扁平 key 推导目录视图（权威目录层将来落控制面，本模块换数据源即可）；`CloudUpload/CloudUploadFolder` 加 targetDir 走完整 Wails 级联，拖拽/悬浮窗语义不变。详见 [`iterations/2026-09-06-drive-folder-navigation.md`](iterations/2026-09-06-drive-folder-navigation.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-06 | 网盘目录导航 — 文件夹进入/面包屑/跨目录搜索/排序/上传落当前目录（Cloudreve 对标「轻量目录层」客户端最小实现，视图推导不造第二真相源；targetDir 走 Wails 级联） | 已完成（vue-tsc 干净 + vitest 40 全绿 +7 用例 + go 绿；真机点验随下轮打包） |
 | 2026-09-05 | 剪切板插件「开机自动记录」开关（批次 3 余项）— HKCU Run 键应用内读写（与 NSIS 同名同键），clipboard.settings 能力扩展 + 插件侧栏开关，manifest 2.1.0；录制随应用恢复本就有，补的是 OS 自启链路的应用内可控 | 已完成（go build/test 全绿 +3 用例；真机开关冒烟与商城发布归欠账/日常链路） |
 | 2026-09-05 | 观察期周报脚本 — QueryLog 严格窗口聚合（windowed_stats）+ 五节中文周报（使用率/命中/盲区/生成质量/事实提示），空数据兜底，只读不改状态 | 已完成（pytest 144 全绿 +4 用例；空库/旧库/有数据三路冒烟过） |
 | 2026-09-05 | Contextual Chunking — 入库时为每块注入文档级定位摘要前缀（LLM 摘要→启发式回退链，对标 Anthropic；先装箱后加前缀消混杂，哈希碰撞噪声分析） | 已完成（回归 140 绿；42 条评测哈希口径噪声内持平/真实口径饱和 1.000 双向持平；LLM 真链路冒烟过） |
@@ -229,7 +231,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 5. **插件批次 3 余项**（待排期）：AI 周报接知识服务（开机自启记录已随 2026-09-05 切片完成，见 [`iterations/2026-09-05-clipboard-autostart-toggle.md`](iterations/2026-09-05-clipboard-autostart-toggle.md)；darwin 剪切板与插件独立小窗已随 2026-09-01 剪切板旗舰切片完成）
 6. **1.8 批量压测**（后置）：与其他测试统一做
 7. **知识平台里程碑 2 全量**（暂缓）：Java 控制面按需拆分（薄切片路径替代，见定位文档；登录权限迁 Java 已定长期方向；2b/2c 权限感知已由 2026-09-01 切片在 Python 侧落地，迁移时平移语义）
-8. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善
+8. **网盘增强**（进行中，参考 [`cloudreve-benchmark.md`](cloudreve-benchmark.md)）：目录导航/搜索/排序/上传落当前目录已落地（2026-09-06，见 [`iterations/2026-09-06-drive-folder-navigation.md`](iterations/2026-09-06-drive-folder-navigation.md)）；后续既定顺序=控制面权威目录层 + fileId（解锁回收站/版本/KI-3 关闭）→ Upload Session 断点续传（均需 platform-drive Java 端配合）；设备配对 / 传输加密继续暂缓
 9. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
 
 ## 已知阻塞

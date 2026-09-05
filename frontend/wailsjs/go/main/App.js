@@ -102,12 +102,12 @@ export function CloudShare(arg1, arg2) {
   return window['go']['main']['App']['CloudShare'](arg1, arg2);
 }
 
-export function CloudUpload() {
-  return window['go']['main']['App']['CloudUpload']();
+export function CloudUpload(arg1) {
+  return window['go']['main']['App']['CloudUpload'](arg1);
 }
 
-export function CloudUploadFolder() {
-  return window['go']['main']['App']['CloudUploadFolder']();
+export function CloudUploadFolder(arg1) {
+  return window['go']['main']['App']['CloudUploadFolder'](arg1);
 }
 
 export function CloudUploadPaths(arg1) {

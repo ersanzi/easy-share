@@ -60,9 +60,9 @@ export function CloudPreview(arg1:string):Promise<cloud.Preview>;
 
 export function CloudShare(arg1:string,arg2:number):Promise<string>;
 
-export function CloudUpload():Promise<string>;
+export function CloudUpload(arg1:string):Promise<string>;
 
-export function CloudUploadFolder():Promise<string>;
+export function CloudUploadFolder(arg1:string):Promise<string>;
 
 export function CloudUploadPaths(arg1:Array<string>):Promise<void>;
 

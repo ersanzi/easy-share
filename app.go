@@ -945,7 +945,18 @@ func (a *App) driveObjectSize(client *drive.Client, token, key string) (int64, e
 	return 0, fmt.Errorf("对象不存在：%s", key)
 }
 
-func (a *App) CloudUpload() (string, error) {
+// joinObjectKey 把目标目录前缀与相对键拼成对象键（目录为空=根目录）。
+// 目录规范为不带首尾斜杠（如 "photos/2024"）。
+func joinObjectKey(dir, key string) string {
+	dir = strings.Trim(dir, "/")
+	if dir == "" {
+		return key
+	}
+	return dir + "/" + strings.TrimLeft(key, "/")
+}
+
+// CloudUpload 选择单个文件上传到网盘（targetDir 非空时落到该目录下）。
+func (a *App) CloudUpload(targetDir string) (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
 	if err != nil || path == "" {
 		return "", err
@@ -957,7 +968,8 @@ func (a *App) CloudUpload() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	go a.uploadSingleFile(core, driveClient, token, drive.SpacePersonal, path, filepath.Base(path))
+	objectKey := joinObjectKey(targetDir, filepath.Base(path))
+	go a.uploadSingleFile(core, driveClient, token, drive.SpacePersonal, path, objectKey)
 	return filepath.Base(path), nil
 }
 
@@ -979,7 +991,7 @@ func (a *App) CloudUploadPaths(paths []string) error {
 				continue
 			}
 			if info.IsDir() {
-				a.uploadDir(core, driveClient, token, space, path)
+				a.uploadDir(core, driveClient, token, space, path, "")
 			} else {
 				a.uploadSingleFile(core, driveClient, token, space, path, filepath.Base(path))
 			}
@@ -1047,8 +1059,9 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 	})
 }
 
-// uploadDir 遍历目录逐文件上传，保留目录结构。进度写入 Core 统一任务存储。
-func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, space, dir string) {
+// uploadDir 遍历目录逐文件上传，保留目录结构（baseDir 为网盘内目标目录前缀）。
+// 进度写入 Core 统一任务存储。
+func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, space, dir, baseDir string) {
 	folderName := filepath.Base(dir)
 	var files []string
 	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -1074,7 +1087,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 		if relErr != nil {
 			continue
 		}
-		objectKey := folderName + "/" + filepath.ToSlash(rel)
+		objectKey := joinObjectKey(baseDir, folderName+"/"+filepath.ToSlash(rel))
 		if uploadErr := driveClient.UploadFile(a.ctx, token, space, objectKey, filePath, nil); uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
 			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
@@ -1094,7 +1107,10 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 
 // CloudUploadFolder 选择文件夹并逐文件上传到网盘，保留目录结构。
 // 对象键格式为 "文件夹名/相对路径"（如 "photos/2024/img.jpg"）。
-func (a *App) CloudUploadFolder() (string, error) {
+// CloudUploadFolder 选择文件夹并逐文件上传到网盘，保留目录结构（targetDir
+// 非空时整棵文件夹落到该目录下）。对象键格式为 "文件夹名/相对路径"
+// （如 "photos/2024/img.jpg"）。
+func (a *App) CloudUploadFolder(targetDir string) (string, error) {
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件夹"})
 	if err != nil || dir == "" {
 		return "", err
@@ -1103,7 +1119,7 @@ func (a *App) CloudUploadFolder() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	go a.uploadDir(core, driveClient, token, drive.SpacePersonal, dir)
+	go a.uploadDir(core, driveClient, token, drive.SpacePersonal, dir, targetDir)
 	return filepath.Base(dir), nil
 }
 

@@ -74,11 +74,11 @@ const showAllTasks = () => {
   activityOpen.value = false
 }
 
-const handleCloudUpload = async () => {
-  await app.cloudUpload()
+const handleCloudUpload = async (targetDir = '') => {
+  await app.cloudUpload(targetDir)
 }
-const handleCloudUploadFolder = async () => {
-  await app.cloudUploadFolder()
+const handleCloudUploadFolder = async (targetDir = '') => {
+  await app.cloudUploadFolder(targetDir)
 }
 const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)
