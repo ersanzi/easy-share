@@ -35,11 +35,18 @@ RustFS 原始对象
   → Unicode / 控制字符 / 空白清洗与相邻重复块去重
   → 清洗规则引擎（结构噪声 + 可选 PII 脱敏，命中数写入 manifest）
   → clean.md + document.json
-  → 切块
+  → 切块（注入文档级定位摘要前缀，Contextual Chunking，见下）
   → Embedding
   → 按 file_id 原子替换当前向量索引
   → manifest.json
 ```
+
+**上下文注入（Contextual Chunking，2026-09-05 起）**：切块时为每个块前置一行
+`[文档] <定位摘要>`（对标 [Anthropic Contextual Retrieval](https://www.anthropic.com/engineering/contextual-retrieval)），
+摘要同时进入向量与 BM25 索引。配置 LLM 时每文档调用一次生成 ≤100 字定位摘要；
+未配置或调用失败自动退回启发式摘要（标题 + 大纲关键词），**摘要失败绝不阻塞入库**。
+启发式摘要只在无标题上下文的段落注入（有 `[标题路径]` 即冗余），LLM 摘要全量注入。
+manifest `contextual` 字段记录启用状态、provider 与摘要原文，可追溯可重建。
 
 首批格式：
 
@@ -242,6 +249,8 @@ Local Lab：`http://127.0.0.1:8000/lab`（仅本地开发测试）
 | `EMBEDDING_DIM` | 向量维度，必须与模型一致 | `1024` |
 | `OCR_ENABLED` / `OCR_LANG` / `OCR_MIN_TEXT_CHARS` | 是否启用 OCR、PaddleOCR 语言与 PDF 短文本页触发阈值 | `true` / `ch` / `20` |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 切块长度与重叠 | `800` / `120` |
+| `CONTEXTUAL_CHUNKING` | 入库时为每块生成文档级定位摘要前缀（LLM 或启发式） | `true` |
+| `CONTEXTUAL_MAX_CHARS` | 定位摘要字符上限 | `120` |
 | `CLEANING_RULES_PATH` | 清洗规则集 JSON（不存在则用内置默认） | `./data/cleaning_rules.json` |
 | `VECTOR_STORE_PATH` | 当前 JSON 向量存储 | `./data/vector_store.json` |
 | `JOB_STORE_PATH` | 当前 SQLite 执行任务库 | `./data/jobs.db` |

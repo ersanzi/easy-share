@@ -6,6 +6,12 @@
 2026-07-29 结构感知切块基线：recall@5=0.933 hit@1=0.900 mrr=0.917 snippet=0.900
 标题层级上下文前缀对 HashEmbedder 词袋模型引入噪声词，但真实 embedding 下
 为增益（提供主题语境）。阈值按新基线下浮校准，真实语义质量用 --real 验证。
+
+2026-09-05 Contextual Chunking 基线（启发式摘要，4096 维）：
+关闭=0.952/0.857/0.894/0.905 开启=0.952/0.857/0.892/0.905（recall@5/hit@1/mrr/snippet）
+差异为单个 trigram 哈希碰撞事件的量级（misses 集合不变）；真实 embedding
+口径双向 1.000（评测集已饱和）。哈希短文本碰撞噪声分析见
+docs/iterations/2026-09-05-contextual-chunking.md。
 """
 from __future__ import annotations
 

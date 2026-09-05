@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-02
+> 每次迭代开始和结束时更新。最后更新：2026-09-05
 
 ## 路线总览
 
@@ -36,7 +36,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 **发芽路线：代码侧全部就绪，等公司部署观察（2026-09-01）**。三条线均到「代码完成」：
 
-- **知识平台**：发芽四步（2a 账号登录 / 目录监听 / 桌面端知识问答 / WPS 最小闭环）2026-08-21 完成；里程碑 1.9 检索加固 2026-08-20 完成；1.8 驾驶舱四 Tab 实现余压测；**2b/2c 权限感知检索 2026-09-01 完成**（owner 贯通入库链路，`/query` 按登录用户裁剪可见文档——公司多账号部署的隐私前提）；**一键部署向导 2026-09-01 完成**（`knowledge/scripts/deploy.ps1`，30 分钟手册变一条命令）；**生产检索回灌 2026-09-01 完成**（混合/重排/多跳从驾驶舱接上生产 `/query`，策略部署级配置默认 hybrid，生产查询日志贯通——观察期数据源补齐；对标结论见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)）。
+- **知识平台**：发芽四步（2a 账号登录 / 目录监听 / 桌面端知识问答 / WPS 最小闭环）2026-08-21 完成；里程碑 1.9 检索加固 2026-08-20 完成；1.8 驾驶舱四 Tab 实现余压测；**2b/2c 权限感知检索 2026-09-01 完成**（owner 贯通入库链路，`/query` 按登录用户裁剪可见文档——公司多账号部署的隐私前提）；**一键部署向导 2026-09-01 完成**（`knowledge/scripts/deploy.ps1`，30 分钟手册变一条命令）；**生产检索回灌 2026-09-01 完成**（混合/重排/多跳从驾驶舱接上生产 `/query`，策略部署级配置默认 hybrid，生产查询日志贯通——观察期数据源补齐；对标结论见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)）；**Contextual Chunking（P1a）2026-09-05 完成**（入库注入文档级定位摘要前缀，LLM→启发式回退链，`CONTEXTUAL_CHUNKING` 可关）。
 - **账号控制面（阶段 4）**：外部批次 P0–P4 已合入并完成本仓回归（Go 18 包/vitest 33/pytest 120/wails build 全绿），KI-5 死代码已清、设置页账号资料已补。剩余真机鼠标验收（见已知阻塞）。
 - **插件生态**：插件系统 + 官方自营商城 + 剪切板旗舰插件 2.0（双形态 + Win+V 快捷面板）代码完成，Windows 冒烟过，2026-09-02 真机修复热键回退链与微信 24bpp 图片损坏；插件仓拆分挂触发条件待执行（勿主动）。
 
@@ -117,11 +117,14 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 2b 文件归属 / 2c 权限感知检索（2026-09-01）：owner 贯通任务表/manifest/索引元数据（令牌用户优先防伪造，watcher 监听目录为共享），`/query` 服务端按登录用户裁剪可见文档（共享文档所有人可见、owner 文档本人+admin、空交集短路），未登录行为不变；向量库双后端新增 `doc_owners()`；桌面端/WPS 经 Core 网关透传令牌零改动生效。pytest 新增 8 用例、全量 128 全绿；真实服务双账号冒烟隔离验证通过。详见 [`iterations/2026-09-01-permission-aware-retrieval.md`](iterations/2026-09-01-permission-aware-retrieval.md)
 - [x] 部署提效一键 bootstrap（2026-09-01）：`knowledge/scripts/deploy.ps1` 一键向导（Python 检查/RustFS 复用或 Docker 起新/venv 清华镜像/桶初始化/.env 生成/启动探活/管理员+批量同事账号/防火墙放行/自启/同事使用指引.txt），交互+无人值守双模式；`docker-compose.rustfs.yml`；`start_server.ps1`/`install_autostart.ps1` 加 -Port；**修存量缺口：requirements.txt 补 httpx（MinerU client 无条件 import，旧手册部署必炸）**；手册第一节重写为一键部署并补防火墙步骤。隔离目录真跑全流程 + 放文件自动入库 + 同事账号检索命中。详见 [`iterations/2026-09-01-deploy-bootstrap.md`](iterations/2026-09-01-deploy-bootstrap.md)
 - [x] 生产检索回灌（2026-09-01）：1.9 的混合检索/重排/多跳从 `/debug` 驾驶舱接上生产 `/query`——新增 `QueryOrchestrator` 编排层，`QUERY_STRATEGY` 部署级配置（默认 hybrid，vector 可回滚，multi_hop 无 LLM 自动降级），响应透出实际策略与降级说明；生产查询/生成事件落 `QueryLog`（观察期使用率/盲区数据源此前为空）；向量库双后端补 `count()`/`snapshot_records()` 协议，修 Milvus 无 `records` 属性导致 `/health`、BM25 降级、驾驶舱聚合崩溃的隐藏 bug。pytest 新增 5 用例、全量 133 全绿。对标背景与 P1/P2 后续（contextual chunking/OKF 化/FAQ 沉淀）见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)。详见 [`iterations/2026-09-01-production-retrieval-upgrade.md`](iterations/2026-09-01-production-retrieval-upgrade.md)
+- [x] Contextual Chunking（2026-09-05，P1a）：入库时为每块注入文档级定位摘要前缀（`[文档] 摘要` + `[标题路径]` 双层），对标 Anthropic Contextual Retrieval；LLM 每文档一次摘要、失败/未配置退启发式（永不阻塞入库），启发式仅注入无标题上下文段落；先装箱后加前缀消除边界漂移，manifest 留痕 `contextual`，`CONTEXTUAL_CHUNKING` 一键开关。42 条评测：哈希口径噪声内持平（MRR −0.002 为单个 trigram 碰撞事件，附向量分解证明）、真实 embedding 口径双向饱和 1.000——**现评测集无增益测量空间**，上下文敏感性难例扩充进收件箱。pytest 140 全绿。详见 [`iterations/2026-09-05-contextual-chunking.md`](iterations/2026-09-05-contextual-chunking.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-05 | Contextual Chunking — 入库时为每块注入文档级定位摘要前缀（LLM 摘要→启发式回退链，对标 Anthropic；先装箱后加前缀消混杂，哈希碰撞噪声分析） | 已完成（回归 140 绿；42 条评测哈希口径噪声内持平/真实口径饱和 1.000 双向持平；LLM 真链路冒烟过） |
+| 2026-09-02 | Linux 生产服务器部署资产 — deploy/server-linux（compose 容器化 + deploy.sh 引导 + update.sh 秒级更新自动回退）+ ship-control-plane.ps1 + build.ps1 -PlatformUrl 构建期注入 | 已完成（代码侧；go test 全绿/compose config/PS5.1 解析过；**真实服务器端到端待部署验收**） |
 | 2026-09-02 | 剪切板真机修复 — 热键回退链重排（Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V，面板底部显示实际生效热键）+ 微信 24bpp DIB 行对齐（图片斜纹/通道错位根因） | 已完成（单测+全量回归绿+安装版真机冒烟过：热键弹出/脚注展示/合成 DIB 全像素/真实微信截图无损） |
 | 2026-09-01 | 生产检索回灌 — 混合/重排/多跳接上生产 /query（QueryOrchestrator + QUERY_STRATEGY + 生产查询日志）+ 修 Milvus records 隐藏 bug；附 Agent 知识库六年演进对标（agent-knowledge-benchmark.md） | 已完成（pytest 133 全绿） |
 | 2026-09-01 | 部署提效一键 bootstrap — deploy.ps1 向导（RustFS 分支/venv 镜像/.env 生成/账号/防火墙/自启/使用一页纸）+ 修 httpx 依赖缺口 | 已完成（隔离目录全流程真跑 + 端到端入库/检索验证） |

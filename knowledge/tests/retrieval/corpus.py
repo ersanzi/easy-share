@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.eval.retrieval import RetrievalCase
 from app.jobs.store import ProcessingJob
+from app.kb.contextual import DocContextBuilder
 from app.kb.embedder import Embedder, HashEmbedder
 from app.kb.store import VectorStore
 from app.pipeline.service import DocumentPipeline
@@ -60,10 +61,15 @@ def build_eval_setup(
     embedder: Embedder | None = None,
     chunk_size: int = EVAL_CHUNK_SIZE,
     chunk_overlap: int = EVAL_CHUNK_OVERLAP,
+    contextual: bool = True,
 ) -> EvalSetup:
     resolved_embedder = embedder or HashEmbedder(EVAL_HASH_DIM)
     storage = FakeStorage()
     vector_store = VectorStore(str(Path(work_dir) / "vectors.json"))
+    # 评测固定走启发式摘要（不碰 Settings/.env，保证确定性且无网络调用）；
+    # 摘要压到 60 字：评测块仅 300 字符，前缀必须保持高密度才不稀释内容质量；
+    # contextual=False 用于对比"无文档级上下文"的旧行为
+    context_builder = DocContextBuilder(max_chars=60) if contextual else None
     pipeline = DocumentPipeline(
         storage=storage,
         embedder=resolved_embedder,
@@ -71,6 +77,7 @@ def build_eval_setup(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         max_source_bytes=10 * 1024 * 1024,
+        context_builder=context_builder,
     )
     return EvalSetup(
         storage=storage,

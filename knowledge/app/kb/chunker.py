@@ -1,8 +1,9 @@
 """文本与结构化文档切块。
 
-结构感知策略（2026-07-29）：
+结构感知策略（2026-07-29；2026-09-05 增补 Contextual Chunking）：
 - 按标题边界（level ≤ split_level，默认 H1/H2）分段，不跨主要章节合并
-- 每个切块注入标题层级上下文（如 [公司制度 > 报销标准]），提升 embedding 主题辨识度
+- 每个切块注入标题层级上下文（如 [公司制度 > 报销标准]）与可选的文档级
+  定位摘要前缀（[文档] …，见 app/kb/contextual.py），提升 embedding 主题辨识度
 - 表格保持完整；超出 chunk_size 时按行拆分并保留表头
 - overlap 仅在段内生效，不跨段污染
 """
@@ -206,15 +207,27 @@ def _chunk_section(
     section: _Section,
     chunk_size: int,
     overlap: int,
+    doc_summary: str = "",
+    heuristic_mode: bool = False,
 ) -> list[DocumentChunk]:
-    """在单个段落内贪心合并块，注入标题上下文。"""
-    context_prefix = f"[{section.context}]\n" if section.context else ""
-    prefix_len = len(context_prefix)
-    # 前缀占比过高时放弃前缀，保证正文切块粒度不被吞掉
-    if prefix_len > chunk_size // 3:
-        context_prefix = ""
-        prefix_len = 0
-    effective_size = chunk_size - prefix_len
+    """在单个段落内贪心合并块，注入文档级上下文与标题上下文。
+
+    heuristic_mode（启发式摘要）：摘要派生自标题大纲，标题路径已含同等信息，
+    仅对完全无标题上下文的段落注入，避免词袋口径下的重复稀释（评测实测回退）。
+    LLM 摘要含标题之外的语义词，不受此限制、全量注入。
+    """
+    use_doc = bool(doc_summary) and any(b.type != "heading" for b, _ in section.blocks)
+    if use_doc and heuristic_mode and section.context:
+        use_doc = False
+    doc_prefix = f"[文档] {doc_summary}\n" if use_doc else ""
+    heading_prefix = f"[{section.context}]\n" if section.context else ""
+    # 前缀占比过高时放弃，保证正文切块粒度不被吞掉
+    if len(doc_prefix) + len(heading_prefix) > chunk_size // 3:
+        heading_prefix = ""
+    context_prefix = doc_prefix + heading_prefix
+    # 先装箱后加前缀：正文按完整 chunk_size 装箱（与无上下文时逐字节一致，
+    # 消除装箱漂移），上下文前缀在装箱结果外叠加——overlap 合并本就允许超长
+    effective_size = chunk_size
 
     chunks: list[DocumentChunk] = []
     buf_text = ""
@@ -294,12 +307,15 @@ def chunk_document(
     chunk_size: int = 800,
     overlap: int = 120,
     split_level: int = 2,
+    doc_summary: str = "",
+    heuristic_mode: bool = False,
 ) -> list[DocumentChunk]:
     """按结构化文档块切分，保留块标识、来源位置与提取方式。
 
     结构感知策略：
     - 标题（level ≤ split_level）触发段落边界，不跨主要章节合并
-    - 每个切块注入 [标题层级] 上下文前缀
+    - 每个切块注入 [文档] 定位摘要 + [标题层级] 双层上下文前缀（Contextual Chunking）
+    - heuristic_mode：启发式摘要只在无标题上下文的段落注入（有标题路径即冗余）
     - 表格保持完整，超大表格按行拆分并保留表头
     - overlap 仅在段内生效
     """
@@ -310,14 +326,29 @@ def chunk_document(
     if not rendered:
         return []
 
+    # 物理预算：摘要前缀（含标签开销）不得吃掉块粒度，超限就地截断
+    doc_summary = (doc_summary or "").strip()
+    if doc_summary:
+        budget = max(0, chunk_size // 3 - len("[文档] \n"))
+        doc_summary = doc_summary[:budget]
+
+    def run_section(section: _Section) -> list[DocumentChunk]:
+        return _chunk_section(
+            section,
+            chunk_size,
+            overlap,
+            doc_summary=doc_summary,
+            heuristic_mode=heuristic_mode,
+        )
+
     # 无标题时退化为单段，行为与旧版一致
     has_headings = any(block.type == "heading" for block, _ in rendered)
     if not has_headings:
         section = _Section(context="", blocks=rendered)
-        return _chunk_section(section, chunk_size, overlap)
+        return run_section(section)
 
     sections = _group_sections(rendered, split_level)
     all_chunks: list[DocumentChunk] = []
     for section in sections:
-        all_chunks.extend(_chunk_section(section, chunk_size, overlap))
+        all_chunks.extend(run_section(section))
     return all_chunks

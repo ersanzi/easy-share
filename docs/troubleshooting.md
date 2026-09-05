@@ -362,3 +362,9 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 11. **安装版启动后侧边栏没有插件入口、插件中心「已安装（0）」而商城正常**：启动竞态——前端在 Go `initPluginSystem` 完成前就调用 `PluginList`，Go 侧 manager 为 nil 时返回**空数组成功**（不是报错），前端「失败重试」不触发，且 pluginsLoaded 锁死后整个会话不再刷新。修复双管齐下：Go 侧 `PluginList` 等 `pluginReady` 闸（3 秒超时兜底，`appplugin.go`）；前端 `refreshPlugins` 失败退避重试（`usePlugins.ts`）。教训：绑定方法「返回空集合成功」与「报错」在前端语义完全不同，未就绪时应报错或等待，别静默回空。
 12. **快捷面板热键"失效"（2026-09-02）**：先看 `desktop.log` 的 `panel: 全局热键 …` 行——Win+V 被占（Windows 剪贴板历史开着必然如此）时旧版静默回退到 Ctrl+Shift+V，用户不知情还按 Win+V。现行回退链：Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V，回退会打告警日志，且实际生效热键显示在面板底部脚注（URL `&hk=` 参数下发）。**回退链选键红线**：Ctrl+Shift+V（粘贴为纯文本）/Win+Shift+V（实测被占）/Alt+V（老式 View 菜单加速键）不许进链——全局 RegisterHotKey 是排他的，会把该组合从所有应用手里抢走。
 13. **剪切板记录的微信图片全是斜条纹+彩虹色+倾斜（2026-09-02）**：微信以 24bpp DIB 放剪贴板，DIB 每行按 4 字节对齐（行尾 1–3 字节填充），解析若按 `w*3` 紧凑取行则逐行漂移（宽度 825 时每行差 1 字节、累计 14° 斜纹）。修复在 `dibToPNG` 24bpp 分支（`stride := (w*3+3)&^3`），单测 `dib_windows_test.go` 防回退。32bpp 行天然 4 对齐无此坑——当时"截图正常、微信图坏"的分野即此。
+
+## 15. 知识检索评测相关（2026-09-05 起）
+
+1. **HashEmbedder 评测指标莫名 ±0.01 波动**：4096 维字符 trigram 哈希存在碰撞（单对概率约 1/4096，前缀×查询十几对合计约 4%）。任何切块文本增量（如 contextual 摘要前缀）都是碰撞掷骰——实测「前缀与查询共享 trigram 为空，点积却 +0.0714」。对策：该口径只做回归守门（misses 集合比单点小数更可靠），语义结论以 `scripts/eval_retrieval.py --real` 为准；追求哈希口径精确不回退是与随机数搏斗。证据与分析见 `docs/iterations/2026-09-05-contextual-chunking.md` §4。
+2. **42 条评测集对真实 embedding 已饱和（全指标 1.000）**：检索质量「有增益」类改动在这把尺子上不可测量，只能证「不回退」。要测增益需先扩充「上下文敏感性」难例（正文不含文档身份即失义的块），方案见 `docs/tasks.md` 收件箱——注意防过拟合，勿为证明某个功能反向造用例。
+3. **切块加前缀后评测排名大乱**：前缀若占用正文装箱预算（`effective_size = chunk_size - prefix_len`），切块边界整体漂移，排名变化与内容无关。正确姿势是**先装箱后加前缀**（`app/kb/chunker.py` `_chunk_section`），正文与无前缀时逐字节一致。

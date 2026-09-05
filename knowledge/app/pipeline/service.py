@@ -10,6 +10,7 @@ from typing import Any, Callable
 from app.jobs.store import ProcessingJob
 from app.ocr import OCRProvider
 from app.kb.chunker import chunk_document
+from app.kb.contextual import DocContextBuilder
 from app.kb.embedder import Embedder
 from app.kb.store import VectorStore
 from app.parsing.extractor import _parse_markdown, parse_document
@@ -22,7 +23,7 @@ from app.parsing.renderer import render_markdown
 from app.parsing.rules import load_rules
 from app.storage.base import ObjectStorage
 
-PIPELINE_VERSION = "2026-07-28.1"
+PIPELINE_VERSION = "2026-09-05.1"
 ProgressReporter = Callable[[str, int], None]
 
 
@@ -50,6 +51,7 @@ class DocumentPipeline:
         ocr_min_text_chars: int = 20,
         mineru_provider: MinerUProvider | None = None,
         pdf_router: PdfInspectorRouter | None = None,
+        context_builder: DocContextBuilder | None = None,
     ) -> None:
         self.storage = storage
         self.embedder = embedder
@@ -62,6 +64,7 @@ class DocumentPipeline:
         self.ocr_min_text_chars = ocr_min_text_chars
         self.mineru_provider = mineru_provider
         self.pdf_router = pdf_router
+        self.context_builder = context_builder
         self._document_locks_guard = threading.Lock()
         self._document_locks: dict[str, threading.Lock] = {}
 
@@ -125,7 +128,23 @@ class DocumentPipeline:
         )
 
         report("chunking", 68)
-        chunks = chunk_document(document, self.chunk_size, self.chunk_overlap)
+        # 文档级定位摘要（Contextual Chunking）：清洗之后构建，避免 PII 进索引；
+        # builder 为 None（功能关闭）时与旧行为完全一致
+        doc_summary = ""
+        heuristic_mode = False
+        if self.context_builder is not None:
+            context = self.context_builder.build(document, job.filename)
+            doc_summary = context.summary
+            # 启发式摘要派生自标题大纲，只注入无标题上下文的段落（有路径即冗余）；
+            # LLM 摘要含标题之外的语义词，全量注入
+            heuristic_mode = context.provider == "heuristic"
+        chunks = chunk_document(
+            document,
+            self.chunk_size,
+            self.chunk_overlap,
+            doc_summary=doc_summary,
+            heuristic_mode=heuristic_mode,
+        )
         if not chunks:
             raise ValueError("清洗结果无法生成有效文本块")
 
@@ -177,6 +196,11 @@ class DocumentPipeline:
             "ocr": document.metadata.get("ocr"),
             "parsing": parsing_meta,
             "cleaning": cleaning_report,
+            "contextual": {
+                "enabled": self.context_builder is not None,
+                "provider": self.context_builder.provider if self.context_builder else None,
+                "summary": doc_summary or None,
+            },
             "artifacts": keys,
             "processed_at": processed_at,
         }

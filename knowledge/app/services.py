@@ -9,6 +9,7 @@ from app.auth.store import UserStore
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
 from app.kb.bm25 import BM25Retriever
+from app.kb.contextual import DocContextBuilder, build_doc_context_builder
 from app.kb.embedder import Embedder, build_embedder
 from app.kb.query_log import QueryLog
 from app.kb.reranker import Reranker, NoopReranker, build_reranker
@@ -118,6 +119,7 @@ def build_services(config: Settings = settings) -> AppServices:
         ocr_min_text_chars=config.ocr_min_text_chars,
         mineru_provider=mineru,
         pdf_router=pdf_router,
+        context_builder=build_doc_context_builder(config),
     )
     job_runner = JobRunner(job_store, pipeline.process, workers=config.job_workers)
     app_services = AppServices(

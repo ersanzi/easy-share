@@ -38,6 +38,11 @@ def main() -> int:
     )
     parser.add_argument("--chunk-size", type=int, default=EVAL_CHUNK_SIZE)
     parser.add_argument("--chunk-overlap", type=int, default=EVAL_CHUNK_OVERLAP)
+    parser.add_argument(
+        "--no-contextual",
+        action="store_true",
+        help="关闭文档级上下文注入（Contextual Chunking），用于新旧行为对比",
+    )
     parser.add_argument("--output", type=Path, default=None, help="把完整报告写入 JSON 文件")
     args = parser.parse_args()
 
@@ -56,6 +61,7 @@ def main() -> int:
             embedder=embedder,
             chunk_size=args.chunk_size,
             chunk_overlap=args.chunk_overlap,
+            contextual=not args.no_contextual,
         )
         file_ids = index_corpus(setup)
         report = evaluate_retrieval(setup.retriever, load_cases(), top_k=args.top_k)
@@ -63,10 +69,12 @@ def main() -> int:
     report["embedder"] = embedder_name
     report["chunk_size"] = args.chunk_size
     report["chunk_overlap"] = args.chunk_overlap
+    report["contextual"] = not args.no_contextual
     report["indexed_documents"] = len(file_ids)
 
     print(f"语料文档: {len(file_ids)}  评测用例: {report['cases']}  embedder: {embedder_name}")
     print(f"chunk_size/overlap: {args.chunk_size}/{args.chunk_overlap}  top_k: {args.top_k}")
+    print(f"contextual(启发式摘要): {'开' if not args.no_contextual else '关'}")
     print(f"recall@{args.top_k}: {report['recall_at_k']:.3f}")
     print(f"hit@1:      {report['hit_at_1']:.3f}")
     print(f"mrr:        {report['mrr']:.3f}")

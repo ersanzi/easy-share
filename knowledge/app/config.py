@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 120
     retrieval_top_k: int = 5
 
+    # 上下文注入（Contextual Chunking，2026-09-05）：入库时为每个切块生成文档级
+    # 定位摘要前缀（对标 Anthropic Contextual Retrieval），LLM 未配置/失败自动退回
+    # 启发式摘要；关闭后与旧行为一致。摘要同时进向量与 BM25 索引。
+    contextual_chunking: bool = True
+    contextual_max_chars: int = 120
+
     # 生产 /query 检索策略（部署级配置，不暴露给终端用户——技术参数自动推断）
     # vector=单路向量（旧行为，embedding 故障自动降级 BM25）
     # hybrid=向量+BM25 RRF 融合；hybrid_rerank=融合后 Cross-Encoder 精排（未配置 rerank 时等价 hybrid）
