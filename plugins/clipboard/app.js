@@ -247,7 +247,29 @@
       if (st && st.maxEntries) maxEntries = st.maxEntries;
       updateSidebar();
       setStatus(!!(st && st.paused));
+      setAutoStart(!!(st && st.autoStart), !!(st && st.autoStartSupported));
     }).catch(function () {});
+  }
+
+  // 开机自动记录：OS 自启（HKCU Run）为真相源，开关直读直写宿主；
+  // 平台不支持（autoStartSupported=false）时整行隐藏
+  function setAutoStart(enabled, supported) {
+    var row = $('autoStartRow');
+    if (!row) return;
+    if (!supported) { row.hidden = true; return; }
+    row.hidden = false;
+    var sw = $('autoStartSwitch');
+    sw.classList.toggle('on', enabled);
+    sw.setAttribute('aria-checked', enabled ? 'true' : 'false');
+  }
+
+  function toggleAutoStart() {
+    var sw = $('autoStartSwitch');
+    var next = !sw.classList.contains('on');
+    eshare.clipboard.settings({ autoStart: next }).then(function (st) {
+      setAutoStart(!!(st && st.autoStart), true);
+      toast(next ? '已开启开机自动记录' : '已关闭开机自动记录');
+    }).catch(function (err) { toast(err && err.message || '设置失败'); });
   }
 
   function setStatus(paused) {
@@ -501,6 +523,14 @@
         toast(paused ? '已暂停记录' : '已恢复记录');
       }).catch(function (err) { toast(err && err.message || '设置失败'); });
     });
+
+    var asRow = $('autoStartRow');
+    if (asRow) {
+      $('autoStartSwitch').addEventListener('click', toggleAutoStart);
+      asRow.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleAutoStart(); }
+      });
+    }
 
     $('clearBtn').addEventListener('click', function () {
       if (!confirm('确定清空全部剪切板记录？收藏与图片将一并删除。')) return;

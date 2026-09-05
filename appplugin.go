@@ -148,8 +148,9 @@ func (a *App) registerCapabilities(r *plugin.Registry, clip *clipboard.Service) 
 		})
 		r.Register("clipboard.settings", plugin.PermClipboardRead, func(args json.RawMessage) (any, error) {
 			var req struct {
-				Paused    *bool  `json:"paused"`
+				Paused     *bool `json:"paused"`
 				MaxEntries int   `json:"maxEntries"`
+				AutoStart  *bool `json:"autoStart"`
 			}
 			if len(args) > 0 {
 				if err := json.Unmarshal(args, &req); err != nil {
@@ -167,8 +168,23 @@ func (a *App) registerCapabilities(r *plugin.Registry, clip *clipboard.Service) 
 						return nil, err
 					}
 				}
+				if req.AutoStart != nil {
+					if err := clip.SetAutoStart(*req.AutoStart); err != nil {
+						return nil, err
+					}
+				}
 			}
-			return clip.Settings(), nil
+			// 自启状态以 OS（HKCU Run 键）为唯一真相源，不落 settings.json；
+			// 平台不支持时 supported=false，UI 据此隐藏开关
+			autoStart, err := clip.AutoStartEnabled()
+			if err != nil {
+				autoStart = false
+			}
+			return struct {
+				clipboard.Settings
+				AutoStart          bool `json:"autoStart"`
+				AutoStartSupported bool `json:"autoStartSupported"`
+			}{Settings: clip.Settings(), AutoStart: autoStart, AutoStartSupported: clip.AutoStartSupported()}, nil
 		})
 	}
 	r.Register("notification.show", plugin.PermNotification, func(args json.RawMessage) (any, error) {

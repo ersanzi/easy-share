@@ -119,11 +119,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 生产检索回灌（2026-09-01）：1.9 的混合检索/重排/多跳从 `/debug` 驾驶舱接上生产 `/query`——新增 `QueryOrchestrator` 编排层，`QUERY_STRATEGY` 部署级配置（默认 hybrid，vector 可回滚，multi_hop 无 LLM 自动降级），响应透出实际策略与降级说明；生产查询/生成事件落 `QueryLog`（观察期使用率/盲区数据源此前为空）；向量库双后端补 `count()`/`snapshot_records()` 协议，修 Milvus 无 `records` 属性导致 `/health`、BM25 降级、驾驶舱聚合崩溃的隐藏 bug。pytest 新增 5 用例、全量 133 全绿。对标背景与 P1/P2 后续（contextual chunking/OKF 化/FAQ 沉淀）见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)。详见 [`iterations/2026-09-01-production-retrieval-upgrade.md`](iterations/2026-09-01-production-retrieval-upgrade.md)
 - [x] Contextual Chunking（2026-09-05，P1a）：入库时为每块注入文档级定位摘要前缀（`[文档] 摘要` + `[标题路径]` 双层），对标 Anthropic Contextual Retrieval；LLM 每文档一次摘要、失败/未配置退启发式（永不阻塞入库），启发式仅注入无标题上下文段落；先装箱后加前缀消除边界漂移，manifest 留痕 `contextual`，`CONTEXTUAL_CHUNKING` 一键开关。42 条评测：哈希口径噪声内持平（MRR −0.002 为单个 trigram 碰撞事件，附向量分解证明）、真实 embedding 口径双向饱和 1.000——**现评测集无增益测量空间**，上下文敏感性难例扩充进收件箱。pytest 140 全绿。详见 [`iterations/2026-09-05-contextual-chunking.md`](iterations/2026-09-05-contextual-chunking.md)
 - [x] 观察期周报脚本（2026-09-05，P2）：`scripts/weekly_report.py` 从 QueryLog 严格窗口聚合（新 `windowed_stats`，与驾驶舱全时段口径分离）生成五节中文周报——使用率/检索命中/盲区查询/生成质量/事实触发的观察提示；空数据兜底、只读不改状态、UTC+8 显示。服务两周观察决策的周期输入，部署机上 `--days 14` 直接跑。pytest 144 全绿。详见 [`iterations/2026-09-05-querylog-weekly-report.md`](iterations/2026-09-05-querylog-weekly-report.md)
+- [x] 剪切板插件「开机自动记录」开关（2026-09-05，P2 批次 3 余项）：应用内读写 HKCU Run 键（与 NSIS 安装器同名同键，卸载自然清理），`clipboard.settings` 扩展 `autoStart/autoStartSupported`，插件侧栏新开关行（不支持平台隐藏），manifest 2.1.0；录制随应用启动恢复本就有（08-31 起），本切片补的是「开机 → 自启 → 记录」链路的应用内可控。go build/test 全绿。详见 [`iterations/2026-09-05-clipboard-autostart-toggle.md`](iterations/2026-09-05-clipboard-autostart-toggle.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-05 | 剪切板插件「开机自动记录」开关（批次 3 余项）— HKCU Run 键应用内读写（与 NSIS 同名同键），clipboard.settings 能力扩展 + 插件侧栏开关，manifest 2.1.0；录制随应用恢复本就有，补的是 OS 自启链路的应用内可控 | 已完成（go build/test 全绿 +3 用例；真机开关冒烟与商城发布归欠账/日常链路） |
 | 2026-09-05 | 观察期周报脚本 — QueryLog 严格窗口聚合（windowed_stats）+ 五节中文周报（使用率/命中/盲区/生成质量/事实提示），空数据兜底，只读不改状态 | 已完成（pytest 144 全绿 +4 用例；空库/旧库/有数据三路冒烟过） |
 | 2026-09-05 | Contextual Chunking — 入库时为每块注入文档级定位摘要前缀（LLM 摘要→启发式回退链，对标 Anthropic；先装箱后加前缀消混杂，哈希碰撞噪声分析） | 已完成（回归 140 绿；42 条评测哈希口径噪声内持平/真实口径饱和 1.000 双向持平；LLM 真链路冒烟过） |
 | 2026-09-02 | Linux 生产服务器部署资产 — deploy/server-linux（compose 容器化 + deploy.sh 引导 + update.sh 秒级更新自动回退）+ ship-control-plane.ps1 + build.ps1 -PlatformUrl 构建期注入 | 已完成（代码侧；go test 全绿/compose config/PS5.1 解析过；**真实服务器端到端待部署验收**） |
@@ -224,7 +226,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 2. **质量体检报告获客入口**：上传 10 份文档出体检报告（种子发芽后作为接触制造业客户的钩子）
 3. **"问过的不再问第二遍"**（候选 idea，定位文档 §三）：问答自动沉淀为知识资产，待真实使用验证形态
 4. **插件仓拆分**（待触发，不主动执行）：`plugins/` 拆为独立仓库——触发条件与完整步骤见 [`plans/2026-09-01-plugin-repo-split.md`](plans/2026-09-01-plugin-repo-split.md)（插件 ≥3 个 / 外部协作者 / 发布节奏倒挂 / 客户定制，满足任一即启动）
-5. **插件批次 3 余项**（待排期）：开机自启记录、AI 周报接知识服务（darwin 剪切板与插件独立小窗已随 2026-09-01 剪切板旗舰切片完成，见插件迭代文档）
+5. **插件批次 3 余项**（待排期）：AI 周报接知识服务（开机自启记录已随 2026-09-05 切片完成，见 [`iterations/2026-09-05-clipboard-autostart-toggle.md`](iterations/2026-09-05-clipboard-autostart-toggle.md)；darwin 剪切板与插件独立小窗已随 2026-09-01 剪切板旗舰切片完成）
 6. **1.8 批量压测**（后置）：与其他测试统一做
 7. **知识平台里程碑 2 全量**（暂缓）：Java 控制面按需拆分（薄切片路径替代，见定位文档；登录权限迁 Java 已定长期方向；2b/2c 权限感知已由 2026-09-01 切片在 Python 侧落地，迁移时平移语义）
 8. **网盘增强 / 设备配对 / 传输加密**（暂缓）：桌面端功能完善
@@ -235,7 +237,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 > 历史遗留欠账总账（2026-09-01 整理）：全部为**需真实操作/真机**的验收项，代码侧已就绪；不阻塞公司部署启动，可与部署验收一并做。
 
 - **真机鼠标验收欠账（账号控制面，需真实操作）**：① 登录 → 上传 → 换账号看列表（P2 桌面端 UI 链路只验过编译与类型） ②「此电脑」空间盘挂载/卸载与换账号重挂 ③ 悬浮窗悬停/固定/拖放交互（切片 1+2） ④ 设置页账号卡片与退出登录
-- **插件系统真机 UI 验收（2026-08-31 起）**：复制文本/图片 → 剪切板历史 → 插件中心商城/已装交互 → 商城装 todo → 周报复制/上传（API 级端到端已过，UI 交互未验）
+- **插件系统真机 UI 验收（2026-08-31 起）**：复制文本/图片 → 剪切板历史 → 插件中心商城/已装交互 → 商城装 todo → 周报复制/上传（API 级端到端已过，UI 交互未验）；「开机自动记录」开关真机点验（写 Run 键 → 重启自启 → 录制恢复，2026-09-05 起）——存量安装需商城发布插件 2.1.0 后才可见
 - **剪切板旗舰插件 2.0 的 macOS 运行行为（2026-09-01 起）**：Windows 真机端到端冒烟已过；darwin 剪切板监听/⌘⇧V 面板/自动粘贴编译由 CI 把关，运行行为待 Mac 真机
 - **macOS 托盘链接修复重跑**：需在 Mac 上重跑 `bash scripts/build-mac.sh`，完成 .app/DMG 产出与菜单栏运行验收
 - **MinerU 冒烟**：三层解析路由代码已落地（2026-08-20），待真实 mineru-api 部署后冒烟（公司部署时可一并）

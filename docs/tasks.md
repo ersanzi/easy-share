@@ -35,7 +35,6 @@
 
 | 优先级 | 任务 | 来源/依据 | 完成标准 | 可自主 |
 | --- | --- | --- | --- | --- |
-| P2 | 插件批次 3 余项：开机自启记录（剪切板插件）——实现前先读 iterations/2026-08-31-plugin-system.md 与 2026-09-01-clipboard-flagship-panel.md 确认需求边界 | progress.md 待开始 #5 | 边界确认后按迭代流程交付 | ✅ |
 | P2 | AI 周报接知识服务：todo 周报插件增加 AI 汇总（经 Core 网关调 /query，登录态复用） | progress.md 待开始 #5 | 插件冒烟 + 回归绿 | ✅ |
 | P2 | 空间整理算法：plans/2026-08-30-space-pool-and-organize.md 中「整理算法」待实施部分——实现前先读该 plan | progress.md 账号控制面段 | 按 plan 验收标准 | ✅ |
 | P2 | OKF 化切片一：derived/ 为唯一知识源的重建验证——写全量重建向量索引脚本并断言评测集指标不回退 | agent-knowledge-benchmark.md P1（derived/=知识源、向量=可重建缓存） | 脚本 + 重建前后指标留档 | ✅（大任务，只做此片） |
@@ -52,6 +51,7 @@
 
 | 完成日 | 任务 | 验证结果 |
 | --- | --- | --- |
+| 2026-09-05 | P2 插件批次 3 余项：剪切板「开机自动记录」开关（边界确认后交付：缺口在 OS 自启链路的应用内可控，非录制恢复） | go build/test 全绿（+3 mock 用例，不写真注册表）；插件 JS 语法过；真机开关冒烟归真机验收欠账，存量安装需商城发布 2.1.0。见 [iterations/2026-09-05-clipboard-autostart-toggle.md](../docs/iterations/2026-09-05-clipboard-autostart-toggle.md) |
 | 2026-09-05 | P2 观察期周报脚本：QueryLog.windowed_stats + 五节中文周报（使用率/命中/盲区/生成质量/观察提示） | pytest 144 全绿（+4 用例）；空库兜底/旧库窗口过滤/有数据渲染三路冒烟过。见 [iterations/2026-09-05-querylog-weekly-report.md](../docs/iterations/2026-09-05-querylog-weekly-report.md) |
 | 2026-09-05 | P1 contextual chunking：切块注入文档级上下文（文档级定位摘要前缀，LLM→启发式回退链） | pytest 140 全绿（+7 新用例）；42 条评测对比留档：哈希口径噪声内持平（MRR −0.002=单个 trigram 碰撞，向量分解证明）、真实 embedding 口径双向饱和 1.000；LLM 真链路冒烟过。见 [iterations/2026-09-05-contextual-chunking.md](../docs/iterations/2026-09-05-contextual-chunking.md)。「有增益」在现评测集不可测（饱和），扩充难例已入收件箱 |
 | 2026-09-05 | P3 补 progress.md 迭代记录表「2026-09-02 Linux 生产服务器部署资产」行 | 已补，与「进行中」段落及 51ebf0d 提交一致 |
@@ -65,7 +65,8 @@
 | 2026-09-03 | 情报学习扫描 | B | 自动化首轮：四轴完成（FastAPI/RustFS/RuoYi/PaddleOCR 未覆盖下轮补）；收件箱 0 条新增——P1 contextual chunking 获 Anthropic Contextual Retrieval 主流化佐证，P0 回灌刚落地；P2/P3 观察项 12 条入 digest（要点：Wails 上游 v2.14.0 vs 项目 v2.13.0、Milvus 3.0.0、Cloudreve V4 发布、reranker 候选池 20→5 经验参数）；产出 [docs/intelligence/2026-09-03-digest.md](intelligence/2026-09-03-digest.md)。工作树用户 WIP 未受影响 |
 | 2026-09-04 | 自主规划与迭代 | A（安全门拦截） | 工作树有用户 WIP（剪切板修复未提交），按契约只做规划与文档：执行 P3 文档对账巡检——五真相源 0 断链；发现 2 处漂移并处置（progress.md 迭代表缺 Linux 部署行→因在其 WIP 中不代改，登记待办池 P3；本清单用户动作区过时表述→已勘误）；待办池重排结论=维持现状。详见 [docs/iterations/2026-09-04-文档对账巡检.md](iterations/2026-09-04-文档对账巡检.md) |
 | 2026-09-05 | 自主规划与迭代（会话触发，用户指示找 GitHub/Gitee 灵感） | A | 树干净安全门过。执行 2 任务：P1 contextual chunking（完成，收获三实测修正：样板词噪声/装箱漂移/启发式注入范围；评测发现「42 条集对真实 embedding 饱和」并量化哈希碰撞噪声，难例扩充入收件箱）+ P3 补 progress.md 迭代表 Linux 行。待办池重排=P1 消化后维持 P2 顺序。灵感扫描：Anthropic 官方 cookbook/工程博文范式确认（逐块 LLM 上下文→本项目收敛为每文档一次），无新增产品条目 |
-| 2026-09-05 | 会话续轮（用户拍板：提交推送后继续） | A | P1+P3 以 4861d0d 提交并双远程推送。续执行 P2 观察期周报脚本（完成：windowed_stats 严格窗口聚合 + 五节周报，pytest 144 绿，三路冒烟过）；顺手修盲区标签误导（向量检索零分也计 top_k 条，改按分数表达）。下一可自主任务=P2 插件批次 3 开机自启记录（需先读两份插件迭代文档确认边界） |
+| 2026-09-05 | 会话续轮（用户拍板：提交推送后继续） | A | P1+P3 以 4861d0d 提交并双远程推送。续执行 P2 观察期周报脚本（完成：windowed_stats 严格窗口聚合 + 五节周报，pytest 144 绿，三路冒烟过）；顺手修盲区标签误导（向量检索零分也计 top_k 条，改按分数表达） |
+| 2026-09-05 | 会话续轮 2（用户确认继续） | A | 周报以 6f815a6 双远程推送（Gitee 一次 TLS 握手失败重试即过）。续执行 P2 开机自启记录：边界确认（缺口=OS 自启链路应用内不可控，录制随应用恢复 08-31 已有）→ HKCU Run 键开关 + 能力扩展 + 插件 UI 2.1.0（完成，go 全绿）。剩余可自主任务=AI 周报接知识服务（涉跨进程登录态，建议下轮） |
 
 ## 自动化运行规则
 

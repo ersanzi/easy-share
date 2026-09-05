@@ -1,7 +1,7 @@
 {
   "id": "clipboard",
   "name": "剪切板",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "复制过的文字、图片与文件自动归档，按天回看、收藏与搜索；快捷面板随 Win+V（mac ⌘⇧V）即唤即用，被占用时自动回退并在面板底部显示实际快捷键。",
   "icon": "📋",
   "entry": "index.html",
