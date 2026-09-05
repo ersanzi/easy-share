@@ -118,11 +118,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 部署提效一键 bootstrap（2026-09-01）：`knowledge/scripts/deploy.ps1` 一键向导（Python 检查/RustFS 复用或 Docker 起新/venv 清华镜像/桶初始化/.env 生成/启动探活/管理员+批量同事账号/防火墙放行/自启/同事使用指引.txt），交互+无人值守双模式；`docker-compose.rustfs.yml`；`start_server.ps1`/`install_autostart.ps1` 加 -Port；**修存量缺口：requirements.txt 补 httpx（MinerU client 无条件 import，旧手册部署必炸）**；手册第一节重写为一键部署并补防火墙步骤。隔离目录真跑全流程 + 放文件自动入库 + 同事账号检索命中。详见 [`iterations/2026-09-01-deploy-bootstrap.md`](iterations/2026-09-01-deploy-bootstrap.md)
 - [x] 生产检索回灌（2026-09-01）：1.9 的混合检索/重排/多跳从 `/debug` 驾驶舱接上生产 `/query`——新增 `QueryOrchestrator` 编排层，`QUERY_STRATEGY` 部署级配置（默认 hybrid，vector 可回滚，multi_hop 无 LLM 自动降级），响应透出实际策略与降级说明；生产查询/生成事件落 `QueryLog`（观察期使用率/盲区数据源此前为空）；向量库双后端补 `count()`/`snapshot_records()` 协议，修 Milvus 无 `records` 属性导致 `/health`、BM25 降级、驾驶舱聚合崩溃的隐藏 bug。pytest 新增 5 用例、全量 133 全绿。对标背景与 P1/P2 后续（contextual chunking/OKF 化/FAQ 沉淀）见 [`agent-knowledge-benchmark.md`](agent-knowledge-benchmark.md)。详见 [`iterations/2026-09-01-production-retrieval-upgrade.md`](iterations/2026-09-01-production-retrieval-upgrade.md)
 - [x] Contextual Chunking（2026-09-05，P1a）：入库时为每块注入文档级定位摘要前缀（`[文档] 摘要` + `[标题路径]` 双层），对标 Anthropic Contextual Retrieval；LLM 每文档一次摘要、失败/未配置退启发式（永不阻塞入库），启发式仅注入无标题上下文段落；先装箱后加前缀消除边界漂移，manifest 留痕 `contextual`，`CONTEXTUAL_CHUNKING` 一键开关。42 条评测：哈希口径噪声内持平（MRR −0.002 为单个 trigram 碰撞事件，附向量分解证明）、真实 embedding 口径双向饱和 1.000——**现评测集无增益测量空间**，上下文敏感性难例扩充进收件箱。pytest 140 全绿。详见 [`iterations/2026-09-05-contextual-chunking.md`](iterations/2026-09-05-contextual-chunking.md)
+- [x] 观察期周报脚本（2026-09-05，P2）：`scripts/weekly_report.py` 从 QueryLog 严格窗口聚合（新 `windowed_stats`，与驾驶舱全时段口径分离）生成五节中文周报——使用率/检索命中/盲区查询/生成质量/事实触发的观察提示；空数据兜底、只读不改状态、UTC+8 显示。服务两周观察决策的周期输入，部署机上 `--days 14` 直接跑。pytest 144 全绿。详见 [`iterations/2026-09-05-querylog-weekly-report.md`](iterations/2026-09-05-querylog-weekly-report.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-05 | 观察期周报脚本 — QueryLog 严格窗口聚合（windowed_stats）+ 五节中文周报（使用率/命中/盲区/生成质量/事实提示），空数据兜底，只读不改状态 | 已完成（pytest 144 全绿 +4 用例；空库/旧库/有数据三路冒烟过） |
 | 2026-09-05 | Contextual Chunking — 入库时为每块注入文档级定位摘要前缀（LLM 摘要→启发式回退链，对标 Anthropic；先装箱后加前缀消混杂，哈希碰撞噪声分析） | 已完成（回归 140 绿；42 条评测哈希口径噪声内持平/真实口径饱和 1.000 双向持平；LLM 真链路冒烟过） |
 | 2026-09-02 | Linux 生产服务器部署资产 — deploy/server-linux（compose 容器化 + deploy.sh 引导 + update.sh 秒级更新自动回退）+ ship-control-plane.ps1 + build.ps1 -PlatformUrl 构建期注入 | 已完成（代码侧；go test 全绿/compose config/PS5.1 解析过；**真实服务器端到端待部署验收**） |
 | 2026-09-02 | 剪切板真机修复 — 热键回退链重排（Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V，面板底部显示实际生效热键）+ 微信 24bpp DIB 行对齐（图片斜纹/通道错位根因） | 已完成（单测+全量回归绿+安装版真机冒烟过：热键弹出/脚注展示/合成 DIB 全像素/真实微信截图无损） |

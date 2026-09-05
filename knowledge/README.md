@@ -303,6 +303,17 @@ $env:PYTHONDONTWRITEBYTECODE='1'
 
 任何切块、Embedding、向量库或检索策略改动，都应先留存新旧评测报告再合入；阈值调整需同步更新对应迭代记录。
 
+### 观察期周报
+
+从 `query_log.db` 汇总窗口内的使用率、检索命中、盲区查询与生成质量，输出可直接发给人看的中文周报（只读，不改状态；空数据有兜底文案）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/weekly_report.py --days 7             # 周窗口
+.\.venv\Scripts\python.exe scripts/weekly_report.py --days 14 --output 周报.txt
+```
+
+聚合逻辑在 `app/kb/weekly_report.py`（与驾驶舱 `stats()` 的全时段口径互不影响）。
+
 ### 真实 RustFS 集成测试
 
 测试要求 RustFS 已启动且目标 bucket 已存在；它不会自动创建或删除 bucket，只会创建唯一测试源对象并精确清理该对象与三个派生产物：
