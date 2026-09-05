@@ -3,4 +3,4 @@
 package version
 
 // Version 是当前产品版本号，与 wails.json productVersion 保持一致。
-const Version = "0.1.1"
+const Version = "0.2.0"

@@ -218,7 +218,8 @@ func (c *Client) setAuth(req *http.Request, token string) {
 func (c *Client) do(req *http.Request, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("连接账号服务失败：%w", err)
+		// 带上服务器地址：员工看到英文 dial 错误时，至少知道客户端连的是谁、该找谁
+		return fmt.Errorf("无法连接账号服务 %s：%w（请确认已接入公司网络，仍失败请联系管理员）", c.baseURL, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

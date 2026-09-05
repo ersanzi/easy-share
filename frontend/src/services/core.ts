@@ -57,12 +57,14 @@
   RejectTransfer,
   ReportFrontendError,
   SaveSettings,
+  SaveServiceConfig,
   SelectFile,
   SelectFiles,
   SelectReceiveDirectory,
   SelectShareDirectory,
   SendBatch,
   SendFile,
+  ServiceEndpoints,
   ShutdownAll,
   StartDrive,
   StartUpdateDownload,
@@ -87,6 +89,7 @@ import type {
   PluginInvokeResult,
   PluginPreview,
   Space,
+  ServiceEndpoints as ServiceEndpointsData,
   UpdateCheckResult,
 } from '../types/core'
 
@@ -133,6 +136,9 @@ export const core = {
   knowledgeLogout: KnowledgeLogout,
   knowledgeHealth: () => KnowledgeHealth() as Promise<KnowledgeHealthData>,
   knowledgeAsk: (question: string) => KnowledgeAsk(question) as Promise<KnowledgeAnswer>,
+  // 租户服务发现：登录后下发服务地址（知识页免手填），管理员可登记
+  serviceEndpoints: () => ServiceEndpoints() as Promise<ServiceEndpointsData>,
+  saveServiceConfig: (knowledgeUrl: string) => SaveServiceConfig(knowledgeUrl) as Promise<void>,
   // 账号控制面（P1）
   login: (username: string, password: string) => Login(username, password) as Promise<AuthUser>,
   logout: Logout,

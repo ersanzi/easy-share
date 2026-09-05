@@ -134,6 +134,8 @@ export function RejectTransfer(arg1:string):Promise<void>;
 
 export function ReportFrontendError(arg1:string,arg2:string):Promise<void>;
 
+export function SaveServiceConfig(arg1:string):Promise<void>;
+
 export function SaveSettings(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SelectFile():Promise<string>;
@@ -147,6 +149,8 @@ export function SelectShareDirectory():Promise<string>;
 export function SendBatch(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function SendFile(arg1:string,arg2:string):Promise<void>;
+
+export function ServiceEndpoints():Promise<main.ServiceEndpoints>;
 
 export function SetDropSpace(arg1:string):Promise<void>;
 

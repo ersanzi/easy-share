@@ -110,7 +110,7 @@ Stop-Process -Name explorer -Force; Start-Sleep 2; Start-Process explorer
 ## 6. 设备无法互相发现
 
 - 两台设备应位于同一可信局域网。
-- Windows 防火墙专用网络需要允许 UDP `9527` 和 TCP `9528`。
+- Windows 防火墙专用网络需要允许 UDP `9527` 和 TCP `9528`。v0.2.0 起安装器会询问「放行防火墙」（提权一次，按程序放行 `easyshare-core.exe`，规则名 `EasyShare Core`）；装的时候点了「否」的机器在这里手动补。
 - 检查企业网络是否禁用广播或客户端互访。
 - `core.log` 中确认 discovery 和 receiver 没有立即退出。
 - 默认发现窗口按七秒内出现对端验收。

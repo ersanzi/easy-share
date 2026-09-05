@@ -17,6 +17,8 @@
 !define PRODUCT_EXECUTABLE  "easyshare.exe"
 !define CORE_EXECUTABLE     "easyshare-core.exe"
 !define UNINST_KEY_NAME     "EasyShare"
+## 防火墙放行规则名（安装添加/卸载删除须同名；按程序放行，端口变化无需改规则）
+!define FIREWALL_RULE       "EasyShare Core"
 
 ## 用户级安装，不需要管理员权限
 !define REQUEST_EXECUTION_LEVEL "user"
@@ -142,6 +144,20 @@ Section "Install"
             StrCpy $AutoStart "1"
             WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}" "$\"$INSTDIR\${PRODUCT_EXECUTABLE}$\""
         noAutoStart:
+
+        ## 局域网互传防火墙放行：Core 监听 9527/9528（设备发现/传输），Windows 防火墙
+        ## 默认拦入站，不放行同事间互相发现不了。加规则要管理员，提权确认一次。
+        ## 按程序放行（而非按端口），Core 端口以后调整也不用改规则。
+        MessageBox MB_YESNO|MB_ICONQUESTION "是否放行 Windows 防火墙以启用局域网设备发现与互传？$\r$\n$\r$\n需要管理员权限确认一次；跳过后局域网互传可能搜不到设备。" IDNO noFirewall
+            DetailPrint "正在添加防火墙放行规则（${FIREWALL_RULE}）..."
+            ClearErrors
+            ExecShell "runas" "netsh" 'advfirewall firewall add rule name="${FIREWALL_RULE}" dir=in action=allow enable=yes program="$INSTDIR\${CORE_EXECUTABLE}"' SW_HIDE
+            ${If} ${Errors}
+                DetailPrint "未添加防火墙规则（取消了授权）：需要时可在防火墙设置里手动放行 ${CORE_EXECUTABLE}。"
+            ${Else}
+                DetailPrint "防火墙放行完成。"
+            ${EndIf}
+        noFirewall:
     ${EndIf}
 
     ## 在线升级（/update）：安装完成后自动重启应用，对齐主流软件的升级体验
@@ -171,6 +187,13 @@ Section "Uninstall"
 
     ## 删除开机自启动
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${INFO_PRODUCTNAME}"
+
+    ## 删除防火墙放行规则（尽力而为：非静默时提权删一次，取消/失败留残留规则也无害——
+    ## 规则指向的程序已不存在；静默卸载跳过，避免弹 UAC 中断无人值守流程）
+    ${IfNot} ${Silent}
+        DetailPrint "正在删除防火墙放行规则（${FIREWALL_RULE}）..."
+        ExecShell "runas" "netsh" 'advfirewall firewall delete rule name="${FIREWALL_RULE}"' SW_HIDE
+    ${EndIf}
 
     ## 删除快捷方式
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}\${INFO_PRODUCTNAME}.lnk"

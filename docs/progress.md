@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-06（/query 检索联动片 2b）
+> 每次迭代开始和结束时更新。最后更新：2026-09-06（分发冲刺与租户服务发现，v0.2.0）
 
 ## 路线总览
 
@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-06 | 分发冲刺与租户服务发现 — 服务地址登录后下发（sys_config 零 DDL，Java-first）+ 知识页免手填/账号预填 + 登录页去 admin 预填 + 连接错误带指引 + NSIS 防火墙放行 + v0.2.0 全量构建烧录验证 + 同事一页纸/分发清单 | 已完成（go 全绿 +6/vitest 40/Java 39；防火墙 UAC 真机点验与公司版构建待真实 IP） |
 | 2026-09-06 | 部门级权限 片 2b（/query 检索联动）— 知识服务 auth 用户加 dept 列（登录会话下发）+ /documents/process 透传 visible_depts 进 chunk metadata + doc_visible_depts（双后端）+ visible_doc_ids 部门过滤 | 已完成（pytest 147 全绿 +3：端到端部门过滤/auth 往返与旧库补列） |
 | 2026-09-06 | 部门级权限 片 2（文档级可见性·数据面）— es_file.visible_depts + presign-put 上传声明 + file-visibility 设置端点 + /objects 共享列表过滤（唯一列举出口收口，网盘/挂载盘/快搜自动生效）；/query 联动核验：走知识服务本地 auth，联动拆片 2b（auth 部门模型前置） | 已完成（Java 39 全绿 +2；go 全绿；/query 联动片 2b 待排） |
 | 2026-09-06 | 管理员汇总页 — AdminPanel 概览 Tab：账号/查询/盲区/文档/生成质量/容量六卡（知识服务 /stats 新端点 + Core 代理 + AdminKnowledgeStats 绑定） | 已完成（三栈回归全绿；查询趋势可视化观察期后按需） |
@@ -218,6 +219,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**分发冲刺与租户服务发现**（2026-09-06 开工，当日完成）— 用户目标「部署整个项目、给同事安装包」，代入员工视角摸排出五个首启堵点并全部处理：① **租户服务发现**（架构级，用户拍板方向）：客户端只预知控制面一个地址，知识服务地址登录后经 `/easyshare/service/config` 下发（存储复用 sys_config **零 DDL**，Java-first；管理页「租户服务地址」卡片登记，未登记时同主机 `:8090→:8000` 推导兜底）——「知识」页免手填、账号预填、只差输密码；② 登录页去 `admin` 预填+品牌文案修正；③ 连接错误带服务器地址与行动指引；④ **安装器防火墙放行**（NSIS 非静默询问提权加按程序规则 `EasyShare Core`，修「同事互相搜不到设备」的致命首启伤）；⑤ 版本 **0.2.0** + `build.ps1` 全量跑通产出安装包 + `-PlatformUrl` 烧录实证 + 同事一页纸（[`company-desktop-guide.md`](company-desktop-guide.md)）+ 分发清单六项（server-linux README §三）。验证：go 全绿 +6 / vitest 40 / vue-tsc 干净 / Java 39 全绿。剩余真机项：防火墙 UAC 交互点验、公司版构建待真实 IP。详见 [`iterations/2026-09-06-分发冲刺与租户服务发现.md`](iterations/2026-09-06-分发冲刺与租户服务发现.md)。
+
 **Linux 生产服务器部署资产**（2026-09-02 开工，当日完成代码侧）— 公司部署观察期启动，服务器为 Linux，全套上线：新增 `deploy/server-linux/`（compose：PG/Redis/RustFS/RuoYi 容器化，RustFS 9000 对 LAN 开放修正预签名直传坑；deploy.sh 一键引导；update.sh 知识服务秒级更新+失败自动回退，跟 dev 分支）+ 开发机 `scripts/ship-control-plane.ps1`（jar 只能开发机构建，传包+建表+重启+探活）；客户端指向服务器改为**构建期注入**（`build.ps1 -PlatformUrl`，`internal/config` 默认地址 const→var 走 ldflags，同事开箱即用）。验证：go test 全绿 / bash -n / compose config / PS5.1 解析全过；**真实服务器端到端待明天部署时验收**。详见 [`iterations/2026-09-02-linux-server-deploy.md`](iterations/2026-09-02-linux-server-deploy.md)。
 
 **剪切板旗舰插件 + 全局快捷面板**（2026-09-01 开工，当日完成）— 插件系统批次 3 两项（插件独立小窗口 + darwin 剪切板）与插件旗舰化合并推进：剪切板插件重构 2.0（`plugins/clipboard/`，已改为**普通可卸载插件**：首启种子安装、更新走商城、卸载即停录制收面板；源码在插件工程，主仓 embed 直读做种子）——按天分组卡片/收藏/分类/搜索/明暗双主题，同一代码带 `?panel=1` 紧凑面板形态；宿主新增「快捷面板」表面——全局热键（Win+V，被占自动回退 Win+Shift+V；mac ⌘⇧V）唤起独立小窗（Win: Win32+WebView2，mac: NSPanel+WKWebView），面板内选中条目即复制并自动粘贴回之前的焦点窗（Win+V 语义）；macOS 侧 NSPasteboard 轮询监听补齐 darwin 剪切板能力。验证：Go 回归/wails build 全绿；**Windows 真机端到端冒烟通过**（热键回退链→面板弹出→实时历史→Enter 复制→焦点切回→自动粘贴落字）；macOS 编译由 CI 把关、运行行为待真机。**2026-09-02 真机修复**：热键回退链重排为 Win+V→Win+Alt+V→Ctrl+Alt+V→Alt+Shift+V（Win+V 被系统剪贴板历史占、旧回退 Ctrl+Shift+V 抢走各应用「粘贴为纯文本」），实际生效热键在面板底部展示；微信 24bpp DIB 行尾对齐填充解析修复（图片斜纹+通道错位根因）。详见 [`iterations/2026-09-02-clipboard-hotkey-image-fix.md`](iterations/2026-09-02-clipboard-hotkey-image-fix.md) 与 [`iterations/2026-09-01-clipboard-flagship-panel.md`](iterations/2026-09-01-clipboard-flagship-panel.md)。
@@ -263,7 +266,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 版本约定
 
-当前版本：**0.1.1**（2026-08-31 起，随在线升级功能发布；经控制面升级通道真机验证）
+当前版本：**0.2.0**（2026-09-06 起，分发冲刺：租户服务发现/登录首启修复/安装器防火墙放行）
 
 版本号规则：
 - 0.x.y：阶段 0-3 的迭代版本

@@ -250,6 +250,10 @@ export function ReportFrontendError(arg1, arg2) {
   return window['go']['main']['App']['ReportFrontendError'](arg1, arg2);
 }
 
+export function SaveServiceConfig(arg1) {
+  return window['go']['main']['App']['SaveServiceConfig'](arg1);
+}
+
 export function SaveSettings(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveSettings'](arg1, arg2, arg3);
 }
@@ -276,6 +280,10 @@ export function SendBatch(arg1, arg2) {
 
 export function SendFile(arg1, arg2) {
   return window['go']['main']['App']['SendFile'](arg1, arg2);
+}
+
+export function ServiceEndpoints() {
+  return window['go']['main']['App']['ServiceEndpoints']();
 }
 
 export function SetDropSpace(arg1) {

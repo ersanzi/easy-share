@@ -130,6 +130,15 @@ Authorization: Bearer <apiToken>
 
 桌面端升级链路：启动 24h 节流自动检查（`update-state.json`）→ 设置页「关于与更新」手动检查 → 下载（SHA256 校验，`%LOCALAPPDATA%\EasyShare\updates\`）→ Windows 安装版「重启并更新」（`installer /S /update` → 优雅停 Core → NSIS taskkill 残留 → 覆盖安装 → 自动重启）；macOS 与绿色版仅引导下载。发布入口 `scripts/publish-release.ps1`。
 
+## 4b-2. 租户服务配置下发（2026-09-06 起）
+
+「客户端只预知控制面一个地址，其余服务地址登录后下发」的租户服务发现（`ServiceConfigController.java`，客户端 `internal/account/serviceconfig.go` + App 绑定 `ServiceEndpoints`/`SaveServiceConfig`）。存储复用 RuoYi `sys_config`（键 `drive.service.knowledge.url`，**零 DDL**），读写在模块内闭环（不经 RuoYi 配置缓存，口径自洽）。当前下发项：知识服务地址。客户端未登录/未登记时回退**同主机推导**（控制面 `:8090` → 知识服务 `:8000`，「知识」页自动填好，员工免手填）；管理页「服务配置」卡片登记（superadmin）。
+
+| 方法 | 路径 | 鉴权 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/easyshare/service/config` | 登录 | 下发服务配置（未登记项空串，客户端回退推导） |
+| `PUT` | `/easyshare/service/config` | superadmin | 登记知识服务地址（空串=清除，回退推导；自动 strip 尾斜杠/校验 http 前缀） |
+
 ## 4c. 插件系统与商城接口（2026-08-31 起）
 
 **插件形态**：Web 插件包（zip：`manifest.json` + HTML/JS/CSS），UI 跑在桌面端前端 `<iframe sandbox="allow-scripts">`（opaque origin），经 postMessage RPC 调用宿主能力；公共 SDK 由宿主统一 serve（`/plugins/_sdk/eshare.js`）。**剪切板为首发普通插件**（2026-09-01 起，可卸载可禁用；此前为内置不可卸载，用户明确「插件即可安装可卸载」后改造）：源码在插件工程 `plugins/clipboard/`，主仓 `//go:embed all:plugins/clipboard` 直读，经 `SeedPlugin` 做**首次运行种子**——落成普通插件（登记 builtin=false），之后更新走商城流程（含权限确认），卸载后不复活（`plugins-seeded.json` 标记）；录制服务与快捷面板随插件在场状态启停（卸载即停记录、销毁面板、释放热键）。宿主侧监听在 `internal/clipboard`（Windows `AddClipboardFormatListener` + message-only 窗口；macOS NSPasteboard changeCount 800ms 轮询，2026-09-01 起；文本/图片(DIBV5/TIFF→PNG)/文件路径，hash 去重、来源进程/应用名、Windows 侧排除密码管理器标记格式）。

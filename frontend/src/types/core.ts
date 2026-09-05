@@ -94,6 +94,13 @@ export interface KnowledgeStatus {
   role: string
 }
 
+/** 登录后下发的服务拓扑：registry=控制面登记，derived=同主机推导 */
+export interface ServiceEndpoints {
+  knowledgeUrl: string
+  knowledgeUrlSource: 'registry' | 'derived'
+  platformBaseUrl: string
+}
+
 export interface KnowledgeHealth {
   records: number
   llm: string

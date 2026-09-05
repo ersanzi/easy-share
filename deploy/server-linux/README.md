@@ -102,9 +102,19 @@ powershell -ExecutionPolicy Bypass -File scripts\ship-control-plane.ps1 -SshTarg
 powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -PlatformUrl http://<服务器IP>:8090
 ```
 
-- 装完登录（admin 开账号）；「知识」页首次使用时填 `http://<服务器IP>:8000` 并登录知识服务账号；
+- 装完登录（admin 开账号）即全程可用：v0.2.0 起**知识服务地址登录后自动下发**（管理页「服务配置」登记 `http://<服务器IP>:8000`；未登记时客户端按同主机 `:8000` 推导），「知识」页免手填服务器地址，账号预填当前登录名；
+- 安装器会询问「放行防火墙」（提权一次）——**建议同事选是**，否则局域网互传搜不到设备；跳过的机器按 [`../../docs/troubleshooting.md`](../../docs/troubleshooting.md) §6 手动放行；
 - 之后的版本升级走在线升级通道（`scripts/publish-release.ps1 -PlatformUrl http://<服务器IP>:8090`），同事端自动检查安装，无需再发安装包；
 - WPS 插件按需：`install_wps_addon.ps1 -ServerUrl http://<服务器IP>:8000`（rollout guide §一·6）。
+
+**分发清单（发群前逐项过一遍）**：
+
+1. ☐ 服务器部署完成，`http://<IP>:8090` 与 `:8000` 从同事网段可达；
+2. ☐ admin 默认口令已改；同事账号已批量开通（管理页「账号」Tab，或 deploy.sh 向导）；
+3. ☐ 管理页「服务配置」已登记知识服务地址（不登记也行，同主机推导兜底）；
+4. ☐ `build.ps1 -PlatformUrl http://<IP>:8090` 产出的公司版安装包 **v0.2.0+**；
+5. ☐ 杀毒软件（360/火绒/Defender 企业控制台）把安装包与 `easyshare.exe`/`easyshare-core.exe` 加白，减少员工侧误报弹窗；
+6. ☐ 发群：安装包 + [`同事上手指南`](../../docs/company-desktop-guide.md)（复制正文即可）。
 
 ## 三、快速迭代更新（三种通道）
 

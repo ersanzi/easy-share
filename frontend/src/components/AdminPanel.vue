@@ -269,6 +269,36 @@ const toggleRegister = async () => {
   }
 }
 
+// 服务配置（租户服务发现）：管理员在这里登记知识服务地址，同事端登录后自动拿到，
+// 免手填。来源 derived 表示还没登记、展示的是同主机推导的默认值。
+const serviceKnowledgeUrl = ref('')
+const serviceSource = ref<'' | 'registry' | 'derived'>('')
+const serviceBusy = ref(false)
+
+const loadServiceConfig = async () => {
+  try {
+    const endpoints = await core.serviceEndpoints()
+    serviceKnowledgeUrl.value = endpoints.knowledgeUrl
+    serviceSource.value = endpoints.knowledgeUrlSource
+  } catch (e) {
+    fail(e)
+  }
+}
+
+const submitServiceConfig = async () => {
+  if (serviceBusy.value) return
+  serviceBusy.value = true
+  try {
+    await core.saveServiceConfig(serviceKnowledgeUrl.value.trim())
+    notify('服务配置已保存，同事端登录后自动生效')
+    await loadServiceConfig()
+  } catch (e) {
+    fail(e)
+  } finally {
+    serviceBusy.value = false
+  }
+}
+
 const submitCreate = async () => {
   if (creating.value) return
   creating.value = true
@@ -321,7 +351,7 @@ const initial = (user: ManagedUser) => {
   return name ? Array.from(name)[0] : '?'
 }
 
-onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
+onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig(); void loadSpaces() })
 </script>
 
 <template>
@@ -480,6 +510,36 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
         >
           <i />
         </button>
+      </section>
+
+      <section class="card">
+        <header class="card-header">
+          <div>
+            <span class="section-label">服务配置</span>
+            <h2>租户服务地址</h2>
+          </div>
+        </header>
+        <div class="setting-row">
+          <label class="setting-label" for="svcKnowledgeUrl">知识服务地址</label>
+          <p class="setting-hint">
+            同事「知识」页登录后自动使用该地址，免手填（当前展示：{{
+              serviceSource === 'registry' ? '已登记' : '未登记，同主机推导值'
+            }}）。清空保存即恢复推导（同主机 :8000）。
+          </p>
+          <div class="admin-service-row">
+            <input
+              id="svcKnowledgeUrl"
+              v-model="serviceKnowledgeUrl"
+              class="setting-input"
+              type="text"
+              autocomplete="off"
+              placeholder="http://192.168.1.10:8000"
+            />
+            <button class="secondary-button" type="button" :disabled="serviceBusy" @click="submitServiceConfig">
+              {{ serviceBusy ? '保存中…' : '保存' }}
+            </button>
+          </div>
+        </div>
       </section>
     </template>
 

@@ -89,6 +89,8 @@ powershell -ExecutionPolicy Bypass -File <仓库路径>\knowledge\scripts\instal
 
 > **公司知识库上线了：文件放进去，答案问出来。**
 
+> **装了 EasyShare 桌面客户端的同事看这份**：[`company-desktop-guide.md`](company-desktop-guide.md)（安装/登录/日常场景/FAQ，复制即可发群；客户端登录后知识库地址自动配置，无需看下文的手填地址部分）。
+
 1. **怎么问**：浏览器打开 `http://<服务器IP>:8000/lab`，登录后底部「知识问答」输入问题。回答带引用，点引用可看原文出处。
 2. **装了 WPS 插件的**：在 WPS 文字里选中一段话，点「知识」页签的「查知识」，答案直接出现在右侧（首次登录一次）。
 3. **怎么贡献文件**：把文件放进共享盘的 `知识库入库` 文件夹（支持 Word/PDF/Excel/PPT/TXT/Markdown/图片），约 1 分钟后自动入库可被检索；文件更新后重新放入即可，答案会引用最新版。

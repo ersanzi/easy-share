@@ -405,9 +405,62 @@ func (a *App) Logout() {
 	a.publishTrayUser()
 }
 
+// ServiceEndpoints 是登录后下发的服务拓扑：客户端只预知控制面一个地址，
+// 其余服务地址从这里拿（租户服务发现）。registry=管理员在控制面登记；
+// derived=未登记时按同主机默认端口推导（控制面 :8090 → 知识服务 :8000）。
+type ServiceEndpoints struct {
+	KnowledgeURL        string `json:"knowledgeUrl"`
+	KnowledgeURLSource  string `json:"knowledgeUrlSource"`
+	PlatformBaseURL     string `json:"platformBaseUrl"`
+}
+
+// ServiceEndpoints 给「知识」页等提供登录后的服务地址。控制面拉取失败不阻塞：
+// 回退推导值，员工照样能用（登记只是让同机推导之外的同义部署也能工作）。
+func (a *App) ServiceEndpoints() ServiceEndpoints {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	endpoints := ServiceEndpoints{
+		KnowledgeURL:       account.DeriveKnowledgeURL(base),
+		KnowledgeURLSource: "derived",
+		PlatformBaseURL:    base,
+	}
+	a.accountMu.Lock()
+	session := a.accountSession
+	a.accountMu.Unlock()
+	if session == nil {
+		return endpoints
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if cfg, err := account.New(base).ServiceConfig(ctx, session.Token); err == nil && cfg != nil && cfg.KnowledgeURL != "" {
+		endpoints.KnowledgeURL = cfg.KnowledgeURL
+		endpoints.KnowledgeURLSource = "registry"
+	}
+	return endpoints
+}
+
+// SaveServiceConfig 管理员登记知识服务地址（空串=清除）。权限裁决在控制面。
+func (a *App) SaveServiceConfig(knowledgeURL string) error {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.Lock()
+	session := a.accountSession
+	a.accountMu.Unlock()
+	if session == nil {
+		return fmt.Errorf("请先登录")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := account.New(base).SetServiceConfig(ctx, session.Token, knowledgeURL); err != nil {
+		a.reportError("save service config", err)
+		return err
+	}
+	return nil
+}
+
 // publishTrayUser 把当前登录态推给托盘悬浮窗（非阻塞，模式同 updateTrayStatus）。
-func (a *App) publishTrayUser() {
-	user := a.CurrentUser()
+func (a *App) publishTrayUser() {	user := a.CurrentUser()
 	select {
 	case a.trayUserCh <- user:
 	default:

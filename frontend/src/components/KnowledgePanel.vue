@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { core } from '../services/core'
+import { useEasyShare } from '../composables/useEasyShare'
 import type { KnowledgeContext, KnowledgeHealth, KnowledgeStatus } from '../types/core'
 
 // 知识问答面板：Core 作网关，令牌不进前端。
 // 状态自包含（同 SettingsPanel 模式）：登录态/健康度/会话消息均为本视图私有。
+
+const app = useEasyShare()
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -136,10 +139,22 @@ const snippet = (text: string) => (text.length > 160 ? text.slice(0, 160) + '…
 
 const scorePercent = (score?: number | null) => (score == null ? '' : `${Math.round(score * 100)}%`)
 
-onMounted(async () => {
+const onMountedPrefill = async () => {
   await refreshStatus()
   await probeHealth()
-})
+  // 未配置过服务器时自动填好：服务地址来自登录后下发的服务拓扑（控制面登记，
+  // 未登记则同主机推导），账号预填当前登录名——员工只差输一次密码。
+  if (status.value.configured || status.value.loggedIn) return
+  try {
+    const endpoints = await core.serviceEndpoints()
+    if (endpoints.knowledgeUrl && !serverUrl.value) serverUrl.value = endpoints.knowledgeUrl
+  } catch {
+    // 未登录（理论上进不到这里）/拉取失败：保持手填，不阻塞登录表单
+  }
+  if (!username.value && app.currentUser.value.userName) username.value = app.currentUser.value.userName
+}
+
+onMounted(onMountedPrefill)
 </script>
 
 <template>
@@ -166,7 +181,7 @@ onMounted(async () => {
       <form class="knowledge-login-form" @submit.prevent="submitLogin">
         <div class="setting-row">
           <label class="setting-label" for="knowledgeServer">服务器地址</label>
-          <p class="setting-hint">由公司管理员提供，形如 http://192.168.1.10:8000</p>
+          <p class="setting-hint">已自动填写公司服务器；如有出入请联系管理员</p>
           <input
             id="knowledgeServer"
             v-model="serverUrl"

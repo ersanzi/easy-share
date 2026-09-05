@@ -4,11 +4,11 @@ import { onMounted, ref } from 'vue'
 defineProps<{ loading: boolean; error: string }>()
 const emit = defineEmits<{ (e: 'submit', username: string, password: string): void }>()
 
-const username = ref('admin')
+const username = ref('')
 const password = ref('')
 const passwordInput = ref<HTMLInputElement | null>(null)
 
-// 账号已预填，进入即聚焦密码框，回车直接登录
+// 不预填 admin：公司部署里每个同事用自己账号，预填管理员名等于诱导试默认口令
 onMounted(() => passwordInput.value?.focus())
 
 const submit = () => {
@@ -25,7 +25,7 @@ const submit = () => {
           <svg viewBox="0 0 32 32"><path d="M8.5 12a6.5 6.5 0 0 1 12.6-2.2A5.5 5.5 0 1 1 22.5 20H8a5 5 0 0 1 .5-8Z"/><path d="m12 15 4-4 4 4M16 11v11"/></svg>
         </div>
         <div class="login-titles">
-          <strong>私人云盘</strong>
+          <strong>EasyShare</strong>
           <span>登录以进入你的空间</span>
         </div>
       </div>

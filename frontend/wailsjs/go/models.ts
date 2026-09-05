@@ -656,6 +656,22 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
+	export class ServiceEndpoints {
+	    knowledgeUrl: string;
+	    knowledgeUrlSource: string;
+	    platformBaseUrl: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServiceEndpoints(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.knowledgeUrl = source["knowledgeUrl"];
+	        this.knowledgeUrlSource = source["knowledgeUrlSource"];
+	        this.platformBaseUrl = source["platformBaseUrl"];
+	    }
+	}
 	export class Settings {
 	    deviceName: string;
 	    receiveDir: string;
