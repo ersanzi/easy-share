@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
-import { QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminSharedMember, type Capacity, type ManagedUser, type Space } from '../types/core'
+import { QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminSharedMember, type Capacity, type KnowledgeStats, type ManagedUser, type Space } from '../types/core'
 
-type Tab = 'accounts' | 'spaces'
+type Tab = 'overview' | 'accounts' | 'spaces'
 
 const tab = ref<Tab>('accounts')
 const users = ref<ManagedUser[]>([])
@@ -24,6 +24,9 @@ const fail = (e: unknown) => notify(e instanceof Error ? e.message : String(e), 
 
 // ═══ 空间 ═══
 const spaces = ref<Space[]>([])
+const knowledgeStats = ref<KnowledgeStats | null>(null)
+const userTotal = ref(0)
+const overviewLoading = ref(false)
 const sharedMembers = ref<AdminSharedMember[]>([])
 const depts = ref<AdminDept[]>([])
 const deptForm = ref<{ deptId: string; permission: string }>({ deptId: '', permission: 'read' })
@@ -71,6 +74,22 @@ const overcommitted = computed(() => {
   const c = capacity.value
   return !!c && c.enabled && c.poolBytes >= 0 && c.committedBytes > c.poolBytes
 })
+
+const loadOverview = async () => {
+  overviewLoading.value = true
+  try {
+    const [stats, users] = await Promise.all([
+      core.adminKnowledgeStats(30).catch(() => null),
+      core.adminListUsers(1, 1).catch(() => null),
+    ])
+    knowledgeStats.value = stats
+    if (users) userTotal.value = users.total
+  } catch (e) {
+    fail(e)
+  } finally {
+    overviewLoading.value = false
+  }
+}
 
 const loadSpaces = async () => {
   spacesLoading.value = true
@@ -214,6 +233,7 @@ const createOpen = ref(false)
 const form = ref({ userName: '', nickName: '', password: '' })
 
 const load = async () => {
+  void loadOverview()
   loading.value = true
   try {
     const page = await core.adminListUsers(1, 100)
@@ -314,6 +334,11 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
       </div>
       <div class="admin-tabs" role="tablist">
         <button
+          :class="['admin-tab', tab === 'overview' ? 'active' : '']"
+          type="button" role="tab" :aria-selected="tab === 'overview'"
+          @click="tab = 'overview'"
+        >概览</button>
+        <button
           :class="['admin-tab', tab === 'accounts' ? 'active' : '']"
           type="button" role="tab" :aria-selected="tab === 'accounts'"
           @click="tab = 'accounts'"
@@ -332,6 +357,44 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadSpaces() })
     </div>
 
     <!-- ═══ 账号 ═══ -->
+    <template v-if="tab === 'overview'">
+      <div class="overview-grid">
+        <div class="overview-card">
+          <span class="overview-label">账号总数</span>
+          <strong>{{ userTotal }}</strong>
+          <span class="overview-sub">管理页可开设与配额管理</span>
+        </div>
+        <div class="overview-card">
+          <span class="overview-label">近 30 天查询</span>
+          <strong>{{ knowledgeStats?.recent_queries ?? '—' }}</strong>
+          <span class="overview-sub">累计 {{ knowledgeStats?.total_queries ?? '—' }} 次 · 盲区 {{ knowledgeStats?.blind_spot_count ?? '—' }} 次</span>
+        </div>
+        <div class="overview-card">
+          <span class="overview-label">知识文档</span>
+          <strong>{{ knowledgeStats?.documents ?? '—' }}</strong>
+          <span class="overview-sub">LLM {{ knowledgeStats?.llm === 'configured' ? '已配置' : '未配置' }}</span>
+        </div>
+        <div class="overview-card">
+          <span class="overview-label">生成质量</span>
+          <strong>{{ knowledgeStats?.generation?.avg_faithfulness != null ? knowledgeStats.generation.avg_faithfulness : '—' }}</strong>
+          <span class="overview-sub">平均忠实度 · 生成 {{ knowledgeStats?.generation?.total ?? 0 }} 次</span>
+        </div>
+        <div class="overview-card">
+          <span class="overview-label">共享空间用量</span>
+          <strong>{{ formatBytes(sharedSpace?.usedBytes ?? 0) }}</strong>
+          <span class="overview-sub">配额 {{ formatBytes(sharedSpace?.quotaBytes ?? 0) }}</span>
+        </div>
+        <div class="overview-card" :class="{ warn: overcommitted }">
+          <span class="overview-label">容量承诺</span>
+          <strong>{{ formatBytes(capacity?.committedBytes ?? 0) }}</strong>
+          <span class="overview-sub">{{ overcommitted ? '⚠ 已超物理容量' : `物理可用 ${formatBytes(capacity?.usableBytes ?? 0)}` }}</span>
+        </div>
+      </div>
+      <p v-if="overviewLoading" class="setting-hint">加载中…</p>
+      <p class="setting-hint">
+        统计窗口 30 天，数据来自知识服务查询日志与控制面容量聚合。高频引用文档与盲区明细见知识驾驶舱。
+      </p>
+    </template>
     <template v-if="tab === 'accounts'">
       <section class="card">
         <header class="card-header">

@@ -15,6 +15,7 @@
   AdminSetUserStatus,
   AdminListDepts,
   AdminSharedMembers,
+  AdminKnowledgeStats,
   AppVersion,
   ApplyUpdate,
   CheckUpdate,
@@ -76,6 +77,7 @@ import type {
   DroppedFiles,
   AdminDept,
   AdminSharedMember,
+  KnowledgeStats,
   KnowledgeAnswer,
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
@@ -150,6 +152,7 @@ export const core = {
   adminListSpaces: () => AdminListSpaces() as Promise<Space[]>,
   adminCapacity: () => AdminCapacity() as Promise<Capacity>,
   adminSharedMembers: () => AdminSharedMembers() as Promise<AdminSharedMember[]>,
+  adminKnowledgeStats: (days: number) => AdminKnowledgeStats(days) as Promise<KnowledgeStats>,
   adminListDepts: () => AdminListDepts() as Promise<AdminDept[]>,
   adminGrantShared: (memberType: string, memberId: string, permission: string) =>
     AdminGrantShared(memberType, memberId, permission) as Promise<void>,

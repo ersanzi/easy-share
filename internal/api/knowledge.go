@@ -3,6 +3,7 @@
 package api
 
 import (
+	"strconv"
 	"context"
 	"encoding/json"
 	"errors"
@@ -101,6 +102,32 @@ func (server *Server) knowledgeHealth(writer http.ResponseWriter, request *http.
 		return
 	}
 	writeJSON(writer, http.StatusOK, health)
+}
+
+// knowledgeStats 代理远端 /stats（管理员汇总页聚合数字；days 1-90）。
+func (server *Server) knowledgeStats(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session := server.knowledge.Current()
+	if session.Token == "" {
+		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_not_logged_in", Message: "请先登录知识服务"})
+		return
+	}
+	days := 30
+	if raw := request.URL.Query().Get("days"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil {
+			days = value
+		}
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+	defer cancel()
+	stats, err := knowledge.NewClient(session.ServerURL).Stats(ctx, session.Token, days)
+	if err != nil {
+		writeKnowledgeError(writer, "stats", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, stats)
 }
 
 // knowledgeQuery 代理远端 /query。全局 WriteTimeout 30s 不够 LLM 链路，先解除期限再转发。

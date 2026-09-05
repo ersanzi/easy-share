@@ -160,6 +160,13 @@ func (client *Client) KnowledgeAsk(ctx context.Context, question string) (knowle
 	return result, err
 }
 
+// KnowledgeStats 知识聚合统计（管理员汇总页；days 为观察窗口天数）。
+func (client *Client) KnowledgeStats(ctx context.Context, days int) (knowledge.KnowledgeStats, error) {
+	var result knowledge.KnowledgeStats
+	err := client.request(ctx, http.MethodGet, fmt.Sprintf("/api/knowledge/stats?days=%d", days), nil, &result)
+	return result, err
+}
+
 // KnowledgeSearch 知识快搜：仅检索不生成（全局搜索面板用）。
 func (client *Client) KnowledgeSearch(ctx context.Context, question string) (knowledge.Answer, error) {
 	var result knowledge.Answer

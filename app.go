@@ -712,6 +712,19 @@ func (a *App) AdminSetSharedQuota(quotaBytes int64) error {
 	return err
 }
 
+// AdminKnowledgeStats 管理员汇总页：知识服务聚合统计（查询/盲区/生成质量/文档规模）。
+func (a *App) AdminKnowledgeStats(days int) (knowledge.KnowledgeStats, error) {
+	core, err := a.coreClient()
+	if err != nil {
+		return knowledge.KnowledgeStats{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	stats, err := core.KnowledgeStats(ctx, days)
+	a.reportError("admin knowledge stats", err)
+	return stats, err
+}
+
 // AdminGrantShared 授予或撤销某主体（账号/部门）对共享空间的权限。permission 传空即撤销。
 func (a *App) AdminGrantShared(memberType, memberID, permission string) error {
 	client, token, err := a.adminSession()

@@ -457,7 +457,37 @@ export namespace knowledge {
 		    return a;
 		}
 	}
+	export class CitedDoc {
+	    file_id: string;
+	    count: number;
 	
+	    static createFrom(source: any = {}) {
+	        return new CitedDoc(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file_id = source["file_id"];
+	        this.count = source["count"];
+	    }
+	}
+	
+	export class GenerationQuality {
+	    total: number;
+	    avg_faithfulness?: number;
+	    avg_unsupported_ratio?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new GenerationQuality(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.avg_faithfulness = source["avg_faithfulness"];
+	        this.avg_unsupported_ratio = source["avg_unsupported_ratio"];
+	    }
+	}
 	export class Health {
 	    records: number;
 	    llm: string;
@@ -473,6 +503,50 @@ export namespace knowledge {
 	        this.llm = source["llm"];
 	        this.watch_dirs = source["watch_dirs"];
 	    }
+	}
+	export class KnowledgeStats {
+	    days: number;
+	    total_queries: number;
+	    recent_queries: number;
+	    blind_spot_count: number;
+	    generation: GenerationQuality;
+	    most_cited_docs: CitedDoc[];
+	    documents: number;
+	    llm: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KnowledgeStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.days = source["days"];
+	        this.total_queries = source["total_queries"];
+	        this.recent_queries = source["recent_queries"];
+	        this.blind_spot_count = source["blind_spot_count"];
+	        this.generation = this.convertValues(source["generation"], GenerationQuality);
+	        this.most_cited_docs = this.convertValues(source["most_cited_docs"], CitedDoc);
+	        this.documents = source["documents"];
+	        this.llm = source["llm"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	
 	export class StatusView {

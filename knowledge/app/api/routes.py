@@ -41,6 +41,28 @@ def _is_missing_object(exc: ClientError) -> bool:
     return code in {"404", "NoSuchKey", "NoSuchObject", "NotFound"}
 
 
+@router.get("/stats")
+def stats(request: Request, days: int = 30) -> dict:
+    """管理员汇总页的聚合统计（QueryLog + 文档规模）。
+
+    刻意只出聚合计数与文档 ID 热度，不返回盲区问题明细——问题文本的可见性
+    沿用驾驶舱口径（回环 only），这里的数字走桌面端管理页（可能跨网段）。
+    """
+    services = _services(request)
+    days = max(1, min(days, 90))
+    summary = services.query_log.stats(days=days)
+    return {
+        "days": days,
+        "total_queries": summary["total_queries"],
+        "recent_queries": summary["recent_queries"],
+        "blind_spot_count": len(summary["blind_spots"]),
+        "generation": summary["generation"],
+        "most_cited_docs": summary["most_cited_docs"],
+        "documents": services.vector_store.count(),
+        "llm": "configured" if services.generator else "absent",
+    }
+
+
 @router.get("/health")
 def health(request: Request) -> dict:
     services = _services(request)

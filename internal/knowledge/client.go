@@ -69,6 +69,38 @@ type Answer struct {
 	Contexts []Context   `json:"contexts"`
 }
 
+// GenerationQuality 生成质量聚合（命名类型：Wails 绑定生成器不支持匿名嵌套结构）。
+type GenerationQuality struct {
+	Total               int      `json:"total"`
+	AvgFaithfulness     *float64 `json:"avg_faithfulness"`
+	AvgUnsupportedRatio *float64 `json:"avg_unsupported_ratio"`
+}
+
+// CitedDoc 高频引用文档（fileId + 被引次数）。
+type CitedDoc struct {
+	FileID string `json:"file_id"`
+	Count  int    `json:"count"`
+}
+
+// KnowledgeStats 管理员汇总页的聚合统计快照。
+type KnowledgeStats struct {
+	Days           int                `json:"days"`
+	TotalQueries   int                `json:"total_queries"`
+	RecentQueries  int                `json:"recent_queries"`
+	BlindSpotCount int                `json:"blind_spot_count"`
+	Generation     GenerationQuality  `json:"generation"`
+	MostCitedDocs  []CitedDoc         `json:"most_cited_docs"`
+	Documents      int                `json:"documents"`
+	LLM            string             `json:"llm"`
+}
+
+// Stats 拉聚合统计（days 为观察窗口天数，1-90）。
+func (client *Client) Stats(ctx context.Context, token string, days int) (KnowledgeStats, error) {
+	var stats KnowledgeStats
+	err := client.call(ctx, http.MethodGet, fmt.Sprintf("/stats?days=%d", days), token, nil, &stats)
+	return stats, err
+}
+
 // Health 远端 /health 中面板关心的子集。
 type Health struct {
 	Records   int    `json:"records"`

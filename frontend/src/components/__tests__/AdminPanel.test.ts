@@ -30,6 +30,7 @@ vi.mock('../../services/core', () => ({
     adminListSpaces: () => adminListSpaces(),
     adminSharedMembers: () => adminSharedMembers(),
     adminListDepts: () => adminListDepts(),
+    adminKnowledgeStats: () => Promise.resolve(null),
     adminCapacity: () => adminCapacity(),
     adminSetPersonalQuota: (...args: unknown[]) => adminSetPersonalQuota(...args),
     adminSetSharedQuota: (...args: unknown[]) => adminSetSharedQuota(...args),
@@ -51,9 +52,10 @@ const sharedSpace = {
 const mountSpaces = async () => {
   const wrapper = mount(AdminPanel)
   await new Promise(resolve => setTimeout(resolve, 0))
-  // 切到「空间」页签
+  // 切到「空间」页签（概览 Tab 加入后按文本找，避免索引漂移）
   const tabs = wrapper.findAll('.admin-tab')
-  await tabs[1].trigger('click')
+  const spacesTab = tabs.find(b => b.text() === '空间')
+  await (spacesTab ?? tabs[1]).trigger('click')
   return wrapper
 }
 

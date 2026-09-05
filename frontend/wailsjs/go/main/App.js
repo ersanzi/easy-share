@@ -26,6 +26,10 @@ export function AdminGrantShared(arg1, arg2, arg3) {
   return window['go']['main']['App']['AdminGrantShared'](arg1, arg2, arg3);
 }
 
+export function AdminKnowledgeStats(arg1) {
+  return window['go']['main']['App']['AdminKnowledgeStats'](arg1);
+}
+
 export function AdminListDepts() {
   return window['go']['main']['App']['AdminListDepts']();
 }

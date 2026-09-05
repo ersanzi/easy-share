@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-06（部门级权限片 1）
+> 每次迭代开始和结束时更新。最后更新：2026-09-06（管理员汇总页）
 
 ## 路线总览
 
@@ -125,11 +125,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] Upload Session 断点续传（2026-09-06，网盘 P0 收官）：控制面 es_upload_session 记账 + 四端点（create/part/complete/abort），幂等 Complete（已完成会话直接返回 fileId）、同路径遗留会话先 Abort 防孤儿分片、配额同口径；Go SessionStore 本地指纹持久化（空间+路径+大小+mtime），续传跳过已完成分片、分片重试 3 次退避，UploadFile ≥32MB 自动分流调用方零改动。Java 32 全绿 + go 5 新用例。详见 [`iterations/2026-09-06-upload-session.md`](iterations/2026-09-06-upload-session.md)
 - [x] 全局快捷搜索（2026-09-06，用户点名三项之一）：Alt+Space 全局呼出搜索小窗，知识片段（仅检索不生成）与网盘文件聚合分组，Enter 打开文件/复制片段；面板基建多表面化（kind/spec/独立存活守卫/host.* 信封/异步 searchEmit），搜索页 go:embed 自包含。go 全绿。详见 [`iterations/2026-09-06-global-quick-search.md`](iterations/2026-09-06-global-quick-search.md)
 - [x] 部门级权限 片 1（2026-09-06，用户拍板三项之二）：共享空间授权主体泛化（user/dept），生效权限取宽（个人行∨部门行），管理页「按部门授权」区（下拉+授权/撤销）；设计定稿 [`../../plans/2026-09-06-dept-permission.md`](../../plans/2026-09-06-dept-permission.md)、实现记录 [`iterations/2026-09-06-dept-permission.md`](iterations/2026-09-06-dept-permission.md)；**片 2 文档级可见性（es_file.visible_depts + /query 联动）下一轮**
+- [x] 管理员汇总页（2026-09-06，用户拍板三项之三）：AdminPanel「概览」Tab 六卡片（账号总数/近 30 天查询与盲区/知识文档/生成质量/共享用量/容量承诺超配标红）；知识服务新 `GET /stats` 聚合端点（只出计数不出问题明细，明细留驾驶舱回环）+ Core 代理 + 绑定级联。三栈回归全绿。详见 [`iterations/2026-09-06-admin-overview.md`](iterations/2026-09-06-admin-overview.md)
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-06 | 管理员汇总页 — AdminPanel 概览 Tab：账号/查询/盲区/文档/生成质量/容量六卡（知识服务 /stats 新端点 + Core 代理 + AdminKnowledgeStats 绑定） | 已完成（三栈回归全绿；查询趋势可视化观察期后按需） |
 | 2026-09-06 | 部门级权限 片 1（空间级）— 共享空间授权主体泛化（账号/部门，借 RuoYi sys_dept 只读投影），生效权限=个人行∨部门行取宽；管理页授权区拆两块；片 2 文档级可见性设计定稿 | 已完成（Java 37 全绿 +5；go/vitest 40/vue-tsc 全绿；DDL 上服务器归部署验收） |
 | 2026-09-06 | 全局快捷搜索 — Everything 式第二面板表面：Alt+Space 呼出，知识（/query mode=search 仅检索）+ 网盘按名过滤聚合，Enter 打开/复制；面板基建多表面化 + host.* 信封 + 异步 RPC | 已完成（go 全绿；知识服务 144 绿；真机冒烟随下轮打包；darwin 随 NSPanel 批次） |
 | 2026-09-06 | Upload Session — Multipart 断点续传（控制面 es_upload_session 记账 + 幂等 Complete + 防孤儿分片；Go 会话本地持久化/续传/分片重试，UploadFile 32MB 自动分流） | 已完成（Java 32 全绿 +8；go 全绿 +5；大文件断网续传真机归 Linux 部署验收） |

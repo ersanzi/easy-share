@@ -156,6 +156,22 @@ export interface ManagedUserPage {
   rows: ManagedUser[]
 }
 
+// 知识服务聚合统计（管理员汇总页；days 为观察窗口）
+export interface KnowledgeStats {
+  days: number
+  total_queries: number
+  recent_queries: number
+  blind_spot_count: number
+  generation: {
+    total: number
+    avg_faithfulness: number | null
+    avg_unsupported_ratio: number | null
+  }
+  most_cited_docs: { file_id: string; count: number }[]
+  documents: number
+  llm: string
+}
+
 // 共享空间授权主体（部门级权限：user=按账号、dept=按部门）
 export interface AdminSharedMember {
   memberType: string

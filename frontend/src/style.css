@@ -1084,3 +1084,16 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
   padding: 6px 8px; border: 1px solid rgba(60,60,67,.14); border-radius: 8px;
   background: #fff; color: var(--text); font-size: 11px; outline: none;
 }
+
+/* 管理页概览 Tab（2026-09-06） */
+.overview-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 18px 12px; }
+.overview-card {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 12px 14px; border: 1px solid rgba(60,60,67,.1); border-radius: 12px; background: #fff;
+}
+.overview-card strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.overview-label { font-size: 10px; color: var(--muted); font-weight: 700; }
+.overview-sub { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-card.warn { border-color: rgba(255,59,48,.4); }
+.overview-card.warn .overview-sub { color: #ff3b30; }
+@media (prefers-color-scheme: dark) { .overview-card { background: #2a2a2d; } }
