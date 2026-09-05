@@ -112,6 +112,14 @@ public class DriveFileService {
     }
 
     /**
+     * 按路径查稳定 fileId；目录行不存在返回 null（Upload Session 完成后回查用）。
+     */
+    public Long fileIdOfPath(String spaceType, Long ownerId, String path) {
+        EsFile row = selectByPath(spaceType, ownerId, path);
+        return row == null ? null : row.getFileId();
+    }
+
+    /**
      * 删除文件后清理目录行；行不存在视为已清理。
      */
     public void deleteRegistered(String spaceType, Long ownerId, String path) {

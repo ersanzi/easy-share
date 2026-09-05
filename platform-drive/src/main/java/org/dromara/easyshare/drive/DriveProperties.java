@@ -71,4 +71,10 @@ public class DriveProperties {
      * 磁盘写满会连带影响 PostgreSQL、Redis 与系统本身，不能让云盘吃到 0。
      */
     private DataSize reservedBytes = DataSize.ofGigabytes(5);
+
+    /**
+     * Multipart 分片大小（Upload Session 切片用）。技术参数由服务端定，客户端不选——
+     * S3 上限 10000 片，8MB 分片支持到 80GB 单文件，观察期场景绰绰有余。
+     */
+    private DataSize partSize = DataSize.ofMegabytes(8);
 }

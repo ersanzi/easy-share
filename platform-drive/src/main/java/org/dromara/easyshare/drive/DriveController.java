@@ -1,16 +1,23 @@
 package org.dromara.easyshare.drive;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.easyshare.drive.domain.EsFile;
+import org.dromara.easyshare.drive.domain.EsUploadSession;
 import org.dromara.easyshare.drive.domain.EsSpace;
 import org.dromara.easyshare.drive.service.DriveFileService;
+import org.dromara.easyshare.drive.service.DriveUploadService;
 import org.dromara.easyshare.drive.service.SpaceService;
 import org.dromara.easyshare.drive.service.SpaceUsageService;
 import org.springframework.validation.annotation.Validated;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -43,6 +50,7 @@ public class DriveController {
     private final SpaceService spaceService;
     private final SpaceUsageService usageService;
     private final DriveFileService fileService;
+    private final DriveUploadService uploadService;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -132,6 +140,60 @@ public class DriveController {
         return EsSpace.TYPE_SHARED.equals(space) ? EsFile.SHARED_OWNER : userId;
     }
 
+    // ── Upload Session（Multipart 断点续传，2026-09-06）──────────────────
+    // 分片大小由服务端定（easyshare.drive.part-size，默认 8MB），客户端不选——
+    // 技术参数自动推断是产品原则；分片 ETag 清单存客户端本地会话文件，
+    // 服务端只记账会话状态（幂等 Complete 的依据）。
+
+    /**
+     * 创建上传会话：配额校验 → 清理同路径遗留会话 → 建 S3 Multipart → 落行。
+     *
+     * @param body 相对路径、空间、申报大小
+     * @return sessionId / uploadId / partSize
+     */
+    @PostMapping("/upload-session/create")
+    public R<SessionVo> uploadCreate(@Validated @RequestBody PutBo body) {
+        Long userId = LoginHelper.getUserId();
+        long size = body.size() == null ? 0L : body.size();
+        EsUploadSession session = uploadService.create(body.space(),
+            ownerIdOf(body.space(), userId), userId, body.path(), size);
+        return R.ok(new SessionVo(session.getSessionId(), session.getUploadId(),
+            session.getPartSize()));
+    }
+
+    /**
+     * 签发单分片上传 URL（会话归属强校验）。
+     */
+    @PostMapping("/upload-session/part")
+    public R<PresignVo> uploadPart(@Validated @RequestBody PartBo body) {
+        Long userId = LoginHelper.getUserId();
+        String url = uploadService.presignPart(userId, body.sessionId(), body.partNumber());
+        return R.ok(new PresignVo(url, null));
+    }
+
+    /**
+     * 完成上传（幂等）：重复 Complete 直接返回成功与 fileId。
+     */
+    @PostMapping("/upload-session/complete")
+    public R<CompleteVo> uploadComplete(@Validated @RequestBody CompleteBo body) {
+        Long userId = LoginHelper.getUserId();
+        Long fileId = uploadService.complete(userId, body.sessionId(),
+            body.parts().stream()
+                .map(part -> new DriveStorage.UploadPart(part.partNumber(), part.etag()))
+                .toList());
+        return R.ok(new CompleteVo(fileId));
+    }
+
+    /**
+     * 放弃会话并清理 S3 端已传分片。
+     */
+    @PostMapping("/upload-session/abort")
+    public R<Void> uploadAbort(@Validated @RequestBody SessionBo body) {
+        Long userId = LoginHelper.getUserId();
+        uploadService.abort(userId, body.sessionId());
+        return R.ok();
+    }
+
     /**
      * 取可读空间的前缀。个人空间无需授权（自己的），共享空间要有成员行。
      */
@@ -186,5 +248,49 @@ public class DriveController {
      * @param fileId       目录层稳定文件 ID（存量对象惰性补账后亦有）
      */
     public record FileVo(String path, long size, Instant lastModified, Long fileId) {
+    }
+
+    /**
+     * 会话创建结果。
+     *
+     * @param sessionId 对客户端不透明的会话 ID（雪花）
+     * @param uploadId  S3 MultipartUpload uploadId（分片 URL 签名用）
+     * @param partSize  服务端定的分片大小（客户端按此切，不自行选择）
+     */
+    public record SessionVo(Long sessionId, String uploadId, Long partSize) {
+    }
+
+    /**
+     * 分片签发请求体。
+     */
+    public record PartBo(
+        @NotNull(message = "会话ID不能为空") Long sessionId,
+        @NotNull(message = "分片号不能为空") @Min(value = 1, message = "分片号最小为 1") @Max(value = 10000, message = "分片号最大为 10000") Integer partNumber) {
+    }
+
+    /**
+     * 完成请求体：分片回执清单（partNumber + ETag）。
+     */
+    public record CompleteBo(
+        @NotNull(message = "会话ID不能为空") Long sessionId,
+        @NotEmpty(message = "分片清单不能为空") @Valid List<PartEtag> parts) {
+
+        public record PartEtag(
+            @NotNull Integer partNumber,
+            @NotBlank String etag) {
+        }
+    }
+
+    /**
+     * 完成结果：目录层稳定 fileId。
+     */
+    public record CompleteVo(Long fileId) {
+    }
+
+    /**
+     * 会话放弃请求体。
+     */
+    public record SessionBo(
+        @NotNull(message = "会话ID不能为空") Long sessionId) {
     }
 }

@@ -846,7 +846,11 @@ func (a *App) driveClient() (*drive.Client, string, error) {
 	if session == nil || session.Token == "" {
 		return nil, "", fmt.Errorf("请先登录后再使用网盘")
 	}
-	return drive.New(base), session.Token, nil
+	client := drive.New(base)
+	// 大文件会话持久化目录：与 config.json 同级（数据根），进程重启后同指纹
+	// 文件自动续传（断点续传的"断点"落在本机，服务端会话状态由控制面记账）
+	client.Sessions = drive.NewSessionStore(filepath.Join(filepath.Dir(a.configPath), "upload-sessions"))
+	return client, session.Token, nil
 }
 
 // driveObjectToFile 把控制面返回的对象转成前端已在用的 cloud.File。

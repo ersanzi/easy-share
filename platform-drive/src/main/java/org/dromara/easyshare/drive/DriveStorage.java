@@ -13,7 +13,10 @@ import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3AsyncClient;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
+import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
@@ -132,6 +135,71 @@ public class DriveStorage {
             }
         });
         return objects;
+    }
+
+    /**
+     * 创建 Multipart 上传会话（Upload Session 切片，2026-09-06）。
+     *
+     * @return S3 uploadId
+     */
+    public String createUpload(String prefix, String relative) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        return join(client.createMultipartUpload(b -> b
+                .bucket(properties.getBucket()).key(key)))
+            .uploadId();
+    }
+
+    /**
+     * 签发单分片上传 URL（含 uploadId 与 partNumber 签名）。
+     */
+    public String presignPartAt(String prefix, String relative, String uploadId, int partNumber) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        return presigner.presignUploadPart(b -> b
+                .signatureDuration(properties.getPutExpiry())
+                .uploadPartRequest(r -> r.bucket(properties.getBucket()).key(key)
+                    .uploadId(uploadId).partNumber(partNumber)))
+            .url().toExternalForm();
+    }
+
+    /**
+     * 提交分片清单完成上传。uploadId 已被消费（重复 Complete/已 Abort）时抛
+     * ServiceException——幂等语义由会话表状态在上层保证。
+     */
+    public void completeUpload(String prefix, String relative, String uploadId,
+                               List<UploadPart> parts) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        List<CompletedPart> completed = parts.stream()
+            .map(part -> CompletedPart.builder()
+                .partNumber(part.partNumber()).eTag(part.etag()).build())
+            .toList();
+        join(client.completeMultipartUpload(b -> b
+            .bucket(properties.getBucket()).key(key).uploadId(uploadId)
+            .multipartUpload(CompletedMultipartUpload.builder()
+                .parts(completed).build())));
+    }
+
+    /**
+     * 放弃 Multipart 会话并清理 S3 端已传分片。uploadId 已不存在时静默成功
+     * （Abort 本就是清理语义）。
+     */
+    public void abortUpload(String prefix, String relative, String uploadId) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        try {
+            join(client.abortMultipartUpload(b -> b
+                .bucket(properties.getBucket()).key(key).uploadId(uploadId)));
+        } catch (ServiceException ignored) {
+            // S3 端已无此 uploadId（重复 Abort / 已 Complete）：清理语义视作成功
+        }
+    }
+
+    /**
+     * 上传分片回执：分片号与 S3 返回的 ETag（Complete 的最小必填项）。
+     */
+    public record UploadPart(int partNumber, String etag) {
     }
 
     /**

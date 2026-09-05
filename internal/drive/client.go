@@ -43,6 +43,10 @@ type Client struct {
 	http    *http.Client
 	// transfer 用于直传/直取对象存储：大文件耗时远超控制面调用，故单独放宽超时。
 	transfer *http.Client
+
+	// Sessions 大文件会话持久化（Multipart 断点续传）。nil 时大文件走
+	// 单请求上传，行为与 2026-09-06 之前一致；生产装配见 app.go driveClient。
+	Sessions *SessionStore
 }
 
 // New 创建云盘客户端。

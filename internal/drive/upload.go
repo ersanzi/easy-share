@@ -47,6 +47,11 @@ func (c *Client) UploadFile(ctx context.Context, token, space, objectPath, local
 	defer file.Close()
 
 	size := info.Size()
+	// 大文件走 Upload Session 分片（断点续传）；小文件单请求直传更省往返。
+	// 分流阈值与会话恢复逻辑都封装在包内，调用方无感。
+	if c.Sessions != nil && size >= multipartThreshold {
+		return c.uploadFileMultipart(ctx, token, space, objectPath, localPath, size, info.ModTime(), onProgress)
+	}
 	var body io.Reader = file
 	if onProgress != nil {
 		body = &progressReader{reader: file, total: size, onReport: onProgress}
