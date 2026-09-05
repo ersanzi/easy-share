@@ -9,6 +9,7 @@ const file = (key: string, size = 100, lastModified = '2026-09-01T10:00:00Z'): C
   contentType: 'application/octet-stream',
   lastModified,
   previewKind: 'unsupported',
+  fileId: 0,
 })
 
 const corpus = [

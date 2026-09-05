@@ -63,6 +63,8 @@ export interface CloudFile {
   contentType: string
   lastModified: string
   previewKind: PreviewKind
+  /** 控制面目录层的稳定文件 ID（2026-09-06 起）；旧控制面为 0 */
+  fileId: number
 }
 
 export interface CloudPreview {

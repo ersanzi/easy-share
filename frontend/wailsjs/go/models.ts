@@ -164,6 +164,7 @@ export namespace cloud {
 	    // Go type: time
 	    lastModified: any;
 	    previewKind: string;
+	    fileId: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new File(source);
@@ -177,6 +178,7 @@ export namespace cloud {
 	        this.contentType = source["contentType"];
 	        this.lastModified = this.convertValues(source["lastModified"], null);
 	        this.previewKind = source["previewKind"];
+	        this.fileId = source["fileId"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

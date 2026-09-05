@@ -25,6 +25,8 @@ foreach ($f in 'postgres_ry_vue.sql','postgres_ry_workflow.sql','postgres_ry_job
 Set-Location ../../..    # 回到仓库根
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-space.sql
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-app-release.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-plugin.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-file.sql
 
 # 3) 构建（首建下依赖，走 pom 里的华为云镜像；可选模块 ruoyi-snailai-server 因
 #    milvus/es 依赖下载损坏会失败，不影响 ruoyi-admin fat jar 产出）

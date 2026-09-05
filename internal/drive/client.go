@@ -28,10 +28,13 @@ const (
 )
 
 // Object 是云盘中的一个对象。Path 是相对路径，用户命名空间对客户端不可见。
+// FileId 是控制面 es_file 目录层的稳定身份（2026-09-06 起），回收站/版本/
+// 分享重命名稳定都挂它；存量对象首次列举时由控制面惰性补账，亦有值。
 type Object struct {
 	Path         string    `json:"path"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
+	FileId       int64     `json:"fileId"`
 }
 
 // Client 连接控制面的存储授权接口。baseURL 形如 http://localhost:8090。

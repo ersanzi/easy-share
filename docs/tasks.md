@@ -19,7 +19,7 @@
 
 | 事项 | 说明 |
 | --- | --- |
-| 公司 Linux 服务器部署端到端验收 | 2026-09-02 资产已写完（deploy/server-linux + ship-control-plane.ps1），待真实服务器部署验收； MinerU 冒烟、WPS 真机随部署一并做 |
+| 公司 Linux 服务器部署端到端验收 | 2026-09-02 资产已写完（deploy/server-linux + ship-control-plane.ps1），待真实服务器部署验收； MinerU 冒烟、WPS 真机随部署一并做；**2026-09-06 起加：部署时应用 `deploy/ruoyi-db/easyshare-file.sql`（云盘目录层 DDL）再 ship 新 jar** |
 | 当前未提交改动的审阅与提交推送 | ✅ 已处理（2026-09-04 用户拍板）：剪切板修复以 14c531d 提交（提交前 go build/test 全绿复验），自动化文档随本批 docs 提交入库，双远程推送 |
 | 真机鼠标验收欠账 | 登录→上传→换账号、空间盘挂载/卸载、悬浮窗交互、设置页账号卡片（见 progress.md 已知阻塞） |
 | 插件仓拆分 | 挂触发条件（插件≥3 / 外部协作者 / 发布节奏倒挂 / 客户定制），**勿主动执行**，计划在 plans/2026-09-01-plugin-repo-split.md |
@@ -68,6 +68,7 @@
 | 2026-09-05 | 会话续轮（用户拍板：提交推送后继续） | A | P1+P3 以 4861d0d 提交并双远程推送。续执行 P2 观察期周报脚本（完成：windowed_stats 严格窗口聚合 + 五节周报，pytest 144 绿，三路冒烟过）；顺手修盲区标签误导（向量检索零分也计 top_k 条，改按分数表达） |
 | 2026-09-05 | 会话续轮 2（用户确认继续） | A | 周报以 6f815a6 双远程推送（Gitee 一次 TLS 握手失败重试即过）。续执行 P2 开机自启记录：边界确认（缺口=OS 自启链路应用内不可控，录制随应用恢复 08-31 已有）→ HKCU Run 键开关 + 能力扩展 + 插件 UI 2.1.0（完成，go 全绿）。剩余可自主任务=AI 周报接知识服务（涉跨进程登录态，建议下轮） |
 | 2026-09-06 | 用户直配轮（网盘优化，Cloudreve 对标参考） | A | 推送核对（双远程 8c26a49 无欠）。取对标 P0 的客户端最小片：目录导航/搜索/排序/上传落当前目录（视图推导，权威目录层留控制面）；targetDir 完整走 Wails 级联。vue-tsc 干净 + vitest 40 全绿 + go 绿；真机点验随下轮打包。网盘后续顺序已写进 progress.md 待开始 #8（控制面 es_file+fileId → Multipart Session，跨 Java 仓） |
+| 2026-09-06 | 用户直配轮 2（定调 Java-first：后续逻辑优先控制面） | A | 网盘 P0 正主落地：es_file 目录层 + fileId（presignPut 登记/列表补账/删除双轨，模块单测 24 全绿；客户端透传向后兼容）。踩坑三条入迭代文档（maven.test.skip 默认 true/JAVA_HOME 指 21/Mockito 桩贴真实调用序）。DDL+jar 上服务器归 Linux 部署验收；下一步=Upload Session Multipart |
 
 ## 自动化运行规则
 

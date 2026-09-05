@@ -5,12 +5,15 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.dromara.common.core.domain.R;
 import org.dromara.common.satoken.utils.LoginHelper;
+import org.dromara.easyshare.drive.domain.EsFile;
 import org.dromara.easyshare.drive.domain.EsSpace;
+import org.dromara.easyshare.drive.service.DriveFileService;
 import org.dromara.easyshare.drive.service.SpaceService;
 import org.dromara.easyshare.drive.service.SpaceUsageService;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -23,6 +26,9 @@ import java.util.List;
  * <p>
  * 客户端只能指定「个人还是共享」（{@code space}）与相对路径，前缀由
  * {@link SpaceService} 校验权限后产出——客户端无法自己拼前缀，也就无法跨空间。
+ * <p>
+ * 2026-09-06 起接入 es_file 目录层：列表响应带稳定 {@code fileId}
+ * （Cloudreve 对标 P0），删除可按 {@code fileId} 或路径（过渡期双轨）。
  *
  * @author EasyShare
  */
@@ -36,17 +42,28 @@ public class DriveController {
     private final DriveStorage storage;
     private final SpaceService spaceService;
     private final SpaceUsageService usageService;
+    private final DriveFileService fileService;
 
     /**
-     * 列举指定空间内的文件。默认个人空间。
+     * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
+     * （目录层上线前的存量对象在首次列举时惰性补账，自愈归账）。
      *
      * @param space personal / shared
-     * @return 相对路径列表
+     * @return 相对路径列表（含 fileId）
      */
     @GetMapping("/objects")
-    public R<List<DriveObject>> objects(
+    public R<List<FileVo>> objects(
         @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
-        return R.ok(storage.listAt(readablePrefix(space)));
+        Long userId = LoginHelper.getUserId();
+        String prefix = readablePrefix(space);
+        Long ownerId = ownerIdOf(space, userId);
+        List<DriveObject> objects = storage.listAt(prefix);
+        var fileIds = fileService.reconcileAndMap(space, ownerId, userId, objects);
+        return R.ok(objects.stream()
+            .map(object -> new FileVo(
+                object.path(), object.size(), object.lastModified(),
+                fileIds.get(object.path())))
+            .toList());
     }
 
     /**
@@ -55,6 +72,8 @@ public class DriveController {
      * 这是配额唯一能强制的时机：URL 签出后客户端直传 RustFS，字节不经控制面。
      * 因此配额是**软上限**——客户端申报的 size 可能小于实际写入量，且一次签名 15 分钟内
      * 有效。真实用量以 RustFS 为准，超额只能在下一次签发时被拦住。
+     * <p>
+     * 签发同时在 es_file 目录层登记（幂等 upsert），文件自此有稳定 fileId。
      *
      * @param body 相对路径、空间、申报大小
      * @return 预签名 URL
@@ -68,6 +87,7 @@ public class DriveController {
             : spaceService.checkPersonalWritable(userId, size);
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
+        fileService.registerOnPresign(body.space(), ownerIdOf(body.space(), userId), userId, body.path(), size);
         return R.ok(new PresignVo(storage.presignPutAt(prefix, body.path()), body.path()));
     }
 
@@ -85,19 +105,31 @@ public class DriveController {
 
     /**
      * 删除指定空间内的文件。共享空间需要写权限。
+     * 支持 fileId（优先，稳定身份链路）或路径（过渡期兼容）；两者都给时以 fileId 为准。
      *
-     * @param body 相对路径与空间
+     * @param body 相对路径（或 fileId）与空间
      * @return 操作结果
      */
     @DeleteMapping("/object")
     public R<Void> delete(@Validated @RequestBody PathBo body) {
         Long userId = LoginHelper.getUserId();
-        String prefix = EsSpace.TYPE_SHARED.equals(body.space())
+        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
+        String prefix = shared
             ? spaceService.checkSharedWritable(userId, 0L)
             : DriveKeys.userPrefix(userId);
-        storage.deleteAt(prefix, body.path());
+        Long ownerId = ownerIdOf(body.space(), userId);
+        String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(), body.path());
+        storage.deleteAt(prefix, path);
+        fileService.deleteRegistered(body.space(), ownerId, path);
         usageService.invalidate(prefix);
         return R.ok();
+    }
+
+    /**
+     * 目录层的空间归属键：个人空间 = 用户本人，共享空间 = 0（全局单例）。
+     */
+    private Long ownerIdOf(String space, Long userId) {
+        return EsSpace.TYPE_SHARED.equals(space) ? EsFile.SHARED_OWNER : userId;
     }
 
     /**
@@ -113,12 +145,14 @@ public class DriveController {
     /**
      * 相对路径请求体。
      *
-     * @param path  空间内的相对路径
+     * @param path  空间内的相对路径（fileId 给出时可空，过渡期兼容）
      * @param space personal / shared，空则按个人空间
+     * @param fileId 目录层稳定文件 ID，可选；给出时优先于 path
      */
     public record PathBo(
-        @NotBlank(message = "文件路径不能为空") String path,
-        String space) {
+        String path,
+        String space,
+        Long fileId) {
     }
 
     /**
@@ -141,5 +175,16 @@ public class DriveController {
      * @param path 对应的相对路径
      */
     public record PresignVo(String url, String path) {
+    }
+
+    /**
+     * 带稳定身份的文件视图。
+     *
+     * @param path         空间内相对路径
+     * @param size         字节数
+     * @param lastModified 最后修改时间
+     * @param fileId       目录层稳定文件 ID（存量对象惰性补账后亦有）
+     */
+    public record FileVo(String path, long size, Instant lastModified, Long fileId) {
     }
 }

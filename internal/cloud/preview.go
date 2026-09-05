@@ -23,6 +23,9 @@ type File struct {
 	ContentType  string      `json:"contentType"`
 	LastModified time.Time   `json:"lastModified"`
 	PreviewKind  PreviewKind `json:"previewKind"`
+	// FileId 控制面目录层的稳定文件 ID（2026-09-06 起），客户端仅透传展示与后续
+	// 按 fileId 操作使用；旧控制面无此字段时为 0，行为与之前一致。
+	FileId       int64       `json:"fileId"`
 }
 
 // PreviewKind 描述前端可采用的预览器类型，而不是暴露存储实现细节。

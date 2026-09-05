@@ -860,6 +860,7 @@ func driveObjectToFile(object drive.Object) cloud.File {
 		ContentType:  contentType,
 		LastModified: object.LastModified,
 		PreviewKind:  cloud.DetectPreviewKind(contentType, object.Path),
+		FileId:       object.FileId,
 	}
 }
 
