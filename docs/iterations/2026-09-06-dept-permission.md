@@ -1,7 +1,7 @@
-# 部门级权限 片 1 — 共享空间按部门授权（空间级）
+# 部门级权限 — 空间级（片 1）+ 文档级可见性数据面（片 2）
 
 - 日期：2026-09-06（用户拍板三项之二；设计定稿见 [`../../plans/2026-09-06-dept-permission.md`](../../plans/2026-09-06-dept-permission.md)）
-- 状态：**片 1 已完成**（Java 37 全绿 +5 用例；go/vitest 40/vue-tsc 全绿；DDL 与 jar 上服务器归部署验收）。片 2（文档级可见性 + 检索联动）下一轮。
+- 状态：**片 1、片 2 数据面已完成**（Java 39 全绿 +7 用例；go 全绿；/query 联动核验后拆片 2b，见下）。
 
 ## 1. 设计要点（详见设计定稿，此处只记落定结论）
 
@@ -31,7 +31,25 @@
 - go build/test 全绿；前端 vitest 40（AdminPanel 测试契约同步：mock 状态链）、vue-tsc 干净。
 - 真机：管理页部门授权操作 + 部门成员共享盘可见性，随下轮打包冒烟。
 
-## 4. 片 2 待办（下一轮）
+## 4. 片 2 文档级可见性 — 数据面已落地（2026-09-06 同日完成）
+
+- DDL `easyshare-file-visibility.sql`：es_file 加 `visible_depts`（空=全体可见，逗号分隔部门 ID）；
+- 登记：`presign-put` 请求体加可选 `visibleDepts`（仅共享空间语义，登记后写入目录层）；
+- 设置：`POST /easyshare/drive/file-visibility`（操作者校验：个人=owner、共享=上传者本人）；
+- **裁剪点收口在唯一列举出口**：`/objects` 共享列表按 `用户部门 ∈ visible_depts ∨ 上传者本人`
+  过滤——网盘页/此电脑挂载盘/全局快搜文件路全部经此出口，自动生效；
+- Go：`SetFileVisibility` 客户端 + `SetFileVisibility` 绑定（UI 入口待共享文件浏览片）；
+- 测试 +2：操作者归属校验、过滤语义（部门命中/不中/上传者恒可见）。
+
+## 5. /query 检索联动核验结论（拆片 2b）
+
+核验结果：`/query` 的鉴权是**知识服务本地 auth（2a auth.db）**，`request.state.user`
+只含 username/role——控制面 JWT 的 deptId claims 与此无关（核验了此前"JWT 带
+deptId"的假设，不成立）。联动前置 = 知识服务用户-部门模型：
+① auth 用户表加 dept 列 + 管理端同步；② ingest 请求透传 visible_depts 进 chunk
+metadata；③ `visible_doc_ids` 扩展部门过滤。三步独立成片（2b），随知识服务侧
+排期执行，数据面已先行兼容（列表/文件消费方已生效）。
+
 
 es_file 加 `visible_depts`；网盘共享列表过滤；`/query` 检索按 visible_depts 裁剪
 （核验控制面 JWT claims 是否含 deptId，无则登录态下发处补）；管理/上传入口设置可见性。

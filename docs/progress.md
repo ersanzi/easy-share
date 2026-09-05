@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-06（管理员汇总页）
+> 每次迭代开始和结束时更新。最后更新：2026-09-06（文档级可见性数据面）
 
 ## 路线总览
 
@@ -126,11 +126,13 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 - [x] 全局快捷搜索（2026-09-06，用户点名三项之一）：Alt+Space 全局呼出搜索小窗，知识片段（仅检索不生成）与网盘文件聚合分组，Enter 打开文件/复制片段；面板基建多表面化（kind/spec/独立存活守卫/host.* 信封/异步 searchEmit），搜索页 go:embed 自包含。go 全绿。详见 [`iterations/2026-09-06-global-quick-search.md`](iterations/2026-09-06-global-quick-search.md)
 - [x] 部门级权限 片 1（2026-09-06，用户拍板三项之二）：共享空间授权主体泛化（user/dept），生效权限取宽（个人行∨部门行），管理页「按部门授权」区（下拉+授权/撤销）；设计定稿 [`../../plans/2026-09-06-dept-permission.md`](../../plans/2026-09-06-dept-permission.md)、实现记录 [`iterations/2026-09-06-dept-permission.md`](iterations/2026-09-06-dept-permission.md)；**片 2 文档级可见性（es_file.visible_depts + /query 联动）下一轮**
 - [x] 管理员汇总页（2026-09-06，用户拍板三项之三）：AdminPanel「概览」Tab 六卡片（账号总数/近 30 天查询与盲区/知识文档/生成质量/共享用量/容量承诺超配标红）；知识服务新 `GET /stats` 聚合端点（只出计数不出问题明细，明细留驾驶舱回环）+ Core 代理 + 绑定级联。三栈回归全绿。详见 [`iterations/2026-09-06-admin-overview.md`](iterations/2026-09-06-admin-overview.md)
+- [x] 部门级权限 片 2 数据面（2026-09-06）：es_file.visible_depts（空=全体可见）+ presign-put 上传声明 + file-visibility 设置端点（上传者本人校验）+ /objects 共享列表部门过滤（唯一列举出口收口）；/query 联动核验结论=知识服务本地 auth 无 dept，联动拆片 2b（auth 部门模型前置）。Java 39 全绿。设计/核验结论见 [`iterations/2026-09-06-dept-permission.md`](iterations/2026-09-06-dept-permission.md) §5
 
 ### 迭代记录
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-09-06 | 部门级权限 片 2（文档级可见性·数据面）— es_file.visible_depts + presign-put 上传声明 + file-visibility 设置端点 + /objects 共享列表过滤（唯一列举出口收口，网盘/挂载盘/快搜自动生效）；/query 联动核验：走知识服务本地 auth，联动拆片 2b（auth 部门模型前置） | 已完成（Java 39 全绿 +2；go 全绿；/query 联动片 2b 待排） |
 | 2026-09-06 | 管理员汇总页 — AdminPanel 概览 Tab：账号/查询/盲区/文档/生成质量/容量六卡（知识服务 /stats 新端点 + Core 代理 + AdminKnowledgeStats 绑定） | 已完成（三栈回归全绿；查询趋势可视化观察期后按需） |
 | 2026-09-06 | 部门级权限 片 1（空间级）— 共享空间授权主体泛化（账号/部门，借 RuoYi sys_dept 只读投影），生效权限=个人行∨部门行取宽；管理页授权区拆两块；片 2 文档级可见性设计定稿 | 已完成（Java 37 全绿 +5；go/vitest 40/vue-tsc 全绿；DDL 上服务器归部署验收） |
 | 2026-09-06 | 全局快捷搜索 — Everything 式第二面板表面：Alt+Space 呼出，知识（/query mode=search 仅检索）+ 网盘按名过滤聚合，Enter 打开/复制；面板基建多表面化 + host.* 信封 + 异步 RPC | 已完成（go 全绿；知识服务 144 绿；真机冒烟随下轮打包；darwin 随 NSPanel 批次） |

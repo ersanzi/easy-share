@@ -52,4 +52,7 @@ public class EsFile extends BaseEntity {
 
     /** 最近一次登记的字节数 */
     private Long fileSize;
+
+    /** 文档可见部门 ID 逗号分隔（仅共享空间语义）；空=全体可见 */
+    private String visibleDepts;
 }

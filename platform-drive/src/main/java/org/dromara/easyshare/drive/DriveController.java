@@ -67,6 +67,12 @@ public class DriveController {
         Long ownerId = ownerIdOf(space, userId);
         List<DriveObject> objects = storage.listAt(prefix);
         var fileIds = fileService.reconcileAndMap(space, ownerId, userId, objects);
+        // 文档级可见性（片 2 数据面）：共享列表按用户部门过滤（上传者本人恒可见）；
+        // 过滤在唯一列举出口做，网盘页/挂载盘/快搜文件路全部自动生效
+        if (EsSpace.TYPE_SHARED.equals(space)) {
+            objects = fileService.filterSharedVisible(objects,
+                fileService.rowsByPath(space, ownerId), spaceService.deptIdOf(userId), userId);
+        }
         return R.ok(objects.stream()
             .map(object -> new FileVo(
                 object.path(), object.size(), object.lastModified(),
@@ -96,6 +102,12 @@ public class DriveController {
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
         fileService.registerOnPresign(body.space(), ownerIdOf(body.space(), userId), userId, body.path(), size);
+        // 上传声明可见范围（可选，仅共享空间语义）：登记后立即写入目录层
+        if (body.visibleDepts() != null && !body.visibleDepts().isEmpty()
+            && EsSpace.TYPE_SHARED.equals(body.space())) {
+            fileService.setRegisteredVisibleDepts(body.space(), ownerIdOf(body.space(), userId),
+                userId, body.path(), body.visibleDepts());
+        }
         return R.ok(new PresignVo(storage.presignPutAt(prefix, body.path()), body.path()));
     }
 
@@ -195,6 +207,21 @@ public class DriveController {
     }
 
     /**
+     * 设置文档可见部门（文档级可见性，2026-09-06）。visibleDepts 空数组=恢复全体可见。
+     * 操作者校验：个人空间=owner、共享空间=上传者本人。
+     *
+     * @param body 相对路径与可见部门 ID 清单
+     * @return 实际写入的逗号分隔部门串
+     */
+    @PostMapping("/file-visibility")
+    public R<String> fileVisibility(@Validated @RequestBody VisibilityBo body) {
+        Long userId = LoginHelper.getUserId();
+        String saved = fileService.setRegisteredVisibleDepts(body.space(),
+            ownerIdOf(body.space(), userId), userId, body.path(), body.visibleDepts());
+        return R.ok(saved);
+    }
+
+    /**
      * 取可读空间的前缀。个人空间无需授权（自己的），共享空间要有成员行。
      */
     private String readablePrefix(String space) {
@@ -227,7 +254,8 @@ public class DriveController {
     public record PutBo(
         @NotBlank(message = "文件路径不能为空") String path,
         String space,
-        Long size) {
+        Long size,
+        List<Long> visibleDepts) {
     }
 
     /**
@@ -292,5 +320,14 @@ public class DriveController {
      */
     public record SessionBo(
         @NotNull(message = "会话ID不能为空") Long sessionId) {
+    }
+
+    /**
+     * 文档可见性请求体。
+     */
+    public record VisibilityBo(
+        @NotBlank(message = "文件路径不能为空") String path,
+        @NotBlank(message = "空间不能为空") String space,
+        List<Long> visibleDepts) {
     }
 }

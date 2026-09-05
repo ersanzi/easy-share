@@ -150,6 +150,8 @@ export function SendFile(arg1:string,arg2:string):Promise<void>;
 
 export function SetDropSpace(arg1:string):Promise<void>;
 
+export function SetFileVisibility(arg1:string,arg2:string,arg3:Array<number>):Promise<void>;
+
 export function ShutdownAll():Promise<void>;
 
 export function StartDrive():Promise<void>;

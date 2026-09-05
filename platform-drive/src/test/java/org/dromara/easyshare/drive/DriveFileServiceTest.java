@@ -152,4 +152,49 @@ class DriveFileServiceTest {
         // Wrapper 条件无法直接断言内部值，落点在"确实按空间+路径删除"不抛错即可
         assertNull(captor.getValue().getEntity());
     }
+
+@Test
+void setVisibilityChecksOperatorOwnership() {
+    // 共享空间目录行：owner=0、uploadBy=2（上传者本人可设，他人被拒）
+    EsFile sharedRow = new EsFile();
+    sharedRow.setFileId(31L);
+    sharedRow.setSpaceType(EsFile.TYPE_SHARED);
+    sharedRow.setOwnerId(0L);
+    sharedRow.setUploadBy(2L);
+    sharedRow.setFilePath("docs/x.pdf");
+    sharedRow.setFileName("x.pdf");
+    sharedRow.setFileSize(1L);
+    when(mapper.selectOne(any())).thenReturn(sharedRow, sharedRow);
+
+    assertEquals("3,7", service.setRegisteredVisibleDepts(
+        EsFile.TYPE_SHARED, 0L, 2L, "docs/x.pdf", java.util.List.of(3L, 7L)));
+    assertEquals("3,7", sharedRow.getVisibleDepts());
+
+    ServiceException ex = assertThrows(ServiceException.class,
+        () -> service.setRegisteredVisibleDepts(
+            EsFile.TYPE_SHARED, 0L, 3L, "docs/x.pdf", java.util.List.of()));
+    assertEquals("只有文件的上传者可以调整可见范围", ex.getMessage());
+}
+
+@Test
+void sharedVisibilityFilterHidesFromOtherDepartments() {
+    EsFile limited = new EsFile();
+    limited.setSpaceType(EsFile.TYPE_SHARED);
+    limited.setOwnerId(0L);
+    limited.setUploadBy(2L);
+    limited.setFilePath("secret.pdf");
+    limited.setFileName("secret.pdf");
+    limited.setVisibleDepts("3,7");
+
+    List<DriveObject> objects = List.of(
+        new DriveObject("open.txt", 1L, java.time.Instant.now()),
+        new DriveObject("secret.pdf", 2L, java.time.Instant.now()));
+    java.util.Map<String, EsFile> rows = java.util.Map.of("secret.pdf", limited);
+
+    // 部门 3（命中）可见两行；部门 8 只见 open.txt；上传者本人恒可见
+    assertEquals(2, service.filterSharedVisible(objects, rows, 3L, 9L).size());
+    assertEquals(1, service.filterSharedVisible(objects, rows, 8L, 9L).size());
+    assertEquals(2, service.filterSharedVisible(objects, rows, 8L, 2L).size());
+}
+
 }

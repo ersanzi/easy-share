@@ -282,6 +282,10 @@ export function SetDropSpace(arg1) {
   return window['go']['main']['App']['SetDropSpace'](arg1);
 }
 
+export function SetFileVisibility(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SetFileVisibility'](arg1, arg2, arg3);
+}
+
 export function ShutdownAll() {
   return window['go']['main']['App']['ShutdownAll']();
 }

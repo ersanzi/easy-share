@@ -236,3 +236,13 @@ func (c *Client) call(ctx context.Context, method, path, token string, body []by
 	}
 	return nil
 }
+
+// SetFileVisibility 设置共享空间文档的可见部门（空列表=恢复全体可见）。
+// 校验在控制面（仅上传者本人可调）；过滤在列举出口统一生效。
+func (c *Client) SetFileVisibility(ctx context.Context, token, space, path string, deptIDs []int64) error {
+	body, err := json.Marshal(map[string]any{"path": path, "space": normalizeSpace(space), "visibleDepts": deptIDs})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodPost, "/easyshare/drive/file-visibility", token, body, nil)
+}

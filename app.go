@@ -712,6 +712,22 @@ func (a *App) AdminSetSharedQuota(quotaBytes int64) error {
 	return err
 }
 
+// SetFileVisibility 设置共享空间文档的可见部门（空列表=恢复全体可见；仅上传者本人可调）。
+func (a *App) SetFileVisibility(space, path string, deptIDs []int64) error {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.SetFileVisibility(ctx, token, space, path, deptIDs); err != nil {
+		a.reportError("set file visibility", err)
+		return err
+	}
+	a.logger.Printf("file visibility updated: %s (%s) -> %v", path, space, deptIDs)
+	return nil
+}
+
 // AdminKnowledgeStats 管理员汇总页：知识服务聚合统计（查询/盲区/生成质量/文档规模）。
 func (a *App) AdminKnowledgeStats(days int) (knowledge.KnowledgeStats, error) {
 	core, err := a.coreClient()
