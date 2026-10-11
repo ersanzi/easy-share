@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="500" viewBox="0 0 920 500" role="img" aria-label="EasyShare 架构：客户端、控制面、对象存储、知识服务">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <style>
+    .box-title { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; font-size:16px; font-weight:700; fill:#1e293b; }
+    .box-sub   { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; font-size:12px; fill:#64748b; }
+    .flow      { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; font-size:12.5px; fill:#475569; }
+    .line      { stroke:#64748b; stroke-width:2; fill:none; }
+  </style>
+
+  <!-- 同事 A 客户端 -->
+  <rect x="40" y="120" width="230" height="92" rx="16" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="60" y="152" class="box-title">同事 A · EasyShare 客户端</text>
+  <text x="60" y="176" class="box-sub">Wails + Go Core · Vue 3</text>
+  <text x="60" y="196" class="box-sub">传输 / 此电脑挂载 / 托盘浮窗 / 插件</text>
+
+  <!-- 同事 B 客户端 -->
+  <rect x="40" y="370" width="230" height="92" rx="16" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="60" y="402" class="box-title">同事 B · EasyShare 客户端</text>
+  <text x="60" y="426" class="box-sub">Wails + Go Core · Vue 3</text>
+  <text x="60" y="446" class="box-sub">接收 / 另存 / 传输历史</text>
+
+  <!-- 控制面 -->
+  <rect x="430" y="80" width="230" height="104" rx="16" fill="#fff7ed" stroke="#f97316" stroke-width="2"/>
+  <text x="450" y="112" class="box-title">EasyShare 控制面</text>
+  <text x="450" y="136" class="box-sub">Java · RuoYi-Vue-Plus 6.0</text>
+  <text x="450" y="156" class="box-sub">账号 / 配额 / 文件身份</text>
+  <text x="450" y="176" class="box-sub">在线升级 / 插件商城 / 服务发现</text>
+
+  <!-- 知识服务 -->
+  <rect x="710" y="80" width="175" height="104" rx="16" fill="#eef2ff" stroke="#6366f1" stroke-width="2"/>
+  <text x="728" y="112" class="box-title">知识服务</text>
+  <text x="728" y="136" class="box-sub">Python · FastAPI</text>
+  <text x="728" y="156" class="box-sub">解析 → 检索 → 问答</text>
+  <text x="728" y="176" class="box-sub">SSO / WPS 加载项</text>
+
+  <!-- RustFS -->
+  <rect x="430" y="370" width="230" height="92" rx="16" fill="#ecfdf5" stroke="#10b981" stroke-width="2"/>
+  <text x="450" y="402" class="box-title">RustFS 对象存储</text>
+  <text x="450" y="426" class="box-sub">S3 兼容 · 自托管</text>
+  <text x="450" y="446" class="box-sub">文件与知识库产物唯一存储</text>
+
+  <!-- 局域网秒传 A<->B -->
+  <path d="M155 216 V366" class="line" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="168" y="296" class="flow">局域网秒传</text>
+  <text x="168" y="314" class="flow">（自动发现 · 拖拽即发）</text>
+
+  <!-- A -> 控制面：登录授权 -->
+  <path d="M270 140 H424" class="line" marker-end="url(#arrow)"/>
+  <text x="288" y="128" class="flow">登录 · 授权 · 服务发现</text>
+
+  <!-- 控制面 -> A：预签名（虚线） -->
+  <path d="M424 168 H270" class="line" stroke-dasharray="7 5" marker-end="url(#arrow)"/>
+  <text x="288" y="188" class="flow">短期预签名 URL（按用户隔离）</text>
+
+  <!-- A -> RustFS：文件直传 -->
+  <path d="M252 216 C 330 300, 360 380, 424 404" class="line" marker-end="url(#arrow)"/>
+  <text x="258" y="330" class="flow">文件直传（凭预签名）</text>
+
+  <!-- A -> 知识服务：问答（顶部绕行） -->
+  <path d="M155 116 C 155 40, 797 40, 797 74" class="line" marker-end="url(#arrow)"/>
+  <text x="475" y="56" class="flow">知识问答 · 快搜（同一账号令牌，SSO）</text>
+
+  <!-- 知识服务 -> RustFS -->
+  <path d="M760 188 C 740 260, 720 320, 666 382" class="line" marker-end="url(#arrow)"/>
+  <text x="700" y="290" class="flow">文档入库</text>
+  <text x="700" y="308" class="flow">derived 产物</text>
+
+  <!-- 控制面 -> 知识服务：服务地址下发（虚线） -->
+  <path d="M660 132 H704" class="line" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+  <text x="664" y="222" class="flow" transform="rotate(-90 664 222)"></text>
+</svg>

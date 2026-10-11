@@ -8,7 +8,7 @@ node --version
 npm --version
 
 # Wails 版本与项目保持一致
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
 
 # NSIS 3.x（构建安装包需要）
 winget install NSIS.NSIS
@@ -139,4 +139,62 @@ Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 
 6. 涉及 Windows 集成时执行手工验收清单。
 7. 更新架构、排障或迭代文档。
 8. 检查日志和 diff 中没有 Token、密码、个人文件路径或测试残留映射。
+
+## 7. 发布、CI 与运行数据
+
+### macOS 构建
+
+在 Mac 或 GitHub Actions macOS runner 上：
+
+```bash
+bash scripts/build-mac.sh
+```
+
+默认产出 universal `.app`/DMG，并用 `lipo` 合成同时包含 arm64 与 x86_64 的 Core：
+
+```text
+build/bin/easyshare-core
+build/bin/easyshare.app
+build/bin/EasyShare.dmg
+```
+
+`.github/workflows/build-mac.yml` 三种使用方式：
+
+1. PR 到 `master` 或推送 `master`：自动构建，完成后在该次 Actions 运行的 **Artifacts** 下载 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；
+2. `workflow_dispatch`：Actions 页面手动运行，可选 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`；
+3. 推送 `v*` tag：自动构建并创建 GitHub Release，发布同一组安装包与校验文件。
+
+macOS 详细构建与排障见 [`macos-port.md`](macos-port.md)。
+
+### 双仓库推送与版本约定
+
+提交代码后两个远程都要推（GitHub 承载 macOS CI，Gitee 为国内主仓库）：
+
+```bash
+git push origin dev
+git push github dev
+```
+
+版本阶段约定：`test` 仅用于流水线冒烟，`preview` 用于功能仍在完善且尚未完成全部真机验收的公开预览，`beta` 用于主要功能稳定后的扩大测试，`rc` 用于正式版候选。所有带 `-` 的 SemVer 预发布 tag（如 `v0.1.0-preview.1`）自动标记为 GitHub Prerelease。发布正式版：改三处版本号（`internal/version/version.go`、`wails.json`、`frontend/package.json`）→ `scripts/build.ps1` → `scripts/publish-release.ps1` 上传控制面。
+
+### CI 触发规则
+
+- `dev` 推送：仅触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）；Windows 桌面构建刻意不跑 `dev` 以省 runner 时长，日常验证靠本地 `scripts/build.ps1`。
+- Windows CI（`build-windows.yml`）：master / PR / tag / 手动触发。
+- macOS CI（`build-mac.yml`）：同上三种，另见上节。
+
+### 服务端联调（控制面栈）
+
+要联调登录与云盘，需先起服务端栈：`docker compose -f deploy/ruoyi-db/compose.yaml up -d`（PostgreSQL + Redis），再按 [`../deploy/ruoyi-db/README.md`](../deploy/ruoyi-db/README.md) 启动 RuoYi admin 与 RustFS。不启动控制面时桌面端可正常使用局域网传输，「知识」页也可连独立部署的知识服务器。只做桌面端/知识服务开发不需要 Java；开发控制面（`platform-drive/`）额外需要 JDK 21、Maven 与 RuoYi 源码工程（`platform/`，已 gitignore，准备步骤见 deploy/ruoyi-db README）。
+
+### 运行数据位置
+
+| 内容 | 默认位置 |
+| --- | --- |
+| 配置 | `%LOCALAPPDATA%\EasyShare\config.json` |
+| 日志 | `%LOCALAPPDATA%\EasyShare\logs` |
+| 接收文件 | `%USERPROFILE%\Downloads\EasyShare` |
+| WebDAV 共享目录 | `%USERPROFILE%\EasyShare` |
+
+`config.json` 包含 API Token 和 WebDAV 密码，不要提交或直接分享；排查问题时只需提供日志目录中的文件。
 
