@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-09-06（分发冲刺与租户服务发现，v0.2.0）
+> 每次迭代开始和结束时更新。最后更新：2026-10-11（部署窗口准备：checklist + RustFS 1.0.1 + 欠账清理）
 
 ## 路线总览
 
@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-11 | 部署窗口准备 — 部署日 checklist（deploy/server-linux/DEPLOY-CHECKLIST.md 执行序五段：前置/服务器/管理配置/分发/观察期）+ RustFS 镜像钉 1.0.1 稳定版（beta.10→1.0.1，三路重验归部署日）+ 欠账清理（10-02 OKF 切片与四份 digest 提交双远程推送） | 已完成（pytest 147 复验绿；compose 改纯 tag 钉，digest 部署日补） |
 | 2026-10-02 | OKF 化切片一：derived/ 重建验证 — rebuild_from_derived.py 从 document.json+manifest.json 全量重建索引（contextual 参数从 manifest 恢复不重调 LLM），黄金语料双路对比断言四指标不回退 | 已完成（重建验证一次通过：10 文档 29 块四指标逐项持平 0.952/0.857/0.892/0.905；pytest 147 全绿） |
 | 2026-09-06 | 分发冲刺与租户服务发现 — 服务地址登录后下发（sys_config 零 DDL，Java-first）+ 知识页免手填/账号预填 + 登录页去 admin 预填 + 连接错误带指引 + NSIS 防火墙放行 + v0.2.0 全量构建烧录验证 + 同事一页纸/分发清单 | 已完成（go 全绿 +6/vitest 40/Java 39；防火墙 UAC 真机点验与公司版构建待真实 IP） |
 | 2026-09-06 | 部门级权限 片 2b（/query 检索联动）— 知识服务 auth 用户加 dept 列（登录会话下发）+ /documents/process 透传 visible_depts 进 chunk metadata + doc_visible_depts（双后端）+ visible_doc_ids 部门过滤 | 已完成（pytest 147 全绿 +3：端到端部门过滤/auth 往返与旧库补列） |
@@ -244,7 +245,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 > 2026-08-20 战略讨论后主线改为**发芽路线**（定位与依据见 [`product-positioning.md`](product-positioning.md)，执行决策见其 §三）：先让产品在自己公司被真实使用，战略问题挂起待发芽后回答。
 
-1. **用户侧动作（非开发）**：照 [`company-rollout-guide.md`](company-rollout-guide.md) 在公司部署，建同事账号，真实文档入监听目录，两周看使用率——种子发芽与否的第一手答案；WPS 真机冒烟随部署一并做（装 WPS 的机器跑 `install_wps_addon.ps1`）
+1. **用户侧动作（非开发）**：照 [`company-rollout-guide.md`](company-rollout-guide.md) 在公司部署，建同事账号，真实文档入监听目录，两周看使用率——种子发芽与否的第一手答案；WPS 真机冒烟随部署一并做（装 WPS 的机器跑 `install_wps_addon.ps1`）；**部署日逐步执行序见 [`../deploy/server-linux/DEPLOY-CHECKLIST.md`](../deploy/server-linux/DEPLOY-CHECKLIST.md)（2026-10-11 建）**
 2. **质量体检报告获客入口**：上传 10 份文档出体检报告（种子发芽后作为接触制造业客户的钩子）
 3. **"问过的不再问第二遍"**（候选 idea，定位文档 §三）：问答自动沉淀为知识资产，待真实使用验证形态
 4. **插件仓拆分**（待触发，不主动执行）：`plugins/` 拆为独立仓库——触发条件与完整步骤见 [`plans/2026-09-01-plugin-repo-split.md`](plans/2026-09-01-plugin-repo-split.md)（插件 ≥3 个 / 外部协作者 / 发布节奏倒挂 / 客户定制，满足任一即启动）

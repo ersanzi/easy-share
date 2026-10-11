@@ -46,7 +46,10 @@ services:
     restart: unless-stopped
 
   rustfs:
-    image: rustfs/rustfs:1.0.0-beta.10@sha256:60f4f2f41ce95216f8cac676e69f9d90c0bfec458a3bc7fd7fb9b7c2452ac57a
+    # 2026-10-11 由 1.0.0-beta.10 升 1.0.1 稳定版（用户拍板「更新最新稳定」）。
+    # 换镜像有回归面：部署日须重验存储三路（预签名直传/此电脑挂载盘/知识服务上传），
+    # 见 DEPLOY-CHECKLIST.md §1；原 beta digest 钉随升级弃用，部署日 pull 后可重新钉。
+    image: rustfs/rustfs:1.0.1
     container_name: easyshare-rustfs
     security_opt:
       - no-new-privileges:true
