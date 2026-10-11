@@ -80,6 +80,25 @@ macOS **⌘⇧V**），加载剪切板插件的 `index.html?panel=1`——同一
    - 面板页引用 SDK 的绝对路径（`/plugins/_sdk/eshare.js`）与剪切板图片（`/clipboard-files/...`）
      在面板里同样可用：宿主为面板起了一个仅回环的临时静态服务，复用主窗口同一套路由。
 
+## 目标 → 机制速查
+
+想做什么，直接查表（对标 DeepSeek Harness 架构文档的同名表格；我们的是沙箱 Web 插件模型，机制不同，格式同）：
+
+| 我想做的 | 机制 |
+| --- | --- |
+| 记住插件的状态/数据 | `eshare.storage.*`（`storage`；按插件隔离 KV，卸载即清除） |
+| 复制内容到剪贴板 | `eshare.clipboard.copyText / copyImage / copyFiles`（`clipboard.write`） |
+| 读取/搜索/清理剪贴板历史 | `eshare.clipboard.history / stats / remove / clear`（`clipboard.read`） |
+| 剪贴板有新内容时做出响应 | `eshare.clipboard.onChanged(cb)`（`clipboard.events`） |
+| 提醒用户 | `eshare.notify(title, body)`（`notification`） |
+| 把生成的文件存进个人云盘 | `eshare.uploadToDrive({filename, content})`（`drive.upload`；走统一上传任务） |
+| 请求关闭自己的面板窗口 | `eshare.window.dismiss()`（面板形态专用，iframe 模式 no-op） |
+| 面板每次弹出时重置/刷新 | `eshare.window.onShown(cb)` |
+| 适配快捷面板第二形态 | URL 带 `?panel=1` 时走紧凑布局分支（见上「快捷面板」） |
+| 本地调试 | `plugins\dev.ps1 -Plugin <id>`（junction 热调回路） |
+| 上架商城 / 发布新版本 | `scripts/publish-plugin.ps1`（manifest 版本号递增即新版） |
+| 需要宿主尚不存在的能力 | 跨仓改动：主仓 `internal/plugin` 能力注册表加 Provider + 权限常量 + SDK 分发，走主仓迭代流程（能力新增须谨慎：权限面即攻击面） |
+
 ## SDK 速查
 
 插件 HTML 内引用（宿主统一分发，勿自带副本——版本随宿主）：
