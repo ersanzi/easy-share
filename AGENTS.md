@@ -61,6 +61,7 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | WPS 加载项登记不生效 | 新版个人版（≥12.1.0.16910）忽略手工 jsplugins.xml，读 jsaddons 的 publish.xml；**在线模式必须用 `<jspluginonline>` 标签**（`<jsplugin>` 是离线模式，url 应指 .7z 包）；改登记后必须 `taskkill /IM wps.exe /F` 彻底退出（常驻进程不重读登记）；曾误判离线会在 `jsaddons\jsaddinblockhost.ini` 留域名拦截、`authaddin.json` 留旧记录，需一并清理 |
 | wails build 文件锁定 | 先 `Stop-Process -Name easyshare` |
 | platform-drive 编译 | 顶层 Maven 模块的父 POM 指向 `platform/pom.xml`（RuoYi 源码工程，已 gitignore）——本仓 clone 后不能直接 `mvn`，需先按 `deploy/ruoyi-db/README.md` 准备 RuoYi 工程目录 |
+| wails CLI 升级不生效 | GOPATH 是自定义 `D:\GoWorks`，`go install` 装到 `D:\GoWorks\bin`，但 PATH 命中的是旧默认位置 `C:\Users\lishi\go\bin` 的旧版——升级后 `wails version` 仍显旧版即此坑，把新 exe 覆盖过去即可 |
 | 只跑 wails build 后新 API 不生效 | `wails build` 只编桌面端壳，`build/bin/easyshare-core.exe` 不会重编——桌面端冒烟前必须 `go build -o build/bin/easyshare-core.exe ./cmd/core` 或直接跑 `scripts/build.ps1` |
 | Git Bash 调安装包静默参数失效 | MSYS 会把 `/S` 当路径转换（装出交互界面挂住），须 `MSYS_NO_PATHCONV=1 installer.exe /S`；对二进制 grep 须加 `-a` |
 | AWS SDK PutObject 非 seekable 流 | 须加 `v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware` |
