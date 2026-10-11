@@ -38,6 +38,11 @@ Windows 10/11 · macOS · 全套私有化部署 · 数据不出内网
 <br><sub>工作台：系统状态、设备、任务与共享空间，统一在一个入口</sub>
 </div>
 
+<div align="center">
+<img src="docs/assets/knowledge-qa.png" alt="知识问答：答案附引用来源" width="680"/>
+<br><sub>知识问答：向私有知识库提问，回答附引用来源，点开即看原文</sub>
+</div>
+
 ## ⚙️ 它是怎么工作的
 
 <img src="docs/assets/architecture.svg" alt="EasyShare 架构：客户端 · 控制面 · 对象存储 · 知识服务" width="880"/>
