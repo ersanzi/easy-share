@@ -1,20 +1,22 @@
-"""从 derived/ 产物全量重建向量索引，并断言评测集指标不回退。
+"""从 derived/ 产物全量重建向量索引。
 
-验证对标文档（docs/agent-knowledge-benchmark.md）架构原则 1 的资产承诺：
-「derived/ 是唯一知识源，向量索引只是可重建缓存」——索引坏了应能只从
-derived 产物完整重建，且检索质量不损失。
+两个模式（OKF 架构原则 1：「derived/ 是唯一知识源，向量索引只是可重建缓存」）：
 
-流程（默认 HashEmbedder 确定性口径，与 scripts/eval_retrieval.py 同源）：
-1. 黄金语料走完整入库管线（解析→清洗→contextual 摘要→切块→embedding→索引），
-   得到基线检索指标与 derived 产物（document.json / manifest.json）。
-2. 只读 derived 产物重建整套向量索引：不碰源文档、不重跑解析与清洗，
-   contextual 参数（摘要 + provider）从 manifest 恢复，不再调用 LLM。
-3. 同一评测集对重建索引重新打分，四指标与基线逐项比对，
-   任一下降即非零退出。
+默认 · 重建验证：黄金语料双路对比（完整管线直建 vs 只读 derived 重建，不碰
+源文档、不重跑解析清洗、不调 LLM），同一评测集打分断言四项检索指标逐项
+持平——证明「索引坏了可以只从 derived 完整重建且质量无损失」。
 
-用法：
-    python scripts/rebuild_from_derived.py            # 重建验证（哈希口径）
-    python scripts/rebuild_from_derived.py --output r.json   # 结果留档 JSON
+--apply · 生产替换：把生产 JSON 向量索引（.env 的 VECTOR_STORE_PATH）从
+derived 产物全量重建并原子替换，旧索引自动备份为 .bak-<时间戳>；任一文档
+重建失败即整体中止、生产索引不动。**必须停服务后执行**（运行中服务的内存
+索引会在下次入库写回时覆盖重建结果），完成后重启服务。先跑不带 --yes 的
+--apply 看预览（文档清单 / embedder / 目标路径），确认再加 --yes。
+
+用法（在 knowledge/ 目录下运行，读 .env）：
+    python scripts/rebuild_from_derived.py               # 重建验证（哈希口径）
+    python scripts/rebuild_from_derived.py --output r.json
+    python scripts/rebuild_from_derived.py --apply       # 生产替换预览
+    python scripts/rebuild_from_derived.py --apply --yes # 真正执行替换
 """
 from __future__ import annotations
 
@@ -28,12 +30,11 @@ KNOWLEDGE_ROOT = Path(__file__).resolve().parents[1]
 if str(KNOWLEDGE_ROOT) not in sys.path:
     sys.path.insert(0, str(KNOWLEDGE_ROOT))
 
+from app.config import Settings  # noqa: E402
 from app.eval.retrieval import evaluate_retrieval  # noqa: E402
-from app.kb.chunker import chunk_document  # noqa: E402
-from app.kb.store import VectorStore  # noqa: E402
-from app.parsing.models import DocumentBlock, ParsedDocument, SourceLocation  # noqa: E402
-from app.pipeline.service import PIPELINE_VERSION, artifact_keys  # noqa: E402
+from app.kb.rebuild import apply_rebuild, plan_rebuild, rebuild_doc_items  # noqa: E402
 from app.rag.retriever import Retriever  # noqa: E402
+from app.kb.store import VectorStore  # noqa: E402
 from tests.retrieval.corpus import (  # noqa: E402
     EVAL_CHUNK_OVERLAP,
     EVAL_CHUNK_SIZE,
@@ -47,99 +48,8 @@ from tests.retrieval.corpus import (  # noqa: E402
 METRIC_KEYS = ("recall_at_k", "hit_at_1", "mrr", "snippet_hit_rate")
 
 
-def document_from_payload(payload: dict) -> ParsedDocument:
-    """把 document.json（ParsedDocument.to_dict 产物）反序列化回文档对象。
-
-    to_dict 会弹出取默认值的字段（level/rows/text/metadata/source 内的 None），
-    此处逐字段回填默认值，保证与解析器直出对象等价。
-    """
-    blocks = [
-        DocumentBlock(
-            id=raw["id"],
-            type=raw["type"],
-            text=raw.get("text", ""),
-            level=raw.get("level"),
-            rows=raw.get("rows", []),
-            source=SourceLocation(**raw.get("source", {})),
-            metadata=raw.get("metadata", {}),
-        )
-        for raw in payload.get("blocks", [])
-    ]
-    return ParsedDocument(
-        filename=payload["filename"],
-        media_type=payload["media_type"],
-        blocks=blocks,
-        warnings=payload.get("warnings", []),
-        metadata=payload.get("metadata", {}),
-    )
-
-
-def rebuild_doc_items(
-    storage,
-    file_id: str,
-    version_id: str,
-    embedder,
-    chunk_size: int,
-    chunk_overlap: int,
-) -> list[dict]:
-    """从单个文档的 derived 产物重建向量索引条目（复刻管线 items 结构）。
-
-    与入库管线的唯一信息差：contextual 摘要不重新生成，直接取 manifest
-    里留档的 summary/provider——这正是「manifest 是构建参数真相源」的用法。
-    """
-    keys = artifact_keys(file_id, version_id)
-    payload = json.loads(storage.read(keys["document"]))
-    manifest = json.loads(storage.read(keys["manifest"]))
-
-    doc_summary = ""
-    heuristic_mode = False
-    contextual_meta = manifest.get("contextual") or {}
-    if contextual_meta.get("enabled"):
-        doc_summary = contextual_meta.get("summary") or ""
-        heuristic_mode = contextual_meta.get("provider") == "heuristic"
-
-    document = document_from_payload(payload)
-    chunks = chunk_document(
-        document,
-        chunk_size,
-        chunk_overlap,
-        doc_summary=doc_summary,
-        heuristic_mode=heuristic_mode,
-    )
-    embeddings = embedder.embed([chunk.text for chunk in chunks])
-    if len(embeddings) != len(chunks):
-        raise ValueError(f"{file_id}: embedding 数量与文本块数量不一致")
-
-    return [
-        {
-            "id": f"{file_id}:{version_id}:{index}",
-            "doc_id": file_id,
-            "file_id": file_id,
-            "version_id": version_id,
-            "text": chunk.text,
-            "metadata": {
-                "filename": manifest.get("filename"),
-                "object_key": manifest.get("object_key"),
-                "owner": manifest.get("owner"),
-                "visible_depts": manifest.get("visible_depts"),
-                "pipeline_version": manifest.get("pipeline_version", PIPELINE_VERSION),
-                "ingested_at": manifest.get("processed_at"),
-                **chunk.metadata(),
-            },
-            "embedding": embedding,
-        }
-        for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
-    ]
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="从 derived/ 产物全量重建向量索引并验证指标不回退")
-    parser.add_argument("--top-k", type=int, default=5)
-    parser.add_argument("--chunk-size", type=int, default=EVAL_CHUNK_SIZE)
-    parser.add_argument("--chunk-overlap", type=int, default=EVAL_CHUNK_OVERLAP)
-    parser.add_argument("--output", type=Path, default=None, help="把对比报告写入 JSON 文件")
-    args = parser.parse_args()
-
+def run_verify(args: argparse.Namespace) -> int:
+    """黄金语料双路对比：管线直建基线 vs derived 重建，断言指标不回退。"""
     with tempfile.TemporaryDirectory(prefix="easyshare-rebuild-verify-") as work_dir:
         # 1. 完整入库管线：基线索引 + derived 产物
         setup = build_eval_setup(
@@ -203,6 +113,55 @@ def main() -> int:
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"对比报告已写入: {args.output}")
     return 0
+
+
+def run_apply(args: argparse.Namespace) -> int:
+    """生产索引替换：--yes 前为只读预览，--yes 后重建并原子替换。"""
+    config = Settings()  # 读 knowledge/.env（须在 knowledge/ 目录运行）
+    try:
+        if not args.yes:
+            plan = plan_rebuild(config)
+            print(f"目标索引: {plan['store']}（{'已存在，将备份后替换' if plan['store_exists'] else '不存在，将新建'}）")
+            print(f"Embedder: {plan['embedder']}（与线上查询同一配置工厂）")
+            print(f"待重建文档: {plan['documents']}")
+            for file_id, version_id in plan["targets"]:
+                print(f"  - {file_id} @ {version_id}")
+            if plan["documents"]:
+                print("\n预览模式，未做任何改动。确认清单无误后加 --yes 执行；")
+                print("执行前请先停知识服务（运行中服务的内存索引会覆盖重建结果）。")
+            else:
+                print("\n没有可重建的文档，无需执行。")
+            return 0 if plan["documents"] else 2
+
+        report = apply_rebuild(config)
+    except RuntimeError as exc:
+        print(f"--apply 失败：{exc}", file=sys.stderr)
+        return 1
+
+    if not report.get("applied"):
+        print(f"无需重建：{report.get('reason')}")
+        return 2
+    print(
+        f"重建完成: {report['documents']} 文档 / {report['chunks']} 块 → {report['store']}"
+        f"（Embedder: {report['embedder']}）"
+    )
+    print(f"旧索引备份: {report['backup'] or '（原索引不存在，未备份）'}")
+    print("请重启知识服务以加载新索引（BM25 派生索引会自动懒重建）。")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="从 derived/ 产物全量重建向量索引（验证 / 生产替换）")
+    parser.add_argument("--apply", action="store_true", help="生产替换模式（默认为黄金语料重建验证）")
+    parser.add_argument("--yes", action="store_true", help="配合 --apply：跳过预览真正执行替换")
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--chunk-size", type=int, default=EVAL_CHUNK_SIZE)
+    parser.add_argument("--chunk-overlap", type=int, default=EVAL_CHUNK_OVERLAP)
+    parser.add_argument("--output", type=Path, default=None, help="把对比报告写入 JSON 文件（仅验证模式）")
+    args = parser.parse_args()
+    if args.apply:
+        return run_apply(args)
+    return run_verify(args)
 
 
 if __name__ == "__main__":

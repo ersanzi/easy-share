@@ -161,6 +161,31 @@ class JobStore:
             ).fetchone()
         return self._from_row(row) if row is not None else None
 
+    def latest_completed_docs(self) -> list[tuple[str, str]]:
+        """每个 file_id 取最新一次 completed 的 (file_id, version_id)。
+
+        索引重建（app/kb/rebuild.py）的权威文档清单：只认 completed——
+        失败/进行中的任务不代表 derived 产物完整可用。同文件多版本时
+        created_at 最近的胜出（ISO 时间串按字典序即时间序）。
+        """
+        with self.lock:
+            rows = self.connection.execute(
+                """
+                SELECT file_id, version_id
+                FROM processing_jobs
+                WHERE status = 'completed'
+                ORDER BY file_id, created_at DESC
+                """
+            ).fetchall()
+        picked: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for row in rows:
+            if row["file_id"] in seen:
+                continue
+            seen.add(row["file_id"])
+            picked.append((row["file_id"], row["version_id"]))
+        return picked
+
     def list_recent(self, *, limit: int = 20) -> list[ProcessingJob]:
         """按创建时间倒序返回最近任务，并限制查询数量。"""
         bounded_limit = max(1, min(limit, 100))

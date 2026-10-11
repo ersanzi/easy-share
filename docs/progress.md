@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-11 | OKF 化切片二：生产索引重建与原子替换 — 重建核心上移 app/kb/rebuild.py（脚本复用口径零变化）+ 任务库权威文档清单（latest_completed_docs）+ --apply 预览/执行双段式 + 失败整体中止/备份/原子替换 | 已完成（pytest 150 全绿 +3；切片一脚本四指标逐位一致；--apply 预览真机冒烟过；真实替换归部署机） |
 | 2026-10-11 | 部署窗口准备 — 部署日 checklist（deploy/server-linux/DEPLOY-CHECKLIST.md 执行序五段：前置/服务器/管理配置/分发/观察期）+ RustFS 镜像钉 1.0.1 稳定版（beta.10→1.0.1，三路重验归部署日）+ 欠账清理（10-02 OKF 切片与四份 digest 提交双远程推送） | 已完成（pytest 147 复验绿；compose 改纯 tag 钉，digest 部署日补） |
 | 2026-10-02 | OKF 化切片一：derived/ 重建验证 — rebuild_from_derived.py 从 document.json+manifest.json 全量重建索引（contextual 参数从 manifest 恢复不重调 LLM），黄金语料双路对比断言四指标不回退 | 已完成（重建验证一次通过：10 文档 29 块四指标逐项持平 0.952/0.857/0.892/0.905；pytest 147 全绿） |
 | 2026-09-06 | 分发冲刺与租户服务发现 — 服务地址登录后下发（sys_config 零 DDL，Java-first）+ 知识页免手填/账号预填 + 登录页去 admin 预填 + 连接错误带指引 + NSIS 防火墙放行 + v0.2.0 全量构建烧录验证 + 同事一页纸/分发清单 | 已完成（go 全绿 +6/vitest 40/Java 39；防火墙 UAC 真机点验与公司版构建待真实 IP） |
@@ -220,6 +221,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
+
+**OKF 化切片二：生产索引重建与原子替换**（2026-10-11 用户直配轮，当日完成）— 补齐对标文档架构原则 1 的执行闭环：重建核心上移 `app/kb/rebuild.py`（切片一脚本改为复用，四指标逐位一致），新增任务库权威文档清单（`latest_completed_docs`，能恢复「索引丢块/丢文档」灾难场景）、`--apply` 预览/执行双段式（预览零成本零写入）、失败整体中止 + 时间戳备份 + `os.replace` 原子替换；embedder 与线上查询同一工厂，重建与查询口径必然一致。pytest 150 全绿（+3 破坏性写路径例外用例）。边界：Milvus 后端显式拒绝；`--apply --yes` 真实替换归部署机。详见 [`iterations/2026-10-11-okf-apply-rebuild.md`](iterations/2026-10-11-okf-apply-rebuild.md)。
 
 **OKF 化切片一：derived/ 重建验证**（2026-10-02 自动化迭代轮，当日完成）— 落实对标文档架构原则 1「derived/ 是唯一知识源，向量索引是可重建缓存」的资产承诺：新增 `knowledge/scripts/rebuild_from_derived.py`，从 derived 产物（document.json + manifest.json，contextual 参数从 manifest 恢复、不重调 LLM）全量重建向量索引，黄金语料双路对比（管线直建 vs derived 重建）对同一评测集断言四指标持平——重建验证一次通过（10 文档 29 块，recall@5/hit@1/mrr/snippet 逐项持平 0.952/0.857/0.892/0.905），pytest 147 全绿。边界：OKF frontmatter 导出（P1b）、生产库 `--apply` 替换、Milvus 后端重建验证不在本片。详见 [`iterations/2026-10-02-okf-rebuild-verify.md`](iterations/2026-10-02-okf-rebuild-verify.md)。
 
