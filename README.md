@@ -33,6 +33,11 @@ Windows 10/11 · macOS · 全套私有化部署 · 数据不出内网
 - 🚀 **一分钟分发** —— 公司版安装包烧录服务器地址，同事装完即用；后续版本在线自动升级
 - 🧩 **插件生态** —— 内置官方插件商城，剪贴板旗舰等插件按需安装
 
+<div align="center">
+<img src="docs/assets/workbench.png" alt="EasyShare 工作台" width="680"/>
+<br><sub>工作台：系统状态、设备、任务与共享空间，统一在一个入口</sub>
+</div>
+
 ## ⚙️ 它是怎么工作的
 
 <img src="docs/assets/architecture.svg" alt="EasyShare 架构：客户端 · 控制面 · 对象存储 · 知识服务" width="880"/>

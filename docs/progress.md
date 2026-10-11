@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-11 | 插件中心四连修 — 侧边栏插件条目错位（计数徽章 CSS 误伤）+ 待办周报弹窗 hidden 被作者样式覆盖（空弹窗常驻关不掉）+ 商城本地更新仍可重装（降级保护）+ 更新报错 null newPermissions（Go nil slice）；剪切板 2.1.0/待办 1.0.3 重新上架收敛版本 | 已完成（computer-use 真机复验全过；插件三方版本收敛；README 增工作台截图） |
 | 2026-10-11 | 知识服务 SSO — 中间件对本地未命中令牌回查控制面 /system/user/getInfo 验票（introspection+60s 缓存），有效即放行并 JIT 建档（role 按控制面判定/dept 跟随）；本地登录保留；deploy.sh/deploy.ps1/.env.example 默认写 CONTROL_PLANE_URL | 已完成（pytest 156 全绿 +6；真实进程冒烟：控制面令牌 200+JIT 正确、匿名 401；客户端免登归下一片） |
 | 2026-10-11 | OKF 化切片二：生产索引重建与原子替换 — 重建核心上移 app/kb/rebuild.py（脚本复用口径零变化）+ 任务库权威文档清单（latest_completed_docs）+ --apply 预览/执行双段式 + 失败整体中止/备份/原子替换 | 已完成（pytest 150 全绿 +3；切片一脚本四指标逐位一致；--apply 预览真机冒烟过；真实替换归部署机） |
 | 2026-10-11 | 部署窗口准备 — 部署日 checklist（deploy/server-linux/DEPLOY-CHECKLIST.md 执行序五段：前置/服务器/管理配置/分发/观察期）+ RustFS 镜像钉 1.0.1 稳定版（beta.10→1.0.1，三路重验归部署日）+ 欠账清理（10-02 OKF 切片与四份 digest 提交双远程推送） | 已完成（pytest 147 复验绿；compose 改纯 tag 钉，digest 部署日补） |

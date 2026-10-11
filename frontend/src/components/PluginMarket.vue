@@ -37,6 +37,21 @@ const installedById = computed(() => {
   return map
 })
 
+// 版本比较：>0 表示本地比商城新——此时隐藏安装按钮（点了等于静默降级），展示说明文字
+const compareVersions = (a: string, b: string) => {
+  const pa = a.split('.').map(n => parseInt(n, 10) || 0)
+  const pb = b.split('.').map(n => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (d) return d
+  }
+  return 0
+}
+const localNewer = (item: MarketItem) => {
+  const local = installedById.value.get(item.id)
+  return !!local && compareVersions(local.version, item.version) > 0
+}
+
 const install = async (item: MarketItem) => {
   if (!item.asset || busyId.value) return
   busyId.value = item.id
@@ -44,8 +59,9 @@ const install = async (item: MarketItem) => {
   try {
     // 两段式：先预览（下载校验但不落成安装），有需确认的权限时弹确认框
     const preview = await core.pluginPreviewFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes)
-    if (preview.newPermissions.length) {
-      const permList = preview.newPermissions.map(p => `· ${permLabel(p)}`).join('\n')
+    const newPerms = preview.newPermissions ?? []
+    if (newPerms.length) {
+      const permList = newPerms.map(p => `· ${permLabel(p)}`).join('\n')
       const action = preview.isUpdate
         ? `更新到 v${preview.version}`
         : `安装 v${preview.version}`
@@ -55,7 +71,7 @@ const install = async (item: MarketItem) => {
       if (!ok) return
     }
     // 同意过的权限集合传给安装器：包内新增权限超出该集合会被 Go 侧拒绝（防静默扩权）
-    await core.pluginInstallFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes, preview.newPermissions)
+    await core.pluginInstallFromMarket(item.asset.id, item.asset.sha256, item.asset.sizeBytes, newPerms)
     await pluginSys.refreshPlugins()
     await load() // 刷新 updateAvailable 标记
   } catch (e) {
@@ -136,7 +152,7 @@ const formatBytes = (n: number) => {
             {{ item.publishedAt }}<template v-if="item.asset"> · {{ formatBytes(item.asset.sizeBytes) }}</template>
           </small>
           <button
-            v-if="item.asset"
+            v-if="item.asset && !localNewer(item)"
             class="primary-button compact"
             type="button"
             :disabled="busyId === item.id || (!!installedById.get(item.id)?.builtin && item.updateAvailable)"
@@ -144,6 +160,9 @@ const formatBytes = (n: number) => {
           >
             {{ busyId === item.id ? '安装中…' : item.updateAvailable ? '更新' : installedById.has(item.id) ? '重新安装' : '安装' }}
           </button>
+          <small v-else-if="localNewer(item)" class="market-card-meta" title="本地版本比商城新，不提供重装以避免降级">
+            本地 v{{ installedById.get(item.id)?.version }} 已比商城新
+          </small>
         </div>
       </div>
     </div>

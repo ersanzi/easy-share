@@ -64,6 +64,8 @@ body {
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,.32);
 }
+/* 作者样式压过 [hidden] 的 UA 默认 display:none，不补这条弹窗会进页面就空着常驻且 × 关不掉 */
+.sheet[hidden] { display: none; }
 .sheet-card {
   width: min(620px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
   background: #fff; border-radius: 14px; padding: 18px 20px;

@@ -128,13 +128,27 @@
     return lines.join('\n');
   }
 
-  weeklyBtn.addEventListener('click', function () {
+  // 周报弹窗开关：open/close 统一走内联 display（hidden 属性会被作者样式覆盖的环境里也可靠），
+  // 关闭用 document 级事件委托（即使个别宿主环境监听器挂载时序异常，点击仍可达）
+  function openReport() {
     reportBody.textContent = buildReport();
     reportHint.textContent = '';
     reportPanel.hidden = false;
-  });
-  document.getElementById('closeReport').addEventListener('click', function () {
+    reportPanel.style.display = 'flex';
+  }
+  function closeReport() {
     reportPanel.hidden = true;
+    reportPanel.style.display = 'none';
+  }
+  weeklyBtn.addEventListener('click', openReport);
+  document.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('#closeReport')) closeReport();
+  });
+  reportPanel.addEventListener('click', function (e) {
+    if (e.target === reportPanel) closeReport();   // 点背景（蒙层）关闭
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !reportPanel.hidden) closeReport();
   });
 
   document.getElementById('copyReport').addEventListener('click', function () {

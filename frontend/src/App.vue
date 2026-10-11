@@ -180,12 +180,12 @@ const avatarText = computed(() => {
           <button :class="['nav-item', view === 'devices' ? 'active' : '']" type="button" @click="view = 'devices'">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
             设备
-            <span>{{ app.snapshot.value.peers.length }}</span>
+            <span class="nav-count">{{ app.snapshot.value.peers.length }}</span>
           </button>
           <button :class="['nav-item', view === 'transfers' ? 'active' : '']" type="button" @click="view = 'transfers'">
             <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
             任务中心
-            <span>{{ app.snapshot.value.tasks.length }}</span>
+            <span class="nav-count">{{ app.snapshot.value.tasks.length }}</span>
           </button>
           <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>

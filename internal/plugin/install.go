@@ -104,7 +104,8 @@ func diffNewPermissions(installed, next []string) []string {
 	for _, p := range installed {
 		set[p] = true
 	}
-	var out []string
+	// 空数组而非 nil：JSON 序列化成 [] 而不是 null，前端免判空
+	out := []string{}
 	for _, p := range next {
 		if !set[p] {
 			out = append(out, p)
