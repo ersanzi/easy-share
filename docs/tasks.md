@@ -29,6 +29,7 @@
 
 | 日期 | 条目 | 来源 | 建议优先级 |
 | --- | --- | --- | --- |
+| 2026-09-27 | **部署资产 RustFS 镜像升级**：`deploy/server-linux/compose.yaml:49` 钉 `rustfs/rustfs:1.0.0-beta.10`（2025 年 beta），上游 1.0.0 稳定版已发布（现 1.0.1-preview 系列）。建议部署验收时改钉 1.0.0 并重验存储三路（预签名直传/挂载盘/知识服务上传），消除 beta 期已知问题 | 2026-09-27 情报扫描 digest #4（09-06/09-13 观察点关闭并升级） | P1（随部署验收；换镜像有回归面，须用户拍板） |
 | 2026-09-06 | **知识服务 SSO**：知识服务信任控制面 JWT，消灭「控制面账号 vs 知识服务账号」双账号（分发冲刺余量：当前以账号预填+文档缓解） | 2026-09-06 分发冲刺迭代发现 | P1（观察期部署后做，涉 Python auth 改造） |
 | 2026-09-06 | **企业部署能力缺口评估**（用户问"给员工用还缺什么"）五项入箱：① HTTPS 反代 ② 员工 Web 门户 ③ 企微/钉钉机器人通知 ④ 操作审计日志 ⑤ 全局快捷搜索——**2026-09-06 用户拍板：⑤ 全局快捷搜索、部门级权限（新提案）、管理员汇总页（新提案）三项转正待办池；①②③④ 用户评估暂不做（挂起，重评估条件：跨网段部署或安全合规要求出现时重启 HTTPS/审计讨论）** | 2026-09-06 用户部署咨询 | 已拍板（见待办池 P1 三行） |
 | 2026-09-05 | 评测集扩充「上下文敏感性」难例：现 42 条对真实 embedding 饱和（双向 1.000），contextual 增益不可测量。需构造正文不含文档身份即失义的块（如无标题表格只写「上限每晚 300 元」）；设计不当会过拟合，需人工拍板语料方案 | 2026-09-05 Contextual Chunking 迭代发现 | P2（观察期后做） |
@@ -38,10 +39,8 @@
 | 优先级 | 任务 | 来源/依据 | 完成标准 | 可自主 |
 | --- | --- | --- | --- | --- |
 | P2 | 汇总页进阶可视化（查询趋势折线/按账号检索排行）：观察期看真实需要再加，数据都在 query_log | 管理员汇总页片收尾记录 | 有真实诉求时做 | ✅ |
-| P2 | 汇总页进阶可视化（查询趋势折线/按账号检索排行）：观察期看真实需要再加，数据都在 query_log | 管理员汇总页片收尾记录 | 有真实诉求时做 | ✅ |
-| P2 | AI 周报接知识服务：todo 周报插件增加 AI 汇总（经 Core 网关调 /query，登录态复用） | progress.md 待开始 #5 | 插件冒烟 + 回归绿 | ✅ |
+| P2 | AI 周报接知识服务：todo 周报插件增加 AI 汇总（经 Core 网关调 /query，登录态复用；注意 2026-09-05 日志提示涉跨进程登录态） | progress.md 待开始 #5 | 插件冒烟 + 回归绿 | ✅ |
 | P2 | 空间整理算法：plans/2026-08-30-space-pool-and-organize.md 中「整理算法」待实施部分——实现前先读该 plan | progress.md 账号控制面段 | 按 plan 验收标准 | ✅ |
-| P2 | OKF 化切片一：derived/ 为唯一知识源的重建验证——写全量重建向量索引脚本并断言评测集指标不回退 | agent-knowledge-benchmark.md P1（derived/=知识源、向量=可重建缓存） | 脚本 + 重建前后指标留档 | ✅（大任务，只做此片） |
 | P3 | 文档对账巡检：progress.md / iterations / README 交叉链接与状态一致性检查，发现漂移即修文档 | AGENTS.md 文档规矩 | 巡检结果写运行日志 | ✅（适合被安全门拦截时的填充任务） |
 | 后置 | 1.8 批量压测 | 2026-08-20 决策与其他测试统一做 | 与其他测试统一做 | ❌（后置） |
 | 后置 | 体检报告获客入口 | progress.md 待开始 #2（种子发芽后作钩子） | 等发芽 | ❌（等观察期结论） |
@@ -55,6 +54,7 @@
 
 | 完成日 | 任务 | 验证结果 |
 | --- | --- | --- |
+| 2026-10-02 | P2 OKF 化切片一：derived/ 重建验证（`knowledge/scripts/rebuild_from_derived.py`——从 document.json+manifest.json 全量重建索引，contextual 参数从 manifest 恢复不重调 LLM，四指标断言不回退） | 重建验证一次通过（10 文档 29 块，recall@5/hit@1/mrr/snippet 与管线直建基线逐项持平 0.952/0.857/0.892/0.905）；pytest 147 passed 全绿。见 [iterations/2026-10-02-okf-rebuild-verify.md](../docs/iterations/2026-10-02-okf-rebuild-verify.md) |
 | 2026-09-06 | P1 管理员汇总页：AdminPanel 概览 Tab 六卡片 + 知识服务 /stats 聚合端点 | 三栈回归全绿（Java 37/go/pytest 144/vitest 40）。见 [iterations/2026-09-06-admin-overview.md](../docs/iterations/2026-09-06-admin-overview.md) || 2026-09-06 | P1 部门级权限片 2（文档级可见性数据面）：visible_depts 字段 + 上传声明 + 设置端点 + 列表过滤收口 | Java 39 全绿 +2；go 全绿。/query 联动核验后拆片 2b。见 [iterations/2026-09-06-dept-permission.md](../docs/iterations/2026-09-06-dept-permission.md) §5 |
 | 2026-09-06 | P2 部门级权限片 2b（/query 检索联动）：auth dept 列（登录下发）+ ingest metadata 透传 + doc_visible_depts 双后端 + visible_doc_ids 过滤 | pytest 147 全绿 +3（端到端部门过滤/auth 往返/旧库补列）。见 [iterations/2026-09-06-dept-permission.md](../docs/iterations/2026-09-06-dept-permission.md) §5 |
 
@@ -87,6 +87,11 @@
 | 2026-09-06 | 用户直配轮 9（片 2b 检索联动） | A | 三步全栈落地：auth dept 列（存量库自动补列/登录会话下发）→ /documents/process 透传 visible_depts（job CSV 列/metadata/manifest）→ doc_visible_depts 双后端 + visible_doc_ids 过滤。pytest 147 全绿 +3（端到端：同部门可见/异部门与无部门不可见/admin 全见）。「这文档只有研发能看」问答链路端到端生效 |
 | 2026-09-06 | 用户直配轮 10（分发冲刺：部署发安装包，员工视角痛点） | A | 五痛点全处理：租户服务发现（/easyshare/service/config，sys_config 零 DDL，知识页免手填+账号预填+管理页登记，推导回退 :8000）+ 登录页去 admin 预填/错误带地址 + NSIS 防火墙按程序放行（修互搜不到设备）+ v0.2.0 三处对齐 + build.ps1 全量跑通烧录实证 + 同事一页纸 company-desktop-guide + 分发清单六项。go 全绿 +6/vitest 40/Java 39（重踩 maven.test.skip 坑）；防火墙 UAC 真机点验与公司版构建待真实 IP |
 | 2026-09-06 | 用户直配轮 11（续轮：真机冒烟 + Docker 演练） | A | 真机静默安装 0.1.1→0.2.0 升级路径 + computer-use 首启点验三验过（空账号框/EasyShare 品牌/报错带地址指引）；**修 ship 脚本 DDL 缺口**（9-06 四个新 DDL 未入清单=部署日缺表地雷，7 个幂等 DDL 改为每次投递重放）；**控制面容器栈本地 Docker 隔离演练全绿**（11 SQL/表断言/探活 200/服务发现 API 6/6 含 403 反例/sys_config 行 DB 级核验），顺手修 ftp:// 500 文案（Go 前置校验）。新坑：Git Bash 调安装包 /S 须 MSYS_NO_PATHCONV=1（已入 AGENTS 坑表）；pytest 147 绿 |
+| 2026-09-06 | 情报学习扫描 | B | 第 2 轮（间隔 3 天到期）：补齐上轮轴③缺口——FastAPI 0.141.1 / PaddleOCR v3.7.0 / RuoYi-Vue-Plus v6.0.0 均在项目版本线无紧迫动作，Wails v3 仍 beta.16 未 GA；关键发现=**RustFS 仍 Beta 未到 production**，建议列入部署验收观察点；轴①沉淀难例扩充方法学（hard negatives / Ragas 合成测试集）直接服务收件箱 P2；收件箱 0 条新增（连续 2 轮）；轴②无新变化（连续 2 轮，下轮起降频试验）；Cloudreve V4 细读因论坛动态渲染未成，下轮改走 GitHub releases。队列维护发现：待办池「汇总页进阶可视化」存在重复行，留给下轮 A 重排处理（B 轮不改待办池）。产出 [docs/intelligence/2026-09-06-digest.md](intelligence/2026-09-06-digest.md) |
+| 2026-09-13 | 情报学习扫描 | B | 第 3 轮（距上轮 7 天，本周调度未触发今日补跑）：收件箱 0 条新增（连续 3 轮）；轴① agentic retrieval / context engineering——行业转向确认，项目 1.9 多跳 + hybrid 已在主干，观察期不动；轴②降频窄查格局未变（连续 3 轮重复 → 下轮起降为隔轮一扫）；轴③ Wails v3 beta.20（09-10）仍未 GA、稳定线仍 v2.14.0，其余上游沿用上轮结论未逐一复查（已标注，下轮优先复查 RustFS production 动态）；轴④ Cloudreve V4 细读完成（4.15→4.18）：并行分块上传修复与项目 Multipart 互证（建议真机验收加分片边界用例）+ 安全修复节奏高频（部署期预期）。产出 [docs/intelligence/2026-09-13-digest.md](intelligence/2026-09-13-digest.md)。备注：自动化文档（09-06/09-13 digest 与日志）持续滞留工作树未提交 |
+| 2026-09-27 | 情报学习扫描 | B | 第 4 轮（距上轮 14 天，09-14~26 调度未触发——机器/ZCode 未运行，错过不补跑本次补偿；HEAD 两周无新提交）：**收件箱 +1（连续 4 轮后首条）**：部署资产 RustFS 镜像仍钉 1.0.0-beta.10 而上游 1.0.0 稳定版已发布，建议部署验收时升级重验（P1）；Milvus 3.0.2/2.6.24 双稳定线活跃、Wails v3 仍 beta.26 未 GA；轴① late chunking vs contextual retrieval 共识确认项目 contextual chunking（LLM→启发式回退）在推荐象限；Cloudreve 4.19 再次收紧并行分块上传（强化 Multipart 验收用例建议）；轴②按隔轮计划跳过。产出 [docs/intelligence/2026-09-27-digest.md](intelligence/2026-09-27-digest.md)。备注：自动化文档滞留已 3 轮待用户提交 |
+| 2026-09-30 | 情报学习扫描 | B | 第 5 轮（间隔 3 天到期；**周二 09-29 A 轮未触发**，待办池去重与任务执行连续第二周顺延）：收件箱 0 条新增，既有 P1 RustFS 镜像升级复核有效（1.0.1 仍 preview.11）；轴②隔轮窄查首次抓到进榜事件——Hindsight 新晋（LongMemEval 94.6%，单 PG 四路检索），降频机制价值验证，维持该节奏；轴①元结论=查询日志挖盲区无成熟公开方法，项目周报脚本属自建小资产，观察期后可按低分聚类增强（想法存 digest 待拍板）；Cloudreve 无增量。产出 [docs/intelligence/2026-09-30-digest.md](intelligence/2026-09-30-digest.md)。备注：自动化文档滞留已 4 轮待用户提交 |
+| 2026-10-02 | 自主规划与迭代 | A | 周五 A 轮（连续两个周二未触发后首次跑成），安全门通过（树内仅自动化文档）。先清挂账：待办池「汇总页进阶可视化」重复行去重。执行 P2 OKF 化切片一（derived/ 重建验证）：新增 `knowledge/scripts/rebuild_from_derived.py`——口径定稿为黄金语料双路对比（管线直建 vs 只读 derived 重建，contextual 参数从 manifest 恢复不重调 LLM），重建验证一次通过（四指标逐项持平 0.952/0.857/0.892/0.905），pytest 147 全绿。待办池重排：汇总页可视化按自身标准继续等观察期；剩余可自主=AI 周报接知识服务、空间整理算法。详见 [docs/iterations/2026-10-02-okf-rebuild-verify.md](iterations/2026-10-02-okf-rebuild-verify.md) |
 
 ## 自动化运行规则
 

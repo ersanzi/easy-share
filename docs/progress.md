@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-02 | OKF 化切片一：derived/ 重建验证 — rebuild_from_derived.py 从 document.json+manifest.json 全量重建索引（contextual 参数从 manifest 恢复不重调 LLM），黄金语料双路对比断言四指标不回退 | 已完成（重建验证一次通过：10 文档 29 块四指标逐项持平 0.952/0.857/0.892/0.905；pytest 147 全绿） |
 | 2026-09-06 | 分发冲刺与租户服务发现 — 服务地址登录后下发（sys_config 零 DDL，Java-first）+ 知识页免手填/账号预填 + 登录页去 admin 预填 + 连接错误带指引 + NSIS 防火墙放行 + v0.2.0 全量构建烧录验证 + 同事一页纸/分发清单 | 已完成（go 全绿 +6/vitest 40/Java 39；防火墙 UAC 真机点验与公司版构建待真实 IP） |
 | 2026-09-06 | 部门级权限 片 2b（/query 检索联动）— 知识服务 auth 用户加 dept 列（登录会话下发）+ /documents/process 透传 visible_depts 进 chunk metadata + doc_visible_depts（双后端）+ visible_doc_ids 部门过滤 | 已完成（pytest 147 全绿 +3：端到端部门过滤/auth 往返与旧库补列） |
 | 2026-09-06 | 部门级权限 片 2（文档级可见性·数据面）— es_file.visible_depts + presign-put 上传声明 + file-visibility 设置端点 + /objects 共享列表过滤（唯一列举出口收口，网盘/挂载盘/快搜自动生效）；/query 联动核验：走知识服务本地 auth，联动拆片 2b（auth 部门模型前置） | 已完成（Java 39 全绿 +2；go 全绿；/query 联动片 2b 待排） |
@@ -218,6 +219,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
+
+**OKF 化切片一：derived/ 重建验证**（2026-10-02 自动化迭代轮，当日完成）— 落实对标文档架构原则 1「derived/ 是唯一知识源，向量索引是可重建缓存」的资产承诺：新增 `knowledge/scripts/rebuild_from_derived.py`，从 derived 产物（document.json + manifest.json，contextual 参数从 manifest 恢复、不重调 LLM）全量重建向量索引，黄金语料双路对比（管线直建 vs derived 重建）对同一评测集断言四指标持平——重建验证一次通过（10 文档 29 块，recall@5/hit@1/mrr/snippet 逐项持平 0.952/0.857/0.892/0.905），pytest 147 全绿。边界：OKF frontmatter 导出（P1b）、生产库 `--apply` 替换、Milvus 后端重建验证不在本片。详见 [`iterations/2026-10-02-okf-rebuild-verify.md`](iterations/2026-10-02-okf-rebuild-verify.md)。
 
 **分发冲刺与租户服务发现**（2026-09-06 开工，当日完成+续轮）— 用户目标「部署整个项目、给同事安装包」，代入员工视角摸排出五个首启堵点并全部处理：① **租户服务发现**（架构级，用户拍板方向）：客户端只预知控制面一个地址，知识服务地址登录后经 `/easyshare/service/config` 下发（存储复用 sys_config **零 DDL**，Java-first；管理页「租户服务地址」卡片登记，未登记时同主机 `:8090→:8000` 推导兜底）——「知识」页免手填、账号预填、只差输密码；② 登录页去 `admin` 预填+品牌文案修正；③ 连接错误带服务器地址与行动指引；④ **安装器防火墙放行**（NSIS 非静默询问提权加按程序规则 `EasyShare Core`，修「同事互相搜不到设备」的致命首启伤）；⑤ 版本 **0.2.0** + `build.ps1` 全量跑通产出安装包 + `-PlatformUrl` 烧录实证 + 同事一页纸（[`company-desktop-guide.md`](company-desktop-guide.md)）+ 分发清单六项（server-linux README §三）。**续轮加验**：真机静默安装 0.1.1→0.2.0 升级路径 + computer-use 首启点验（登录页/报错文案）；**ship 脚本补 9-06 四个新 DDL**（全部幂等、每次投递重放，删「手动灌增量」人工步骤）；**控制面容器栈本地 Docker 隔离演练全绿**（compose→11 SQL→表断言→探活 200→服务发现 API 6/6 含 403 反例，见迭代文档 §七）——全新服务器部署路径代码侧验证完毕。验证：go 全绿 +6 / vitest 40 / vue-tsc 干净 / Java 39 全绿 / pytest 147。剩余真机项：防火墙 UAC 交互点验、公司版构建待真实 IP、真实服务器 systemd/venv 部分。详见 [`iterations/2026-09-06-分发冲刺与租户服务发现.md`](iterations/2026-09-06-分发冲刺与租户服务发现.md)。
 
