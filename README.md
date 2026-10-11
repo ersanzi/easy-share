@@ -54,6 +54,11 @@ Windows 10/11 · macOS · 全套私有化部署 · 数据不出内网
 
 拿到公司安装包 → 下一步装完 → 用分配的账号登录 → 完事。日常怎么用看[《同事上手指南》](docs/company-desktop-guide.md)（复制正文即可发群）。
 
+<div align="center">
+<img src="docs/assets/first-run.png" alt="EasyShare 首启登录页" width="300"/>
+<br><sub>首启即见：品牌、账号入口与你公司的服务器地址——私有部署，开箱即用</sub>
+</div>
+
 **🛠 IT（部署）**
 
 一台 2C4G 起步的内网 Linux 服务器：
