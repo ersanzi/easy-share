@@ -156,6 +156,10 @@ curl http://127.0.0.1:8090/auth/tenant/list  # 控制面（200 即活）
   `RUSTFS_ENDPOINT` 倒是 127.0.0.1（服务端自访问）——两处用途不同，别「顺手统一」。
 - **captcha / api-decrypt 关闭**（compose 启动参数）：桌面客户端登录不走验证码与接口加密，
   开着会登不进去。内网部署可接受；暴露公网前必须重新评估（再加 HTTPS 网关）。
+- **知识服务 SSO（deploy.sh 默认写 `CONTROL_PLANE_URL=http://127.0.0.1:8090`）**：知识服务
+  信任控制面登录令牌，同事一套账号通行桌面端与知识服务（桌面知识页账号预填仍在，但不再
+  依赖本地同名账号存在）；本地口令登录保留（WPS/浏览器用户与 admin 备用通道）。
+  控制面与知识服务不同主机部署时改 .env 指向控制面地址。
 - **PG/Redis 端口沿用 dev 的 5433/6380**：与 `deploy/ruoyi-db` 一套心智，且都只绑 127.0.0.1。
 - **compose 里 ruoyi 启动参数是平移 `run-ruoyi-admin.ps1`**：命令行参数优先级最高，不依赖
   profile 差异；升级 platform/ 后若 dev 启动脚本加了参数，这里要同步。

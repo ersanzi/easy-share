@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-11 | 知识服务 SSO — 中间件对本地未命中令牌回查控制面 /system/user/getInfo 验票（introspection+60s 缓存），有效即放行并 JIT 建档（role 按控制面判定/dept 跟随）；本地登录保留；deploy.sh/deploy.ps1/.env.example 默认写 CONTROL_PLANE_URL | 已完成（pytest 156 全绿 +6；真实进程冒烟：控制面令牌 200+JIT 正确、匿名 401；客户端免登归下一片） |
 | 2026-10-11 | OKF 化切片二：生产索引重建与原子替换 — 重建核心上移 app/kb/rebuild.py（脚本复用口径零变化）+ 任务库权威文档清单（latest_completed_docs）+ --apply 预览/执行双段式 + 失败整体中止/备份/原子替换 | 已完成（pytest 150 全绿 +3；切片一脚本四指标逐位一致；--apply 预览真机冒烟过；真实替换归部署机） |
 | 2026-10-11 | 部署窗口准备 — 部署日 checklist（deploy/server-linux/DEPLOY-CHECKLIST.md 执行序五段：前置/服务器/管理配置/分发/观察期）+ RustFS 镜像钉 1.0.1 稳定版（beta.10→1.0.1，三路重验归部署日）+ 欠账清理（10-02 OKF 切片与四份 digest 提交双远程推送） | 已完成（pytest 147 复验绿；compose 改纯 tag 钉，digest 部署日补） |
 | 2026-10-02 | OKF 化切片一：derived/ 重建验证 — rebuild_from_derived.py 从 document.json+manifest.json 全量重建索引（contextual 参数从 manifest 恢复不重调 LLM），黄金语料双路对比断言四指标不回退 | 已完成（重建验证一次通过：10 文档 29 块四指标逐项持平 0.952/0.857/0.892/0.905；pytest 147 全绿） |
@@ -221,6 +222,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
+
+**知识服务 SSO（2026-10-11 用户直配轮，当日完成）** — 消灭「控制面账号 vs 知识服务账号」双账号：`.env` 配 `CONTROL_PLANE_URL` 后，auth 中间件对本地未命中的令牌回查控制面 `/system/user/getInfo` 验票（RuoYi 令牌是不透明串只能 introspection，头与解析同 Go 客户端一套），有效即放行并 JIT 建本地档案——role 按控制面 superadmin/*:*:* 判定、dept 取 deptId 且跟随同步、本地已有 role 不被覆盖；本地口令登录完全保留（WPS/浏览器用户与 admin 备用）。introspection 结果缓存 60s。deploy.sh/deploy.ps1 生成 .env 默认写同主机 `:8090`。验证：pytest 156 全绿（+6）；真实进程冒烟过。边界：桌面端知识页免登（Core 透传控制面令牌）归下一片；控制面登出后缓存最多 60s。详见 [`iterations/2026-10-11-知识服务sso.md`](iterations/2026-10-11-知识服务sso.md)。
 
 **OKF 化切片二：生产索引重建与原子替换**（2026-10-11 用户直配轮，当日完成）— 补齐对标文档架构原则 1 的执行闭环：重建核心上移 `app/kb/rebuild.py`（切片一脚本改为复用，四指标逐位一致），新增任务库权威文档清单（`latest_completed_docs`，能恢复「索引丢块/丢文档」灾难场景）、`--apply` 预览/执行双段式（预览零成本零写入）、失败整体中止 + 时间戳备份 + `os.replace` 原子替换；embedder 与线上查询同一工厂，重建与查询口径必然一致。pytest 150 全绿（+3 破坏性写路径例外用例）。边界：Milvus 后端显式拒绝；`--apply --yes` 真实替换归部署机。详见 [`iterations/2026-10-11-okf-apply-rebuild.md`](iterations/2026-10-11-okf-apply-rebuild.md)。
 

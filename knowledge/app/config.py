@@ -95,6 +95,12 @@ class Settings(BaseSettings):
     auth_db_path: str = "./data/auth.db"
     auth_token_expiry_hours: int = 168
 
+    # 控制面 SSO（2026-10-11）：配置后知识服务信任控制面（RuoYi）登录令牌，
+    # 同事一套账号通行桌面端与知识服务；本地账号/口令登录不受影响。
+    # introspection 回查 /system/user/getInfo，见 app/auth/sso.py。空=关闭。
+    control_plane_url: str = ""
+    control_plane_client_id: str = "e5cd7e4891bf95d1d19206ce24a7b32e"
+
     # 目录监听自动入库（分号分隔目录，空=关闭；指向共享盘/钉盘同步夹即"文件沼泽一键变知识"）
     watch_dirs: str = ""
     watch_interval_seconds: int = 30

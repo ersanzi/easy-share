@@ -56,6 +56,9 @@ def create_app(services: AppServices | None = None) -> FastAPI:
             token = request.query_params.get("token", "")
         if token and resolved_services.users is not None:
             user = await run_in_threadpool(resolved_services.users.resolve_token, token)
+            if user is None and resolved_services.sso is not None:
+                # 本地令牌未命中：回查控制面验票（SSO，带缓存；未配置控制面时跳过）
+                user = await run_in_threadpool(resolved_services.sso.resolve, token)
             if user:
                 request.state.user = user
         if (

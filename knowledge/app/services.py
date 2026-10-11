@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 
 from app.config import Settings, settings
+from app.auth.sso import ControlPlaneSSO
 from app.auth.store import UserStore
 from app.jobs.runner import JobRunner
 from app.jobs.store import JobStore
@@ -50,6 +51,7 @@ class AppServices:
     multi_hop: MultiHopRetriever | None = None
     users: UserStore | None = None
     watcher: DirectoryWatcher | None = None
+    sso: ControlPlaneSSO | None = None
 
     def start(self) -> None:
         self.job_runner.start()
@@ -107,6 +109,15 @@ def build_services(config: Settings = settings) -> AppServices:
     )
     job_store = JobStore(config.job_store_path)
     users = UserStore(config.auth_db_path, token_expiry_hours=config.auth_token_expiry_hours)
+    sso = (
+        ControlPlaneSSO(
+            config.control_plane_url,
+            client_id=config.control_plane_client_id,
+            users=users,
+        )
+        if config.control_plane_url
+        else None
+    )
     pipeline = DocumentPipeline(
         storage=storage,
         embedder=embedder,
@@ -140,6 +151,7 @@ def build_services(config: Settings = settings) -> AppServices:
         mineru=mineru,
         multi_hop=multi_hop,
         users=users,
+        sso=sso,
     )
     if config.watch_dirs:
         # 监听器持 services 引用，须在容器组装完成后创建
