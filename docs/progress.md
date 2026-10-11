@@ -259,7 +259,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 6. **1.8 批量压测**（后置）：与其他测试统一做
 7. **知识平台里程碑 2 全量**（暂缓）：Java 控制面按需拆分（薄切片路径替代，见定位文档；登录权限迁 Java 已定长期方向；2b/2c 权限感知已由 2026-09-01 切片在 Python 侧落地，迁移时平移语义）
 8. **网盘增强**（P0 已收官，参考 [`cloudreve-benchmark.md`](cloudreve-benchmark.md)）：目录导航 + es_file 目录层 fileId + Upload Session 断点续传三片合龙（均 2026-09-06）；P1 候选=回收站/版本（es_file 加列）、缩略图缓存、分享记录管理，按优先级排期；设备配对 / 传输加密继续暂缓
-9. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
+9. **Core 知识网关泛化 + SSO 免登**（2026-10-11 拍板，部署观察期后）：`/kapi/*` 令牌注入反代取代逐端点代理（消 Wails 五处级联）+ Core 透传控制面令牌使知识页免密——技术栈盘点结论「当前唯一结构性优化点」，与 SSO 片 2 同片；依据 [`iterations/2026-10-11-知识服务sso.md`](iterations/2026-10-11-知识服务sso.md) 边界
+10. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
 
 ## 已知阻塞
 
