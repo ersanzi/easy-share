@@ -12,13 +12,8 @@ on:
           - darwin/amd64
         default: darwin/universal
   push:
-    branches:
-      - master
     tags:
       - "v*"
-  pull_request:
-    branches:
-      - master
 
 permissions:
   contents: write
