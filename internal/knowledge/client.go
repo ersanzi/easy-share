@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -245,4 +246,217 @@ func (client *Client) HealthWithTimeout(parent context.Context, timeout time.Dur
 	var health Health
 	err := client.call(ctx, http.MethodGet, "/health", "", nil, &health)
 	return health, err
+}
+
+// --- 会议听记（/meetings） ---
+
+// MeetingSegment 一条发言轮次；Speaker 为引擎输出的序号字符串（"0"/"1"/...），
+// 展示名以 SpeakerNames 映射为准（用户改名后与序号解耦）。
+type MeetingSegment struct {
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Speaker string  `json:"speaker"`
+}
+
+// MeetingTodo 总结中提取的待办。
+type MeetingTodo struct {
+	Task      string `json:"task"`
+	OwnerHint string `json:"owner_hint"`
+	DueHint   string `json:"due_hint"`
+}
+
+// MeetingSection 模板化总结的小节（title + 段落或列表）。
+type MeetingSection struct {
+	Title   string   `json:"title"`
+	Text    string   `json:"text"`
+	Bullets []string `json:"bullets"`
+}
+
+// MeetingSummary AI 总结（未生成/LLM 未配置时为 null）。
+// 默认模板填 Minutes/KeyPoints；其他模板填 Sections；Todos 任何模板都有。
+type MeetingSummary struct {
+	Minutes   string           `json:"minutes,omitempty"`
+	KeyPoints []string         `json:"key_points,omitempty"`
+	Sections  []MeetingSection `json:"sections,omitempty"`
+	Todos     []MeetingTodo    `json:"todos"`
+}
+
+// Meeting 会议听记记录。列表视图时 Segments 为空、SegmentCount 给出条数；
+// 详情视图含全部分段。Owner/Error/DurationSeconds/Summary 可为 null。
+type Meeting struct {
+	ID              string            `json:"id"`
+	Title           string            `json:"title"`
+	CreatedAt       string            `json:"created_at"`
+	Owner           *string           `json:"owner"`
+	Status          string            `json:"status"`
+	Error           *string           `json:"error"`
+	DurationSeconds *float64          `json:"duration_seconds"`
+	SpeakerCount    int               `json:"speaker_count"`
+	SpeakerNames    map[string]string `json:"speaker_names"`
+	Segments        []MeetingSegment  `json:"segments"`
+	Summary         *MeetingSummary   `json:"summary"`
+	Mindmap         *string           `json:"mindmap"`
+	TemplateID      *string           `json:"template_id"`
+	SegmentCount    int               `json:"segment_count"`
+}
+
+// ArchiveResult 会议归档入库的结果。
+type ArchiveResult struct {
+	DocID    string `json:"doc_id"`
+	Filename string `json:"filename"`
+	Chunks   int    `json:"chunks"`
+	Chars    int    `json:"chars"`
+}
+
+// MeetingChatTurn 听记问答历史单轮（role 限 user/assistant）。
+type MeetingChatTurn struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// MeetingAskResult 听记问答返回。
+type MeetingAskResult struct {
+	Answer string `json:"answer"`
+}
+
+// Meetings 拉会议列表（不含分段全文）。
+func (client *Client) Meetings(ctx context.Context, token string, limit int) ([]Meeting, error) {
+	var payload struct {
+		Meetings []Meeting `json:"meetings"`
+	}
+	err := client.call(ctx, http.MethodGet, fmt.Sprintf("/meetings?limit=%d", limit), token, nil, &payload)
+	return payload.Meetings, err
+}
+
+// Meeting 拉单条完整记录（含分段与总结），录音完成后前端轮询用。
+func (client *Client) Meeting(ctx context.Context, token, id string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodGet, "/meetings/"+url.PathEscape(id), token, nil, &meeting)
+	return meeting, err
+}
+
+// DeleteMeeting 删除会议记录与音频文件。
+func (client *Client) DeleteMeeting(ctx context.Context, token, id string) error {
+	return client.call(ctx, http.MethodDelete, "/meetings/"+url.PathEscape(id), token, nil, nil)
+}
+
+// RenameMeetingSpeaker 发言人改名。
+func (client *Client) RenameMeetingSpeaker(ctx context.Context, token, id, speaker, name string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPatch, "/meetings/"+url.PathEscape(id)+"/speakers", token,
+		map[string]string{"speaker": speaker, "name": name}, &meeting)
+	return meeting, err
+}
+
+// RegenerateMeetingSummary 按记录登记的模板重新生成总结（LLM 调用，较慢）。
+func (client *Client) RegenerateMeetingSummary(ctx context.Context, token, id, templateID string) (Meeting, error) {
+	var meeting Meeting
+	body := map[string]string{"template_id": templateID}
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/summary", token, body, &meeting)
+	return meeting, err
+}
+
+// MeetingAsk 对本条听记提问（纪要+转写全文进上下文，LLM 调用，较慢）。
+func (client *Client) MeetingAsk(ctx context.Context, token, id, question string, history []MeetingChatTurn) (MeetingAskResult, error) {
+	var result MeetingAskResult
+	// nil 切片会序列化成 null，对端 pydantic 拒收显式 null，这里归一为空列表
+	if history == nil {
+		history = []MeetingChatTurn{}
+	}
+	body := map[string]any{"question": question, "history": history}
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/ask", token, body, &result)
+	return result, err
+}
+
+// RegenerateMeetingMindmap 重新生成思维导图大纲（LLM 调用，较慢）。
+func (client *Client) RegenerateMeetingMindmap(ctx context.Context, token, id string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/mindmap", token, nil, &meeting)
+	return meeting, err
+}
+
+// ArchiveMeeting 把纪要与转写归档进知识库。
+func (client *Client) ArchiveMeeting(ctx context.Context, token, id string) (ArchiveResult, error) {
+	var result ArchiveResult
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/archive", token, nil, &result)
+	return result, err
+}
+
+// UploadMeeting 转发 multipart 上传体到 /meetings/transcribe（流式，不整体落内存）。
+func (client *Client) UploadMeeting(ctx context.Context, token, contentType string, body io.Reader) (Meeting, error) {
+	var meeting Meeting
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/meetings/transcribe", body)
+	if err != nil {
+		return meeting, fmt.Errorf("build meeting upload: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", contentType)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return meeting, fmt.Errorf("connect knowledge server: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return meeting, &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	if err := json.NewDecoder(response.Body).Decode(&meeting); err != nil {
+		return meeting, fmt.Errorf("decode meeting response: %w", err)
+	}
+	return meeting, nil
+}
+
+// StreamMeetingAudio 把会议音频响应流式写入 writer（网关透传，不落内存）。
+func (client *Client) StreamMeetingAudio(ctx context.Context, token, id string, writer http.ResponseWriter) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/meetings/"+url.PathEscape(id)+"/audio", nil)
+	if err != nil {
+		return fmt.Errorf("build meeting audio request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("connect knowledge server: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	writer.Header().Set("Content-Type", "audio/wav")
+	if response.ContentLength > 0 {
+		writer.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
+	}
+	writer.WriteHeader(http.StatusOK)
+	_, err = io.Copy(writer, response.Body)
+	return err
+}
+
+// StreamMeetingExport 把会议导出文件（format: markdown|docx）流式透传到 writer，
+// 透传 Content-Type 与 Content-Disposition（内含下载文件名）。
+func (client *Client) StreamMeetingExport(ctx context.Context, token, id, format string, writer http.ResponseWriter) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		client.baseURL+"/meetings/"+url.PathEscape(id)+"/export/"+url.PathEscape(format), nil)
+	if err != nil {
+		return fmt.Errorf("build meeting export request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("connect knowledge server: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		writer.Header().Set("Content-Type", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition != "" {
+		writer.Header().Set("Content-Disposition", disposition)
+	}
+	if response.ContentLength > 0 {
+		writer.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
+	}
+	writer.WriteHeader(http.StatusOK)
+	_, err = io.Copy(writer, response.Body)
+	return err
 }

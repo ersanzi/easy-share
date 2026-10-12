@@ -10,6 +10,14 @@ export function AcceptTransferAs(arg1) {
   return window['go']['main']['App']['AcceptTransferAs'](arg1);
 }
 
+export function AdminAiConfigGet() {
+  return window['go']['main']['App']['AdminAiConfigGet']();
+}
+
+export function AdminAiConfigSave(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['AdminAiConfigSave'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function AdminCapacity() {
   return window['go']['main']['App']['AdminCapacity']();
 }
@@ -180,6 +188,46 @@ export function Login(arg1, arg2) {
 
 export function Logout() {
   return window['go']['main']['App']['Logout']();
+}
+
+export function McpConnectionGet() {
+  return window['go']['main']['App']['McpConnectionGet']();
+}
+
+export function McpConnectionRegenerate() {
+  return window['go']['main']['App']['McpConnectionRegenerate']();
+}
+
+export function MeetingArchiveToKnowledge(arg1) {
+  return window['go']['main']['App']['MeetingArchiveToKnowledge'](arg1);
+}
+
+export function MeetingAsk(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MeetingAsk'](arg1, arg2, arg3);
+}
+
+export function MeetingDetail(arg1) {
+  return window['go']['main']['App']['MeetingDetail'](arg1);
+}
+
+export function MeetingMindmapRegenerate(arg1) {
+  return window['go']['main']['App']['MeetingMindmapRegenerate'](arg1);
+}
+
+export function MeetingRemove(arg1) {
+  return window['go']['main']['App']['MeetingRemove'](arg1);
+}
+
+export function MeetingSpeakerRename(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MeetingSpeakerRename'](arg1, arg2, arg3);
+}
+
+export function MeetingSummaryRegenerate(arg1, arg2) {
+  return window['go']['main']['App']['MeetingSummaryRegenerate'](arg1, arg2);
+}
+
+export function MeetingsList(arg1) {
+  return window['go']['main']['App']['MeetingsList'](arg1);
 }
 
 export function MySpaces() {

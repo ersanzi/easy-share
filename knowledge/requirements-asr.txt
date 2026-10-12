@@ -1,0 +1,9 @@
+# 会议听记（可选运行时）——FunASR 转写 + 说话人分离
+# 安装：pip install -r requirements-asr.txt
+# CPU 版 torch 走官方 CPU 源可省 1GB+ 下载：
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
+torchaudio>=2.2
+funasr>=1.1
+modelscope>=1.17
+numpy>=1.26

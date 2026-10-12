@@ -299,6 +299,61 @@ const submitServiceConfig = async () => {
   }
 }
 
+// AI 能力配置（管理端配置化）：LLM 与听记开关，控制面 sys_config 为权威，
+// 保存后控制面推送知识服务热生效；推送失败只提示，配置本身已保存。
+// 密钥掩码回显、留空保持不变。
+const ai = ref({
+  llmBaseUrl: '',
+  llmModel: '',
+  apiKeySet: false,
+  apiKeyMasked: '',
+  asrEnabled: null as boolean | null,
+  asrSpeakerEnabled: null as boolean | null,
+})
+const aiApiKey = ref('')
+const aiBusy = ref(false)
+const aiPush = ref('')
+const aiPushOk = ref(true)
+
+const loadAiConfig = async () => {
+  try {
+    const vo = await core.adminAiConfigGet()
+    ai.value = {
+      llmBaseUrl: vo.llmBaseUrl,
+      llmModel: vo.llmModel,
+      apiKeySet: vo.apiKeySet,
+      apiKeyMasked: vo.apiKeyMasked,
+      asrEnabled: vo.asrEnabled,
+      asrSpeakerEnabled: vo.asrSpeakerEnabled,
+    }
+    aiApiKey.value = ''
+  } catch (e) {
+    fail(e)
+  }
+}
+
+const submitAiConfig = async () => {
+  if (aiBusy.value) return
+  aiBusy.value = true
+  try {
+    const vo = await core.adminAiConfigSave(
+      ai.value.llmBaseUrl.trim(),
+      ai.value.llmModel.trim(),
+      aiApiKey.value.trim(),
+      ai.value.asrEnabled,
+      ai.value.asrSpeakerEnabled,
+    )
+    aiPushOk.value = vo.pushed
+    aiPush.value = vo.pushed ? '已保存并推送知识服务，配置热生效' : `已保存（未推送：${vo.pushError}）`
+    notify(aiPushOk.value ? 'AI 配置已保存并热生效' : 'AI 配置已保存，暂未推送')
+    await loadAiConfig()
+  } catch (e) {
+    fail(e)
+  } finally {
+    aiBusy.value = false
+  }
+}
+
 const submitCreate = async () => {
   if (creating.value) return
   creating.value = true
@@ -351,7 +406,7 @@ const initial = (user: ManagedUser) => {
   return name ? Array.from(name)[0] : '?'
 }
 
-onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig(); void loadSpaces() })
+onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig(); void loadAiConfig(); void loadSpaces() })
 </script>
 
 <template>
@@ -539,6 +594,87 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig
               {{ serviceBusy ? '保存中…' : '保存' }}
             </button>
           </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-header">
+          <div>
+            <span class="section-label">AI 能力</span>
+            <h2>大模型与会议听记</h2>
+          </div>
+        </header>
+        <p class="setting-hint">
+          知识问答与会议听记共用的 AI 配置。保存后由控制面推送到知识服务热生效；
+          服务不可达时仅保存，恢复后重新保存即可下发。密钥保存在公司服务器，界面只显示尾四位。
+        </p>
+        <div class="setting-row">
+          <label class="setting-label" for="aiLlmBaseUrl">LLM 地址</label>
+          <input
+            id="aiLlmBaseUrl"
+            v-model="ai.llmBaseUrl"
+            class="setting-input"
+            type="text"
+            autocomplete="off"
+            placeholder="https://token.sensenova.cn/v1"
+          />
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="aiLlmModel">LLM 模型</label>
+          <input
+            id="aiLlmModel"
+            v-model="ai.llmModel"
+            class="setting-input"
+            type="text"
+            autocomplete="off"
+            placeholder="deepseek-v4-flash"
+          />
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="aiLlmApiKey">LLM 密钥</label>
+          <p class="setting-hint">{{ ai.apiKeySet ? `已设置（${ai.apiKeyMasked}）` : '未设置' }}，留空保持不变</p>
+          <input
+            id="aiLlmApiKey"
+            v-model="aiApiKey"
+            class="setting-input"
+            type="password"
+            autocomplete="new-password"
+            placeholder="留空保持不变"
+          />
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="aiAsrToggle">会议听记</label>
+          <p class="setting-hint">
+            允许同事录音生成转写与纪要（{{ ai.asrEnabled === null ? '未设置，沿用部署默认' : ai.asrEnabled ? '当前：开' : '当前：关' }}）
+          </p>
+          <button
+            id="aiAsrToggle"
+            :class="['admin-toggle', ai.asrEnabled ? 'on' : '']"
+            type="button" role="switch" :aria-checked="!!ai.asrEnabled"
+            :disabled="aiBusy" @click="ai.asrEnabled = !ai.asrEnabled"
+          >
+            <i />
+          </button>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label" for="aiSpkToggle">说话人分离</label>
+          <p class="setting-hint">
+            转写时区分不同发言人（{{ ai.asrSpeakerEnabled === null ? '未设置，沿用部署默认' : ai.asrSpeakerEnabled ? '当前：开' : '当前：关' }}）
+          </p>
+          <button
+            id="aiSpkToggle"
+            :class="['admin-toggle', ai.asrSpeakerEnabled ? 'on' : '']"
+            type="button" role="switch" :aria-checked="!!ai.asrSpeakerEnabled"
+            :disabled="aiBusy" @click="ai.asrSpeakerEnabled = !ai.asrSpeakerEnabled"
+          >
+            <i />
+          </button>
+        </div>
+        <div class="admin-service-row">
+          <p v-if="aiPush" :class="['setting-hint', { 'meeting-failed': !aiPushOk }]">{{ aiPush }}</p>
+          <button class="secondary-button" type="button" :disabled="aiBusy" @click="submitAiConfig">
+            {{ aiBusy ? '保存中…' : '保存' }}
+          </button>
         </div>
       </section>
     </template>

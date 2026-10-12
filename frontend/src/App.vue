@@ -7,6 +7,7 @@ import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
 import LoginView from './components/LoginView.vue'
+import MeetingsPanel from './components/MeetingsPanel.vue'
 import PeerList from './components/PeerList.vue'
 import PluginHost from './components/PluginHost.vue'
 import PluginMarket from './components/PluginMarket.vue'
@@ -19,7 +20,7 @@ import { taskKind, taskSection } from './utils/tasks'
 import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
 
 // 内置视图 + 动态插件视图（plugin:{id}）
-type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'admin' | 'plugins' | 'settings'
+type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'meetings' | 'admin' | 'plugins' | 'settings'
 type View = BuiltinView | `plugin:${string}`
 
 const app = useEasyShare()
@@ -194,6 +195,11 @@ const avatarText = computed(() => {
           <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" type="button" @click="view = 'knowledge'">
             <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
             知识
+          </button>
+          <!-- 会议听记：录音 → 转写 → 发言人 → AI 纪要 -->
+          <button :class="['nav-item', view === 'meetings' ? 'active' : '']" type="button" @click="view = 'meetings'">
+            <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"/></svg>
+            会议听记
           </button>
           <!-- 管理入口：仅管理员可见。页面在客户端内，账号与空间都在这里管 -->
           <button
@@ -390,6 +396,9 @@ const avatarText = computed(() => {
 
         <!-- ═══ 知识问答页 ═══ -->
         <KnowledgePanel v-else-if="view === 'knowledge'" />
+
+        <!-- ═══ 会议听记页（录音 → 转写 → 发言人 → 纪要）═══ -->
+        <MeetingsPanel v-else-if="view === 'meetings'" @goto-knowledge="view = 'knowledge'" />
 
         <!-- ═══ 插件中心（商城 + 已装管理）═══ -->
         <PluginMarket v-else-if="view === 'plugins'" />

@@ -1,5 +1,7 @@
 name: macOS Build
 
+# 只在推送 v* tag 时自动打包；日常验证走本地 build-mac.sh，
+# workflow_dispatch 保留为 Actions 页面的手动逃生通道（可选目标平台）。
 on:
   workflow_dispatch:
     inputs:
@@ -12,13 +14,8 @@ on:
           - darwin/amd64
         default: darwin/universal
   push:
-    branches:
-      - master
     tags:
       - "v*"
-  pull_request:
-    branches:
-      - master
 
 permissions:
   contents: write

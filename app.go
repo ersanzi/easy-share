@@ -464,6 +464,59 @@ func (a *App) SaveServiceConfig(knowledgeURL string) error {
 	return nil
 }
 
+// AdminAiConfigGet 管理页读取 AI 能力配置（超管；密钥掩码回显）。权限裁决在控制面。
+func (a *App) AdminAiConfigGet() (*account.AiConfig, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.Lock()
+	session := a.accountSession
+	a.accountMu.Unlock()
+	if session == nil {
+		return nil, fmt.Errorf("请先登录")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	vo, err := account.New(base).AiConfig(ctx, session.Token)
+	if err != nil {
+		a.reportError("get ai config", err)
+		return nil, err
+	}
+	return vo, nil
+}
+
+// AdminAiConfigSave 保存 AI 能力配置；控制面负责校验并推送知识服务热生效，
+// 推送结果在返回的 Pushed/PushError 里（配置已入控制面，不受推送失败影响）。
+// llmApiKey 传空串表示保持已有密钥不变。
+func (a *App) AdminAiConfigSave(llmBaseUrl, llmModel, llmApiKey string, asrEnabled, asrSpeakerEnabled *bool) (*account.AiConfig, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.Lock()
+	session := a.accountSession
+	a.accountMu.Unlock()
+	if session == nil {
+		return nil, fmt.Errorf("请先登录")
+	}
+	body := map[string]any{
+		"llmBaseUrl":        strings.TrimSpace(llmBaseUrl),
+		"llmModel":          strings.TrimSpace(llmModel),
+		"llmApiKey":         strings.TrimSpace(llmApiKey),
+		"asrEnabled":        asrEnabled,
+		"asrSpeakerEnabled": asrSpeakerEnabled,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	vo, err := account.New(base).SetAiConfig(ctx, session.Token, body)
+	if err != nil {
+		a.reportError("save ai config", err)
+		return nil, err
+	}
+	return vo, nil
+}
+
 // publishTrayUser 把当前登录态推给托盘悬浮窗（非阻塞，模式同 updateTrayStatus）。
 func (a *App) publishTrayUser() {	user := a.CurrentUser()
 	select {

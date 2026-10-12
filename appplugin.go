@@ -344,11 +344,15 @@ func pluginAssetMiddleware(a *App) assetserver.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
-			if strings.HasPrefix(path, "/plugins/") || strings.HasPrefix(path, "/clipboard-files/") {
+			switch {
+			case strings.HasPrefix(path, "/plugins/") || strings.HasPrefix(path, "/clipboard-files/"):
 				a.AssetHandler().ServeHTTP(w, r)
-				return
+			case strings.HasPrefix(path, "/kapi/meetings/"):
+				// 会议听记同源网关：音频大文件流式通道（见 appmeetings.go）
+				a.serveMeetingGateway(w, r)
+			default:
+				next.ServeHTTP(w, r)
 			}
-			next.ServeHTTP(w, r)
 		})
 	}
 }

@@ -2,7 +2,7 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-10-11（部署窗口准备：checklist + RustFS 1.0.1 + 欠账清理）
+> 每次迭代开始和结束时更新。最后更新：2026-10-12（会议听记全链路 + AI 能力管理端配置化，当日双切片；桌面端选型重评估 + Wails v3 迁移规划）
 
 ## 路线总览
 
@@ -133,6 +133,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-12 | 桌面端选型重评估 — Wails 保持 + Tauri 不切换（15.6k 行 Go 核心不可平移 vs 6.4k 行壳层，两条切换路径均小利润大损失）+ Wails v3 beta 评估（2026-08-02 官宣）定为后续必做，触发条件与 spike 四件套入 plans | 已完成（纯调研，无代码变更；详见 [`plans/2026-10-12-wails-v3-migration.md`](plans/2026-10-12-wails-v3-migration.md)） |
 | 2026-10-11 | 插件中心四连修 — 侧边栏插件条目错位（计数徽章 CSS 误伤）+ 待办周报弹窗 hidden 被作者样式覆盖（空弹窗常驻关不掉）+ 商城本地更新仍可重装（降级保护）+ 更新报错 null newPermissions（Go nil slice）；剪切板 2.1.0/待办 1.0.3 重新上架收敛版本 | 已完成（computer-use 真机复验全过；插件三方版本收敛；README 增工作台截图） |
 | 2026-10-11 | 知识服务 SSO — 中间件对本地未命中令牌回查控制面 /system/user/getInfo 验票（introspection+60s 缓存），有效即放行并 JIT 建档（role 按控制面判定/dept 跟随）；本地登录保留；deploy.sh/deploy.ps1/.env.example 默认写 CONTROL_PLANE_URL | 已完成（pytest 156 全绿 +6；真实进程冒烟：控制面令牌 200+JIT 正确、匿名 401；客户端免登归下一片） |
 | 2026-10-11 | OKF 化切片二：生产索引重建与原子替换 — 重建核心上移 app/kb/rebuild.py（脚本复用口径零变化）+ 任务库权威文档清单（latest_completed_docs）+ --apply 预览/执行双段式 + 失败整体中止/备份/原子替换 | 已完成（pytest 150 全绿 +3；切片一脚本四指标逐位一致；--apply 预览真机冒烟过；真实替换归部署机） |
@@ -224,6 +225,20 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**听记 MCP 只读面（2026-10-12 第七片，当日完成）**— 对齐钉钉「连接 AI 工具」生态位（逆向发现其本机 8440 MCP 后的落地）：Core 内置 MCP Streamable HTTP 端点 `/mcp`（官方 Go SDK v0.2.0），4 个只读工具 `list_meetings`/`get_meeting_summary`/`get_meeting_transcript`/`ask_meeting`（复用上片问答慢链路）；独立配对令牌（config `mcpToken` 旧配置回填落盘、设置页重新生成即吊销、恒时比较），数据可见性=桌面端登录账号；设置页「AI 工具连接」卡片地址/令牌一键复制。验证：go 全量测试绿（补 MCP 令牌迁移用例）+ JSON-RPC 全流程真机冒烟（坏令牌 401→握手→工具列表→真实数据→LLM 问答引用原话→isError 错误路径）。坑再录：wails build 不重编 core（第三次）；Go nil 切片序列化 null 被 pydantic 拒收（双向防御）。同一骨架可平移到知识问答/文件 MCP 化。详见 [`iterations/2026-10-12-听记MCP只读面.md`](iterations/2026-10-12-听记MCP只读面.md)。
+
+**会议听记·对标钉钉逆向 + 问答/导入/质感切片（2026-10-12 第六片，当日完成）**— 用户给 REA 逆向工具与钉钉听记截图要求「逆向钉钉抄好的地方」。逆向结论：钉钉 8.x 是原生壳+云端 web（memo.dingtalk.com，登录墙），本地无业务代码可拆；改为本地取证+活体探测+官方文档三层——**发现钉钉本机常驻 MCP 服务（127.0.0.1:8440/mcp，JSON-RPC，配对令牌鉴权）**，听记只读数据面六件套=列表/摘要/转写/关键词/待办/音频。借鉴落地五件：**听记 AI 问答**（详情页双栏侧栏，纪要+转写全文直进上下文+推荐提示词，全栈级联 `POST /meetings/{id}/ask`，Core API 实测真实 LLM 回答准确注明说话人）、**导入音频文件**（前端 decodeAudioData→16k WAV→复用上传通道，后端零改动）、**模板先行 chips**（select 换 7 场景 emoji 卡片）、**列表 AI 摘要预览**、**章节锚点导航**。坑：杀 easyshare 不杀 easyshare-core 时老 Core 继续占 19079 服务旧路由（新路由 404），桌面冒烟前必须双杀。听记 MCP 只读面对齐（对接外部 AI 客户端）立为下一片。详见 [`iterations/2026-10-12-听记对标钉钉逆向.md`](iterations/2026-10-12-听记对标钉钉逆向.md)。
+
+**会议听记·图文海报模板（2026-10-12 第五片，当日完成）**— 对标钉钉图文模板（用户拍板：无 VIP、内置即可）：详情页「图文海报」弹窗把 summary（纪要/要点/待办）渲染为 720px 可分享长图，5 套内置主题皮肤（经典/碳素/极光/蓝图/暖纸，纯 CSS 变量零图片资产）；html2canvas `scale:2` 截图导出 PNG（保存落盘 + 剪贴板复制双通道），依赖动态 import 自动拆 chunk 不增首载体积。要点：**截图走离屏全尺寸实例**（预览实例经 zoom 缩放不能当截图根）、海报 CSS 刻意约束在 html2canvas 支持子集（hex/rgba + linear-gradient，规避 oklch/box-shadow）。纯前端切片，Go/Python 零改动。验证：vue-tsc/wails build 全绿；真机 computer-use 全流程（三主题即点即切、保存两次落盘读图逐项验收、剪贴板 1440×1634 实测）。详见 [`iterations/2026-10-12-图文海报模板.md`](iterations/2026-10-12-图文海报模板.md)。
+
+**会议听记·思维导图与备忘录导出（2026-10-12 第四片，当日完成）**— 用户「逐字稿+结构化思维导图+备忘录+待办清单」需求收口（前三项已随听记切片交付）：LLM 总结同链路产出 markdown 层级大纲（存记录顶层 `mindmap` 字段，可单独重生成）+ 详情页自绘结构树渲染（根节点/分支/叶子）+「重新生成」；备忘录导出 Markdown（前端拼装）与 Word（python-docx 服务端生成，`/kapi` 文件通道透传，中文文件名 RFC5987）。渲染方案变更：markmap 集成后 SVG 画布空白（无异常深查不值），切自绘结构树（数据格式不变可平移）。 **质量升级（用户反馈对标钉钉后）**：LLM 切换用户提供的 mirasim 端点（deepseek-flash，经管理端配置通道热切换零代码）+ prompt 升级（四级导图/议题化分支/保留数据与负责人/待办加 due_hint 期限字段贯通全栈）+ 前端解析器支持四级缩进；实测导图 503 字/6 议题分支/带结论与负责人，信息密度达钉钉听记量级。 **二轮 harness 化**（用户点名参考 GitHub）：借鉴 [mindmap-generator](https://github.com/Dicklesworthstone/mindmap-generator) 多阶段思想，`app/meetings/mindmap_harness.py` 三阶段管线（议题切分→按时间切片逐议题深挖→确定性装配，失败回退单次生成）；实测 863 字/5 议题分支/四级/节点带负责人与引文；修复导图端点未解除 30s 写超时被断连。 **三轮：总结模板系统**（对标钉钉模板选择）：内置 7 场景模板（会议纪要/团队周会/每日站会/面试报告/访谈记录/培训笔记/头脑风暴会），上传卡与详情页均可选模板、按模板重生成总结；非默认模板输出通用 sections 结构（默认模板保持旧字段零回归，弱模型不守形状时自动转换兜底）。验证：pytest 156/go test/vue-tsc/wails 全绿；真机 E2E（旧记录 LLM 重生成→树渲染完整→Word 落盘 37KB 中文文件名正确）。详见 [`iterations/2026-10-12-思维导图与导出.md`](iterations/2026-10-12-思维导图与导出.md)。
+
+**会议听记·系统声音内录（Windows，2026-10-12 第三片，当日完成）**— 听记页加音源切换（麦克风/系统声音，macOS 隐藏）：线上会议场景录系统输出声音。路线：WebView2 `getDisplayMedia` 共享整个屏幕并勾选系统音频 → 复用现有 recorder 管道（后端零改动）；video 轨保留到停止、音轨 ended 自动收尾转写、未勾音频给友好提示。**E2E 全通**：外放测试音频→录 127.6s→转写 9 轮、3 说话人、内容逐句对应→总结准确（computer-use 真机全流程）。坑：窗口模式+系统音频实测无声（WebView2 上游行为，引导文案指向整屏规避）；调试勿信列表接口（segments 被裁剪，看详情）。详见 [`iterations/2026-10-12-系统声音内录.md`](iterations/2026-10-12-系统声音内录.md)。
+
+**AI 能力管理端配置化（听记配套，2026-10-12 用户拍板，当日完成）**— 管理页新增「AI 能力」卡片：LLM 地址/模型/密钥（掩码回显、留空保持）+ 听记/说话人分离开关，控制面 sys_config 为权威（`drive.service.ai.config`），保存后凭共享服务密钥**同步推送到知识服务热生效**（重建 LLM 消费组件与 ASR 组件；推送失败仅提示、重存即重推）。知识服务以 runtime_config.json 覆盖层承载（优先于 .env、重启仍在）；deploy.sh 生成两侧同值密钥。坑与修复：JDK HttpClient h2c 升级头致 uvicorn 422（推送客户端钉死 HTTP/1.1）、控制面 camelCase 与知识服务 snake_case 字段断裂（pydantic alias 双收）。验证：pytest 156 / go test / vue-tsc / mvn 全绿；本机真实三进程 E2E（保存→推送 pushed:true→热生效→翻转双向→掩码回显→UI 实拍）。边界：embedding/rerank 不配置化（dim 变更损索引）、密钥明文入 sys_config（同机部署边界等价 .env）、无启动回拉。详见 [`iterations/2026-10-12-AI能力配置化.md`](iterations/2026-10-12-AI能力配置化.md)。
+
+**会议听记：录音 → 转写 → 说话人 → AI 总结**（2026-10-12 用户直配轮，**当日完成**）— 对标钉钉听记，事后转写形态全链路：桌面端前端录音（getUserMedia + AudioWorklet 16k WAV；Wails v2.14 Windows 侧源码证实默认放行 WebView2 权限，macOS 补 WKUIDelegate category + Info.plist）→ 同源 `/kapi/meetings/*`（桌面 assetserver Middleware 接管，音频大文件不经 Wails 绑定 JSON 通道）→ Core 知识网关代理 → 知识服务 FunASR 转写 + cam++ 说话人分离（可选重依赖 `requirements-asr.txt`，`ASR_ENABLED` 默认关）+ 既有 LLM 链路出纪要/要点/待办，另支持发言人改名、音频回放、**纪要归档入知识库被问答引用**。验证：pytest 156 / go test / vue-tsc / wails build 全绿；Spike CPU RTF≈0.10（1h 会议约 6min）；真实进程 E2E（API 层全接口 + computer-use UI 层录音→上传→详情渲染）全通。风险与边界：说话人分离质量待真实会议音频验收（对抗夹具下脆弱，降级路径与改名兜底已建）；实时上屏、系统声音内录、声纹注册不做；macOS 真机录音验证延后（编译 CI 把关）。详见 [`iterations/2026-10-12-会议听记.md`](iterations/2026-10-12-会议听记.md)。
+
 **知识服务 SSO（2026-10-11 用户直配轮，当日完成）** — 消灭「控制面账号 vs 知识服务账号」双账号：`.env` 配 `CONTROL_PLANE_URL` 后，auth 中间件对本地未命中的令牌回查控制面 `/system/user/getInfo` 验票（RuoYi 令牌是不透明串只能 introspection，头与解析同 Go 客户端一套），有效即放行并 JIT 建本地档案——role 按控制面 superadmin/*:*:* 判定、dept 取 deptId 且跟随同步、本地已有 role 不被覆盖；本地口令登录完全保留（WPS/浏览器用户与 admin 备用）。introspection 结果缓存 60s。deploy.sh/deploy.ps1 生成 .env 默认写同主机 `:8090`。验证：pytest 156 全绿（+6）；真实进程冒烟过。边界：桌面端知识页免登（Core 透传控制面令牌）归下一片；控制面登出后缓存最多 60s。详见 [`iterations/2026-10-11-知识服务sso.md`](iterations/2026-10-11-知识服务sso.md)。
 
 **OKF 化切片二：生产索引重建与原子替换**（2026-10-11 用户直配轮，当日完成）— 补齐对标文档架构原则 1 的执行闭环：重建核心上移 `app/kb/rebuild.py`（切片一脚本改为复用，四指标逐位一致），新增任务库权威文档清单（`latest_completed_docs`，能恢复「索引丢块/丢文档」灾难场景）、`--apply` 预览/执行双段式（预览零成本零写入）、失败整体中止 + 时间戳备份 + `os.replace` 原子替换；embedder 与线上查询同一工厂，重建与查询口径必然一致。pytest 150 全绿（+3 破坏性写路径例外用例）。边界：Milvus 后端显式拒绝；`--apply --yes` 真实替换归部署机。详见 [`iterations/2026-10-11-okf-apply-rebuild.md`](iterations/2026-10-11-okf-apply-rebuild.md)。
@@ -262,6 +277,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 8. **网盘增强**（P0 已收官，参考 [`cloudreve-benchmark.md`](cloudreve-benchmark.md)）：目录导航 + es_file 目录层 fileId + Upload Session 断点续传三片合龙（均 2026-09-06）；P1 候选=回收站/版本（es_file 加列）、缩略图缓存、分享记录管理，按优先级排期；设备配对 / 传输加密继续暂缓
 9. **Core 知识网关泛化 + SSO 免登**（2026-10-11 拍板，部署观察期后）：`/kapi/*` 令牌注入反代取代逐端点代理（消 Wails 五处级联）+ Core 透传控制面令牌使知识页免密——技术栈盘点结论「当前唯一结构性优化点」，与 SSO 片 2 同片；依据 [`iterations/2026-10-11-知识服务sso.md`](iterations/2026-10-11-知识服务sso.md) 边界
 10. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
+11. **桌面端 Wails v2→v3 迁移**（待触发，不主动执行；2026-10-12 用户拍板「后续肯定要做」）：触发条件=v3 RC/GA 或公司部署里程碑后空窗期（满足其一；Wails v2 停止维护则提前）；动手前先做四件 spike（壳层最小移植 / macOS CI 托盘验证 / server build 对比 cmd/core / 绑定重生成 vue-tsc 全绿）；完整评估（特性映射/成本/Tauri 不切换结论）见 [`plans/2026-10-12-wails-v3-migration.md`](plans/2026-10-12-wails-v3-migration.md)
 
 ## 已知阻塞
 

@@ -2,6 +2,8 @@
   AcceptTransfer,
   AcceptTransferAs,
   AdminCreateUser,
+  AdminAiConfigGet,
+  AdminAiConfigSave,
   AdminCapacity,
   AdminDeleteUser,
   AdminGrantShared,
@@ -40,6 +42,16 @@
   KnowledgeStatus,
   Login,
   Logout,
+  MeetingArchiveToKnowledge,
+  MeetingAsk,
+  MeetingDetail,
+  MeetingMindmapRegenerate,
+  MeetingSummaryRegenerate,
+  MeetingRemove,
+  MeetingsList,
+  MeetingSpeakerRename,
+  McpConnectionGet,
+  McpConnectionRegenerate,
   MySpaces,
   OpenAdminConsole,
   OpenFile,
@@ -84,7 +96,13 @@ import type {
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
   ManagedUserPage,
+  AiCapabilityConfig,
   MarketItem,
+  MeetingArchiveResult,
+  MeetingAskResult,
+  MeetingChatTurn,
+  McpConnection,
+  MeetingRecord,
   PluginInfo,
   PluginInvokeResult,
   PluginPreview,
@@ -136,6 +154,34 @@ export const core = {
   knowledgeLogout: KnowledgeLogout,
   knowledgeHealth: () => KnowledgeHealth() as Promise<KnowledgeHealthData>,
   knowledgeAsk: (question: string) => KnowledgeAsk(question) as Promise<KnowledgeAnswer>,
+  // 会议听记：小请求走绑定；上传/音频回放走同源 /kapi 网关（大文件不进绑定 JSON 通道）
+  meetingsList: (limit = 50) => MeetingsList(limit) as Promise<MeetingRecord[]>,
+  meetingDetail: (id: string) => MeetingDetail(id) as Promise<MeetingRecord>,
+  meetingRemove: MeetingRemove,
+  meetingSpeakerRename: (id: string, speaker: string, name: string) =>
+    MeetingSpeakerRename(id, speaker, name) as Promise<MeetingRecord>,
+  meetingArchive: (id: string) => MeetingArchiveToKnowledge(id) as Promise<MeetingArchiveResult>,
+  meetingMindmapRegenerate: (id: string) => MeetingMindmapRegenerate(id) as Promise<MeetingRecord>,
+  meetingSummaryRegenerate: (id: string, templateId = '') =>
+    MeetingSummaryRegenerate(id, templateId) as Promise<MeetingRecord>,
+  meetingAsk: (id: string, question: string, history: MeetingChatTurn[]) =>
+    MeetingAsk(id, question, history) as Promise<MeetingAskResult>,
+  mcpInfo: () => McpConnectionGet() as Promise<McpConnection>,
+  mcpRegenerate: () => McpConnectionRegenerate() as Promise<McpConnection>,
+  meetingUpload: async (blob: Blob, title: string, templateId = ''): Promise<MeetingRecord> => {
+    const form = new FormData()
+    form.append('audio', blob, 'meeting.wav')
+    form.append('title', title)
+    if (templateId) form.append('template_id', templateId)
+    const response = await fetch('/kapi/meetings/transcribe', { method: 'POST', body: form })
+    if (!response.ok) throw new Error((await response.text()) || `上传失败（${response.status}）`)
+    return response.json()
+  },
+  meetingAudioObjectUrl: async (id: string): Promise<string> => {
+    const response = await fetch(`/kapi/meetings/${encodeURIComponent(id)}/audio`)
+    if (!response.ok) throw new Error(`音频加载失败（${response.status}）`)
+    return URL.createObjectURL(await response.blob())
+  },
   // 租户服务发现：登录后下发服务地址（知识页免手填），管理员可登记
   serviceEndpoints: () => ServiceEndpoints() as Promise<ServiceEndpointsData>,
   saveServiceConfig: (knowledgeUrl: string) => SaveServiceConfig(knowledgeUrl) as Promise<void>,
@@ -157,6 +203,10 @@ export const core = {
   mySpaces: () => MySpaces() as Promise<Space[]>,
   adminListSpaces: () => AdminListSpaces() as Promise<Space[]>,
   adminCapacity: () => AdminCapacity() as Promise<Capacity>,
+  // AI 能力配置（控制面权威；保存后控制面推送知识服务热生效）
+  adminAiConfigGet: () => AdminAiConfigGet() as Promise<AiCapabilityConfig>,
+  adminAiConfigSave: (llmBaseUrl: string, llmModel: string, llmApiKey: string, asrEnabled: boolean | null, asrSpeakerEnabled: boolean | null) =>
+    AdminAiConfigSave(llmBaseUrl, llmModel, llmApiKey, asrEnabled, asrSpeakerEnabled) as Promise<AiCapabilityConfig>,
   adminSharedMembers: () => AdminSharedMembers() as Promise<AdminSharedMember[]>,
   adminKnowledgeStats: (days: number) => AdminKnowledgeStats(days) as Promise<KnowledgeStats>,
   adminListDepts: () => AdminListDepts() as Promise<AdminDept[]>,

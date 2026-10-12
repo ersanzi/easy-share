@@ -69,6 +69,7 @@ type Config struct {
 	APIHost        string      `json:"apiHost"`
 	APIPort        int         `json:"apiPort"`
 	APIToken       string      `json:"apiToken"`
+	MCPToken       string      `json:"mcpToken"`
 	DiscoveryPort  int         `json:"discoveryPort"`
 	TransferPort   int         `json:"transferPort"`
 	ReceiveDir     string      `json:"receiveDir"`
@@ -107,6 +108,17 @@ func loadUnlocked(path string) (Config, error) {
 		}
 		if strings.TrimSpace(value.AdminConsoleURL) == "" {
 			value.AdminConsoleURL = defaultAdminConsoleURL
+		}
+		// 旧配置迁移：听记 MCP 配对令牌缺省生成一次并落盘（重启后保持，吊销=重生成）。
+		if strings.TrimSpace(value.MCPToken) == "" {
+			token, err := randomHex(32)
+			if err != nil {
+				return Config{}, fmt.Errorf("generate mcp token: %w", err)
+			}
+			value.MCPToken = token
+			if err := saveUnlocked(path, value); err != nil {
+				return Config{}, fmt.Errorf("persist mcp token: %w", err)
+			}
 		}
 		return value, nil
 	}
@@ -218,6 +230,10 @@ func defaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("generate API token: %w", err)
 	}
+	mcpToken, err := randomHex(32)
+	if err != nil {
+		return Config{}, fmt.Errorf("generate MCP token: %w", err)
+	}
 	webDAVPassword, err := randomHex(24)
 	if err != nil {
 		return Config{}, fmt.Errorf("generate WebDAV password: %w", err)
@@ -233,6 +249,7 @@ func defaultConfig() (Config, error) {
 		APIHost:        defaultAPIHost,
 		APIPort:        defaultAPIPort,
 		APIToken:       apiToken,
+		MCPToken:       mcpToken,
 		DiscoveryPort:  defaultDiscoveryPort,
 		TransferPort:   defaultTransferPort,
 		ReceiveDir:     filepath.Join(home, "Downloads", "EasyShare"),

@@ -158,11 +158,10 @@ build/bin/easyshare.app
 build/bin/EasyShare.dmg
 ```
 
-`.github/workflows/build-mac.yml` 三种使用方式：
+`.github/workflows/build-mac.yml` 两种使用方式：
 
-1. PR 到 `master` 或推送 `master`：自动构建，完成后在该次 Actions 运行的 **Artifacts** 下载 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；
-2. `workflow_dispatch`：Actions 页面手动运行，可选 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`；
-3. 推送 `v*` tag：自动构建并创建 GitHub Release，发布同一组安装包与校验文件。
+1. 推送 `v*` tag：自动构建并创建 GitHub Release，发布 `EasyShare.dmg`、`EasyShare.app.zip` 和 `SHA256SUMS.txt`；推送 `master`/PR 不再触发构建；
+2. `workflow_dispatch`：Actions 页面手动运行，可选 `darwin/universal`、`darwin/arm64` 或 `darwin/amd64`。
 
 macOS 详细构建与排障见 [`macos-port.md`](macos-port.md)。
 
@@ -179,9 +178,9 @@ git push github dev
 
 ### CI 触发规则
 
-- `dev` 推送：仅触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）；Windows 桌面构建刻意不跑 `dev` 以省 runner 时长，日常验证靠本地 `scripts/build.ps1`。
-- Windows CI（`build-windows.yml`）：master / PR / tag / 手动触发。
-- macOS CI（`build-mac.yml`）：同上三种，另见上节。
+- `dev` 推送：仅触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）；桌面构建只在打 `v*` tag 时跑，日常验证靠本地 `scripts/build.ps1`。
+- Windows / macOS CI（`build-windows.yml` / `build-mac.yml`）：仅 `v*` tag 推送自动触发，另有手动触发逃生通道；`master` 推送与 PR 不再触发。
+- Rolling Release（`rolling-release.yml`）：跟随上述 tag 构建跑，双平台对同一 tag 成功后删除重建 `latest` Release；手动触发的构建不重建 latest。注意 tag 触发的 run `head_branch` 是 tag 名，本工作流不能再用 `branches` 过滤，改用 job 级 `if` 判定 `v*` 前缀。
 
 ### 服务端联调（控制面栈）
 

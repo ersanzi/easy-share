@@ -1,15 +1,12 @@
 name: Windows Build
 
+# 只在推送 v* tag 时自动打包；日常验证走本地 scripts/build.ps1，
+# workflow_dispatch 保留为 Actions 页面的手动逃生通道。
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
     tags:
       - "v*"
-  pull_request:
-    branches:
-      - master
 
 permissions:
   contents: write

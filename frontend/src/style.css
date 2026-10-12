@@ -1102,3 +1102,174 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .overview-card.warn { border-color: rgba(255,59,48,.4); }
 .overview-card.warn .overview-sub { color: #ff3b30; }
 @media (prefers-color-scheme: dark) { .overview-card { background: #2a2a2d; } }
+
+/* ═══════════ 会议听记（录音 → 转写 → 发言人 → 纪要）═══════════ */
+
+.meeting-hint { font-size: 12px; color: var(--muted); }
+.meeting-record-card { display: flex; flex-direction: column; gap: 10px; }
+.meeting-record-idle { display: flex; align-items: center; gap: 10px; }
+.meeting-title-input { flex: 1; }
+.meeting-record-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.meeting-record-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.meeting-record-active { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.meeting-recording-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b30; animation: meeting-blink 1.2s ease-in-out infinite; }
+@keyframes meeting-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.meeting-timer { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 16px; }
+.meeting-level { display: inline-flex; align-items: flex-end; gap: 3px; height: 22px; }
+.meeting-level-bar { width: 4px; height: 6px; border-radius: 2px; background: var(--muted); opacity: .35; transition: all .12s ease; }
+.meeting-level-bar.on { height: 22px; background: var(--accent, #007aff); opacity: 1; }
+
+.meeting-detail-card { display: flex; flex-direction: column; gap: 12px; }
+.meeting-detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.meeting-detail-head h2 { margin: 0 0 4px; font-size: 16px; }
+.meeting-detail-meta { margin: 0; font-size: 12px; color: var(--muted); }
+.meeting-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.meeting-danger { color: #ff3b30; }
+.meeting-pending { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0; }
+.meeting-failed { color: #ff3b30; }
+.meeting-audio { width: 100%; height: 36px; }
+.meeting-summary h3, .meeting-transcript-title { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--muted); margin: 6px 0 4px; font-weight: 700; }
+.meeting-summary p { margin: 0; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.meeting-summary ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
+.meeting-todos { list-style: none; padding-left: 4px !important; }
+.meeting-todos li { display: flex; align-items: center; gap: 6px; }
+.meeting-todos li::before { content: '☐'; color: var(--muted); }
+.meeting-todo-owner { font-size: 11px; color: var(--muted); background: rgba(127,127,127,.14); border-radius: 8px; padding: 1px 7px; }
+.meeting-transcript { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
+.meeting-segment { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.55; }
+.meeting-speaker-chip { flex-shrink: 0; border: none; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--accent, #007aff); background: rgba(0,122,255,.1); border-radius: 9px; padding: 2px 8px; }
+.meeting-speaker-chip:hover { background: rgba(0,122,255,.18); }
+.meeting-rename-input { width: 110px; padding: 2px 8px; font-size: 12px; }
+.meeting-segment-time { flex-shrink: 0; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meeting-list-card { display: flex; flex-direction: column; gap: 6px; }
+.meeting-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+.meeting-item:hover { background: rgba(127,127,127,.08); }
+.meeting-item-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.meeting-item-main strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meeting-item-meta { font-size: 11px; color: var(--muted); }
+.meeting-status { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: 11px; font-weight: 700; border-radius: 9px; padding: 2px 9px; }
+.meeting-status.processing { color: #b06000; background: rgba(255,160,0,.14); }
+.meeting-status.completed { color: #1d8a43; background: rgba(52,199,89,.14); }
+.meeting-status.failed { color: #ff3b30; background: rgba(255,59,48,.12); }
+@media (prefers-color-scheme: dark) {
+  .meeting-status.processing { color: #ffb340; }
+  .meeting-status.completed { color: #4cd964; }
+  .meeting-todos li::before { color: var(--muted); }
+}
+
+/* 会议听记·音源切换 */
+.meeting-source { display: inline-flex; gap: 0; border: 1px solid rgba(127,127,127,.3); border-radius: 10px; overflow: hidden; flex-shrink: 0; }
+.meeting-source-chip { border: none; background: transparent; padding: 9px 14px; font-size: 13px; cursor: pointer; color: var(--muted); }
+.meeting-source-chip + .meeting-source-chip { border-left: 1px solid rgba(127,127,127,.3); }
+.meeting-source-chip.on { background: var(--accent, #007aff); color: #fff; font-weight: 700; }
+.meeting-source-chip:disabled { opacity: .5; cursor: default; }
+.meeting-source-hint { margin: 2px 2px 0; }
+
+/* 会议听记·思维导图（markmap） */
+.meeting-mindmap { display: flex; flex-direction: column; gap: 6px; }
+.meeting-mindmap-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.meeting-mindmap-head .meeting-transcript-title { margin: 0; }
+.meeting-map-tree { border: 1px solid rgba(127,127,127,.25); border-radius: 10px; background: rgba(127,127,127,.04); padding: 14px 16px; }
+.meeting-map-root { display: inline-block; font-weight: 700; font-size: 13px; color: #fff; background: var(--accent, #007aff); border-radius: 8px; padding: 4px 12px; margin-bottom: 10px; }
+.meeting-map-branches { display: flex; flex-direction: column; gap: 10px; padding-left: 10px; border-left: 2px solid rgba(127,127,127,.25); }
+.meeting-map-branch { padding-left: 10px; }
+.meeting-map-branch-title { font-weight: 700; font-size: 12px; color: var(--accent, #007aff); margin-bottom: 3px; }
+.meeting-map-leaves, .meeting-map-subleaves { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.7; color: var(--text, #333); list-style: disc; }
+.meeting-map-subleaves { margin-top: 2px; color: var(--muted); list-style: circle; }
+
+/* 听记·总结模板选择 */
+.meeting-regen-select { width: 130px; padding: 4px 8px; font-size: 12px; }
+
+/* 听记·模板先行（对标钉钉选择模板发起听记：场景 chip 带图标与描述 tooltip） */
+.meeting-templates { display: flex; gap: 6px; flex-wrap: wrap; }
+.meeting-template-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid rgba(127,127,127,.28); background: transparent; border-radius: 10px; padding: 6px 11px; font-size: 12.5px; cursor: pointer; color: var(--text, #333); }
+.meeting-template-chip.on { border-color: var(--blue, #007aff); background: rgba(0,122,255,.1); color: var(--blue, #007aff); font-weight: 700; }
+.meeting-template-emoji { font-size: 14px; }
+.meeting-record-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* 听记·导入已有音频文件 */
+.meeting-item-preview { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 听记·列表 AI 摘要预览（对标钉钉听记列表的摘要列） */
+.meeting-item-main { gap: 4px; }
+
+/* 听记·章节导航（对标钉钉结构化章节纪要：锚点 chip 滚动定位） */
+.meeting-section-nav { display: flex; gap: 6px; flex-wrap: wrap; }
+.meeting-section-chip { border: 1px solid rgba(127,127,127,.28); background: transparent; border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; color: var(--muted); }
+.meeting-section-chip:hover { border-color: var(--blue, #007aff); color: var(--blue, #007aff); }
+
+/* 听记·详情双栏：主栏 + AI 问答侧栏（对标钉钉听记问答面板） */
+.meeting-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
+.meeting-detail-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (max-width: 1100px) { .meeting-detail-body { grid-template-columns: 1fr; } }
+.meeting-qa { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--soft-bg); position: sticky; top: 0; max-height: 70vh; }
+.meeting-qa-head h3 { margin: 0 0 2px; font-size: 13px; }
+.meeting-qa-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 120px; max-height: 42vh; padding-right: 2px; }
+.meeting-qa-turn { display: flex; }
+.meeting-qa-turn.user { justify-content: flex-end; }
+.meeting-qa-bubble { max-width: 88%; white-space: pre-wrap; font-size: 12.5px; line-height: 1.65; border-radius: 12px; padding: 7px 10px; background: rgba(255,255,255,.92); border: 1px solid var(--border); }
+.meeting-qa-turn.user .meeting-qa-bubble { background: var(--blue, #007aff); border-color: var(--blue, #007aff); color: #fff; border-bottom-right-radius: 4px; }
+.meeting-qa-turn.assistant .meeting-qa-bubble { border-bottom-left-radius: 4px; }
+.meeting-qa-busy { color: var(--muted); }
+.meeting-qa-suggest { display: flex; flex-direction: column; gap: 5px; }
+.meeting-qa-chip { border: 1px dashed rgba(0,122,255,.45); background: transparent; border-radius: 999px; padding: 4px 10px; font-size: 11.5px; color: var(--blue, #007aff); cursor: pointer; text-align: left; }
+.meeting-qa-chip:disabled { opacity: .5; cursor: default; }
+.meeting-qa-input { display: flex; gap: 6px; }
+.meeting-qa-input .setting-input { flex: 1; }
+@media (prefers-color-scheme: dark) { .meeting-qa-bubble { background: rgba(60,60,64,.92); } }
+
+/* 设置页·AI 工具连接（听记 MCP） */
+.mcp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mcp-row .setting-label { flex-shrink: 0; }
+.mcp-value { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--soft-bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; }
+.mcp-regen { align-self: flex-start; }
+.mcp-regen.meeting-danger { color: #ff3b30; }
+
+/* 听记·图文海报（内置主题皮肤；截图走 html2canvas，仅用其支持的特性：
+   hex/rgba 颜色 + linear-gradient，不用 oklch/box-shadow，离屏实例全尺寸导出） */
+.meeting-poster { width: 720px; display: flex; flex-direction: column; background: var(--p-bg, #f4f6fa); color: var(--p-text, #1f2329); font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+.meeting-poster-head { padding: 40px 44px 28px; background: var(--p-head-bg, linear-gradient(135deg, #2f6bff, #5a8dff)); color: var(--p-head-text, #ffffff); }
+.meeting-poster-brand { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; font-size: 13px; font-weight: 700; letter-spacing: 2px; opacity: .92; }
+.meeting-poster-brand-dot { width: 10px; height: 10px; border-radius: 3px; background: currentColor; }
+.meeting-poster-title { margin: 0 0 10px; font-size: 26px; line-height: 1.35; font-weight: 700; }
+.meeting-poster-meta { margin: 0 0 4px; font-size: 13px; opacity: .85; }
+.meeting-poster-body { padding: 26px 44px 30px; display: flex; flex-direction: column; gap: 14px; }
+.meeting-poster-empty { margin: 0; font-size: 13px; color: var(--p-muted, #7c828e); }
+.meeting-poster-card { background: var(--p-card, #ffffff); border: 1px solid var(--p-border, rgba(47,107,255,.14)); border-left: 4px solid var(--p-accent, #2f6bff); border-radius: 12px; padding: 16px 20px 14px; }
+.meeting-poster-card-title { margin: 0 0 8px; font-size: 15px; font-weight: 700; color: var(--p-accent, #2f6bff); }
+.meeting-poster-text { margin: 0 0 6px; font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; }
+.meeting-poster-text:last-child { margin-bottom: 0; }
+.meeting-poster-list { margin: 0; padding-left: 18px; font-size: 13.5px; line-height: 1.8; }
+.meeting-poster-todos { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.meeting-poster-todos li { display: flex; align-items: center; gap: 8px; }
+.meeting-poster-check { flex-shrink: 0; width: 13px; height: 13px; border: 2px solid var(--p-accent, #2f6bff); border-radius: 4px; }
+.meeting-poster-todo-task { font-size: 13.5px; line-height: 1.6; }
+.meeting-poster-tag { flex-shrink: 0; font-size: 11px; color: var(--p-accent, #2f6bff); background: var(--p-tag-bg, rgba(47,107,255,.1)); border-radius: 9px; padding: 2px 8px; }
+.meeting-poster-foot { padding: 0 44px 26px; text-align: center; font-size: 11px; letter-spacing: 2px; color: var(--p-muted, #7c828e); }
+
+/* 海报主题皮肤：经典（蓝白商务）/ 碳素（深灰金字）/ 极光（紫青渐变）/ 蓝图（工程图纸）/ 暖纸（奶油笔记） */
+.meeting-poster--classic { --p-bg: #f4f6fa; --p-card: #ffffff; --p-text: #1f2329; --p-muted: #7c828e; --p-accent: #2f6bff; --p-head-bg: linear-gradient(135deg, #2f6bff, #5a8dff); --p-head-text: #ffffff; --p-border: rgba(47,107,255,.14); --p-tag-bg: rgba(47,107,255,.1); }
+.meeting-poster--carbon { --p-bg: #23262c; --p-card: #2d3138; --p-text: #e8e9eb; --p-muted: #9aa0aa; --p-accent: #e3ba7c; --p-head-bg: linear-gradient(135deg, #191c21, #33373f); --p-head-text: #f5f5f2; --p-border: rgba(255,255,255,.08); --p-tag-bg: rgba(227,186,124,.16); }
+.meeting-poster--aurora { --p-bg: #f1f3ff; --p-card: #ffffff; --p-text: #241b4d; --p-muted: #7d76a8; --p-accent: #6a3df5; --p-head-bg: linear-gradient(130deg, #5b2be0 0%, #3a6cf5 55%, #00b4d8 100%); --p-head-text: #ffffff; --p-border: rgba(106,61,245,.16); --p-tag-bg: rgba(106,61,245,.1); }
+.meeting-poster--blueprint { --p-bg: #14417e; --p-card: rgba(255,255,255,.07); --p-text: #eaf2ff; --p-muted: #a8c4ea; --p-accent: #9cc9ff; --p-head-bg: #0f3468; --p-head-text: #ffffff; --p-border: rgba(156,201,255,.35); --p-tag-bg: rgba(156,201,255,.16); }
+.meeting-poster--note { --p-bg: #faf1de; --p-card: #fffdf6; --p-text: #4a3a24; --p-muted: #9a8a6c; --p-accent: #d97a29; --p-head-bg: linear-gradient(135deg, #f3d9a4, #eec27a); --p-head-text: #5a3d10; --p-border: rgba(217,122,41,.22); --p-tag-bg: rgba(217,122,41,.12); }
+
+/* 听记·图文海报弹窗（主题选择 + zoom 缩放预览；样式沿用 .card 配方） */
+.meeting-poster-overlay { position: fixed; inset: 0; z-index: 85; display: grid; place-items: center; padding: 28px; background: rgba(20,20,24,.32); backdrop-filter: blur(16px) saturate(1.2); animation: drop-fade .18s ease-out; }
+.meeting-poster-modal { display: flex; flex-direction: column; gap: 12px; width: 640px; max-width: calc(100vw - 56px); max-height: calc(100vh - 56px); background: rgba(255,255,255,.96); border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; box-shadow: 0 24px 60px rgba(0,0,0,.22); }
+.meeting-poster-modal-head { display: flex; align-items: center; justify-content: space-between; }
+.meeting-poster-modal-head h3 { margin: 0; font-size: 15px; }
+.meeting-poster-themes { display: flex; gap: 8px; flex-wrap: wrap; }
+.meeting-poster-theme { display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 64px; border: 1px solid rgba(127,127,127,.28); background: transparent; border-radius: 12px; padding: 8px 6px 6px; cursor: pointer; font-size: 11px; color: var(--text, #333); }
+.meeting-poster-theme.on { border-color: var(--blue, #007aff); box-shadow: 0 0 0 2px rgba(0,122,255,.16); }
+.meeting-poster-theme-chip { width: 44px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; }
+.meeting-poster-theme-chip--classic { background: linear-gradient(135deg, #2f6bff, #5a8dff); }
+.meeting-poster-theme-chip--carbon { background: linear-gradient(135deg, #191c21, #3a3f47); }
+.meeting-poster-theme-chip--aurora { background: linear-gradient(130deg, #5b2be0, #3a6cf5, #00b4d8); }
+.meeting-poster-theme-chip--blueprint { background: #14417e; border: 1px dashed rgba(156,201,255,.6); }
+.meeting-poster-theme-chip--note { background: linear-gradient(135deg, #f3d9a4, #eec27a); color: #5a3d10; }
+.meeting-poster-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: var(--soft-bg); max-height: 46vh; padding: 14px; }
+.meeting-poster-preview { zoom: .78; }
+.meeting-poster-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.meeting-poster-offscreen { position: fixed; left: -2400px; top: 0; z-index: -1; pointer-events: none; }
+@media (prefers-color-scheme: dark) { .meeting-poster-modal { background: #2a2a2d; } }

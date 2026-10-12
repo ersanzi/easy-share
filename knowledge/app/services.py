@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.ai_config import AiConfigStore, apply_overlay
 from app.config import Settings, settings
 from app.auth.sso import ControlPlaneSSO
 from app.auth.store import UserStore
@@ -15,6 +16,10 @@ from app.kb.embedder import Embedder, build_embedder
 from app.kb.query_log import QueryLog
 from app.kb.reranker import Reranker, NoopReranker, build_reranker
 from app.kb.store import VectorStore
+from app.meetings.engine import MeetingTranscriber
+from app.meetings.service import MeetingService
+from app.meetings.store import MeetingStore
+from app.meetings.summarizer import MeetingSummarizer
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, build_paddle_provider
 from app.parsing.mineru import build_mineru_provider
@@ -52,6 +57,7 @@ class AppServices:
     users: UserStore | None = None
     watcher: DirectoryWatcher | None = None
     sso: ControlPlaneSSO | None = None
+    meetings: MeetingService | None = None
 
     def start(self) -> None:
         self.job_runner.start()
@@ -61,8 +67,66 @@ class AppServices:
     def close(self) -> None:
         if self.watcher is not None:
             self.watcher.stop()
+        if self.meetings is not None:
+            self.meetings.shutdown()
         self.job_runner.shutdown()
         self.job_store.close()
+
+    def reload_ai_components(self, overlay: dict) -> tuple[list[str], list[str]]:
+        """管理端下发 AI 配置后的热重建：LLM 消费组件换新实例，ASR 开关热构建/拆除。
+
+        进行中的请求持有旧组件引用，自然跑完不受影响。返回 (已热生效项, 警告)。
+        """
+        applied: list[str] = []
+        warnings: list[str] = []
+        new_config = apply_overlay(self.config, overlay)
+
+        llm_changed = (
+            new_config.llm_base_url,
+            new_config.llm_model,
+            new_config.llm_api_key,
+        ) != (
+            self.config.llm_base_url,
+            self.config.llm_model,
+            self.config.llm_api_key,
+        )
+        if llm_changed:
+            self.generator = build_generator(new_config)
+            self.multi_hop = build_multi_hop_retriever(
+                new_config, self.retriever, self.bm25, query_log=self.query_log
+            )
+            if self.pipeline is not None:
+                self.pipeline.context_builder = build_doc_context_builder(new_config)
+            applied.append("llm")
+
+        asr_changed = (
+            new_config.asr_enabled,
+            new_config.asr_speaker_enabled,
+        ) != (
+            self.config.asr_enabled,
+            self.config.asr_speaker_enabled,
+        )
+        if asr_changed:
+            if self.meetings is not None:
+                self.meetings.shutdown()
+                self.meetings = None
+            if new_config.asr_enabled:
+                self.meetings = MeetingService(
+                    store=MeetingStore(new_config.asr_data_path),
+                    transcriber=MeetingTranscriber(speaker_enabled=new_config.asr_speaker_enabled),
+                    summarizer=MeetingSummarizer(
+                        new_config.llm_base_url,
+                        new_config.llm_api_key,
+                        new_config.llm_model,
+                        trust_env=new_config.llm_trust_env,
+                    ),
+                )
+            applied.append("asr")
+
+        if not llm_changed and not asr_changed:
+            warnings.append("配置与当前生效值一致，无需重载")
+        self.config = new_config
+        return applied, warnings
 
 
 def build_vector_store(config: Settings) -> VectorStore:
@@ -81,6 +145,9 @@ def build_vector_store(config: Settings) -> VectorStore:
 
 
 def build_services(config: Settings = settings) -> AppServices:
+    # 管理端下发的 AI 配置覆盖层（控制面推送落地的 runtime_config.json）优先于 .env；
+    # 覆盖后局部变量指向生效配置，后续组件装配与 .env 直启完全同构。
+    config = apply_overlay(config, AiConfigStore(config.runtime_config_path).load())
     storage = RustFSStorage(
         endpoint=config.rustfs_endpoint,
         access_key=config.rustfs_access_key,
@@ -160,4 +227,17 @@ def build_services(config: Settings = settings) -> AppServices:
             interval_seconds=config.watch_interval_seconds,
             stable_seconds=config.watch_stable_seconds,
         )
+    if config.asr_enabled:
+        # 会议听记：引擎在首个任务时才拉起 FunASR 模型，这里只建轻量容器
+        app_services.meetings = MeetingService(
+            store=MeetingStore(config.asr_data_path),
+            transcriber=MeetingTranscriber(speaker_enabled=config.asr_speaker_enabled),
+            summarizer=MeetingSummarizer(
+                config.llm_base_url,
+                config.llm_api_key,
+                config.llm_model,
+                trust_env=config.llm_trust_env,
+            ),
+        )
+        logger.info("会议听记已启用（数据目录 %s）", config.asr_data_path)
     return app_services

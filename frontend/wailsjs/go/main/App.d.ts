@@ -14,6 +14,10 @@ export function AcceptTransfer(arg1:string):Promise<void>;
 
 export function AcceptTransferAs(arg1:string):Promise<void>;
 
+export function AdminAiConfigGet():Promise<account.AiConfig>;
+
+export function AdminAiConfigSave(arg1:string,arg2:string,arg3:string,arg4:any,arg5:any):Promise<account.AiConfig>;
+
 export function AdminCapacity():Promise<account.Capacity>;
 
 export function AdminCreateUser(arg1:account.NewUser):Promise<void>;
@@ -99,6 +103,26 @@ export function ListDrives():Promise<Array<fsutil.DriveInfo>>;
 export function Login(arg1:string,arg2:string):Promise<main.AuthUser>;
 
 export function Logout():Promise<void>;
+
+export function McpConnectionGet():Promise<desktop.McpConnection>;
+
+export function McpConnectionRegenerate():Promise<desktop.McpConnection>;
+
+export function MeetingArchiveToKnowledge(arg1:string):Promise<knowledge.ArchiveResult>;
+
+export function MeetingAsk(arg1:string,arg2:string,arg3:Array<knowledge.MeetingChatTurn>):Promise<knowledge.MeetingAskResult>;
+
+export function MeetingDetail(arg1:string):Promise<knowledge.Meeting>;
+
+export function MeetingMindmapRegenerate(arg1:string):Promise<knowledge.Meeting>;
+
+export function MeetingRemove(arg1:string):Promise<void>;
+
+export function MeetingSpeakerRename(arg1:string,arg2:string,arg3:string):Promise<knowledge.Meeting>;
+
+export function MeetingSummaryRegenerate(arg1:string,arg2:string):Promise<knowledge.Meeting>;
+
+export function MeetingsList(arg1:number):Promise<Array<knowledge.Meeting>>;
 
 export function MySpaces():Promise<Array<account.Space>>;
 

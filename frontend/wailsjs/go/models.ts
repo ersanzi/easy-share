@@ -1,5 +1,31 @@
 export namespace account {
 	
+	export class AiConfig {
+	    llmBaseUrl: string;
+	    llmModel: string;
+	    apiKeySet: boolean;
+	    apiKeyMasked: string;
+	    asrEnabled?: boolean;
+	    asrSpeakerEnabled?: boolean;
+	    pushed: boolean;
+	    pushError: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AiConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.llmBaseUrl = source["llmBaseUrl"];
+	        this.llmModel = source["llmModel"];
+	        this.apiKeySet = source["apiKeySet"];
+	        this.apiKeyMasked = source["apiKeyMasked"];
+	        this.asrEnabled = source["asrEnabled"];
+	        this.asrSpeakerEnabled = source["asrSpeakerEnabled"];
+	        this.pushed = source["pushed"];
+	        this.pushError = source["pushError"];
+	    }
+	}
 	export class Capacity {
 	    enabled: boolean;
 	    usableBytes: number;
@@ -230,6 +256,20 @@ export namespace cloud {
 
 export namespace desktop {
 	
+	export class McpConnection {
+	    url: string;
+	    token: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new McpConnection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.token = source["token"];
+	    }
+	}
 	export class Snapshot {
 	    status: api.Status;
 	    peers: discovery.Peer[];
@@ -457,6 +497,24 @@ export namespace knowledge {
 		    return a;
 		}
 	}
+	export class ArchiveResult {
+	    doc_id: string;
+	    filename: string;
+	    chunks: number;
+	    chars: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArchiveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.doc_id = source["doc_id"];
+	        this.filename = source["filename"];
+	        this.chunks = source["chunks"];
+	        this.chars = source["chars"];
+	    }
+	}
 	export class CitedDoc {
 	    file_id: string;
 	    count: number;
@@ -548,6 +606,178 @@ export namespace knowledge {
 		    return a;
 		}
 	}
+	export class MeetingTodo {
+	    task: string;
+	    owner_hint: string;
+	    due_hint: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingTodo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task = source["task"];
+	        this.owner_hint = source["owner_hint"];
+	        this.due_hint = source["due_hint"];
+	    }
+	}
+	export class MeetingSection {
+	    title: string;
+	    text: string;
+	    bullets: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingSection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.text = source["text"];
+	        this.bullets = source["bullets"];
+	    }
+	}
+	export class MeetingSummary {
+	    minutes?: string;
+	    key_points?: string[];
+	    sections?: MeetingSection[];
+	    todos: MeetingTodo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.minutes = source["minutes"];
+	        this.key_points = source["key_points"];
+	        this.sections = this.convertValues(source["sections"], MeetingSection);
+	        this.todos = this.convertValues(source["todos"], MeetingTodo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MeetingSegment {
+	    start: number;
+	    end: number;
+	    text: string;
+	    speaker: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingSegment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	        this.text = source["text"];
+	        this.speaker = source["speaker"];
+	    }
+	}
+	export class Meeting {
+	    id: string;
+	    title: string;
+	    created_at: string;
+	    owner?: string;
+	    status: string;
+	    error?: string;
+	    duration_seconds?: number;
+	    speaker_count: number;
+	    speaker_names: Record<string, string>;
+	    segments: MeetingSegment[];
+	    summary?: MeetingSummary;
+	    mindmap?: string;
+	    template_id?: string;
+	    segment_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Meeting(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.created_at = source["created_at"];
+	        this.owner = source["owner"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.duration_seconds = source["duration_seconds"];
+	        this.speaker_count = source["speaker_count"];
+	        this.speaker_names = source["speaker_names"];
+	        this.segments = this.convertValues(source["segments"], MeetingSegment);
+	        this.summary = this.convertValues(source["summary"], MeetingSummary);
+	        this.mindmap = source["mindmap"];
+	        this.template_id = source["template_id"];
+	        this.segment_count = source["segment_count"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MeetingAskResult {
+	    answer: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingAskResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.answer = source["answer"];
+	    }
+	}
+	export class MeetingChatTurn {
+	    role: string;
+	    content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingChatTurn(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	    }
+	}
+	
+	
+	
+	
 	
 	export class StatusView {
 	    configured: boolean;

@@ -54,3 +54,37 @@ func DeriveKnowledgeURL(platformBaseURL string) string {
 	parsed.Fragment = ""
 	return parsed.String()
 }
+
+// --- AI 能力配置（管理端配置化；超管读写，密钥掩码回显，见 AiConfigController） ---
+
+// AiConfig 控制面登记的 AI 能力配置。AsrEnabled/AsrSpeakerEnabled 为 null 表示
+// 未设置（知识服务沿用 .env）；Pushed=false 时 PushError 说明原因（保存已生效）。
+type AiConfig struct {
+	LlmBaseUrl        string `json:"llmBaseUrl"`
+	LlmModel          string `json:"llmModel"`
+	ApiKeySet         bool   `json:"apiKeySet"`
+	ApiKeyMasked      string `json:"apiKeyMasked"`
+	AsrEnabled        *bool  `json:"asrEnabled"`
+	AsrSpeakerEnabled *bool  `json:"asrSpeakerEnabled"`
+	Pushed            bool   `json:"pushed"`
+	PushError         string `json:"pushError"`
+}
+
+// AiConfig 拉取 AI 能力配置（超管）。
+func (c *Client) AiConfig(ctx context.Context, token string) (*AiConfig, error) {
+	var vo AiConfig
+	if err := c.getJSON(ctx, "/easyshare/service/ai-config", token, &vo); err != nil {
+		return nil, err
+	}
+	return &vo, nil
+}
+
+// SetAiConfig 保存 AI 能力配置并触发知识服务热生效（超管；控制面负责推送）。
+// llmApiKey 传空串 = 保持已有密钥不变。
+func (c *Client) SetAiConfig(ctx context.Context, token string, body map[string]any) (*AiConfig, error) {
+	var vo AiConfig
+	if err := c.putValue(ctx, "/easyshare/service/ai-config", token, body, &vo); err != nil {
+		return nil, err
+	}
+	return &vo, nil
+}

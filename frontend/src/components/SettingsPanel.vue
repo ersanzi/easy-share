@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { QUOTA_UNSET } from '../types/core'
-import type { AuthUser, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
+import type { AuthUser, McpConnection, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
 import { usePlugins } from '../composables/usePlugins'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 
@@ -213,6 +213,39 @@ const formatSpeed = (bytesPerSecond?: number) => {
   return `${formatBytes(bytesPerSecond)}/s`
 }
 
+// ─── AI 工具连接（听记 MCP，只读） ───
+const mcpInfo = ref<McpConnection | null>(null)
+const mcpCopied = ref('')
+const confirmingMcpRegen = ref(false)
+
+const loadMcp = async () => {
+  try {
+    mcpInfo.value = await core.mcpInfo()
+  } catch {
+    mcpInfo.value = null
+  }
+}
+
+const copyMcp = async (field: 'url' | 'token') => {
+  if (!mcpInfo.value) return
+  await navigator.clipboard.writeText(mcpInfo.value[field])
+  mcpCopied.value = field
+  window.setTimeout(() => { if (mcpCopied.value === field) mcpCopied.value = '' }, 2000)
+}
+
+const regenerateMcp = async () => {
+  if (!confirmingMcpRegen.value) {
+    confirmingMcpRegen.value = true
+    return
+  }
+  confirmingMcpRegen.value = false
+  try {
+    mcpInfo.value = await core.mcpRegenerate()
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 onMounted(async () => {
   load()
   try { appVersion.value = await core.appVersion() } catch { appVersion.value = '' }
@@ -222,6 +255,7 @@ onMounted(async () => {
   } catch (e) {
     spacesError.value = e instanceof Error ? e.message : String(e)
   }
+  loadMcp()
   EventsOn('update:progress', onProgress)
   EventsOn('update:downloaded', onDownloaded)
   EventsOn('update:error', onUpdateError)
@@ -365,6 +399,39 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- AI 工具连接（听记 MCP，只读） -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <h2>AI 工具连接</h2>
+        </div>
+        <div class="settings-body">
+          <p class="setting-hint">
+            把地址与令牌填进支持 MCP 的 AI 客户端（Cherry Studio、Claude Desktop 等），AI
+            就能读取你的会议听记：列表、纪要、待办、逐字稿，还能替你向听记提问。仅只读，数据可见范围 = 你登录的知识服务账号。
+          </p>
+          <template v-if="mcpInfo">
+            <div class="setting-row mcp-row">
+              <label class="setting-label">服务地址</label>
+              <code class="mcp-value">{{ mcpInfo.url }}</code>
+              <button class="text-button" type="button" @click="copyMcp('url')">{{ mcpCopied === 'url' ? '已复制' : '复制' }}</button>
+            </div>
+            <div class="setting-row mcp-row">
+              <label class="setting-label">配对令牌</label>
+              <code class="mcp-value">{{ mcpInfo.token }}</code>
+              <button class="text-button" type="button" @click="copyMcp('token')">{{ mcpCopied === 'token' ? '已复制' : '复制' }}</button>
+            </div>
+            <p class="setting-hint">
+              客户端鉴权选 Bearer Token（即请求头 Authorization: Bearer + 令牌）；使用前需在「知识」页登录。
+              重新生成令牌后，已接入的客户端立即失效。
+            </p>
+            <button :class="['text-button', 'mcp-regen', { 'meeting-danger': confirmingMcpRegen }]" type="button" @click="regenerateMcp">
+              {{ confirmingMcpRegen ? '再点一次确认重新生成' : '重新生成令牌' }}
+            </button>
+          </template>
+          <p v-else class="setting-hint">暂时取不到连接信息（本机 Core 服务未运行？）</p>
         </div>
       </div>
 

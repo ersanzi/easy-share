@@ -66,6 +66,7 @@ def stats(request: Request, days: int = 30) -> dict:
 @router.get("/health")
 def health(request: Request) -> dict:
     services = _services(request)
+    asr_capability = _asr_capability(services)
     return {
         "status": "ok",
         "embedder": type(services.embedder).__name__,
@@ -73,9 +74,21 @@ def health(request: Request) -> dict:
         "auth": bool(services.config.auth_enabled),
         "watch_dirs": len(services.watcher.directories) if services.watcher else 0,
         "ocr": services.ocr.capability().to_dict() if services.ocr else {"available": False, "provider": "unknown", "reason": "OCR 服务未配置"},
+        "asr": asr_capability,
         "records": services.vector_store.count(),
         "jobs": services.job_store.counts(),
     }
+
+
+def _asr_capability(services: AppServices) -> dict:
+    """/health 声明听记能力（照 OCR 模式）；funasr 探测不真正 import（避免拉起 torch）。"""
+    from app.meetings.engine import funasr_importable
+
+    if services.meetings is None:
+        return {"available": False, "provider": "funasr", "reason": "未启用（ASR_ENABLED=false）"}
+    if not funasr_importable():
+        return {"available": False, "provider": "funasr", "reason": "funasr 未安装（requirements-asr.txt）"}
+    return {"available": True, "provider": "funasr", "reason": ""}
 
 
 @router.post(

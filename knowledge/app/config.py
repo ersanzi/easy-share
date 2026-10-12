@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
+    # false=LLM 出网不走系统代理（内网端点/代理不稳时用）；默认 true 沿用系统环境
+    llm_trust_env: bool = True
 
     # Embedding（OpenAI 兼容；未配置时退回 HashEmbedder 仅跑通管线）
     embedding_base_url: str = ""
@@ -37,6 +39,14 @@ class Settings(BaseSettings):
     ocr_enabled: bool = True
     ocr_lang: str = "ch"
     ocr_min_text_chars: int = 20
+
+    # 会议听记（可选运行时，FunASR 重依赖单独安装 pip install -r requirements-asr.txt）。
+    # 关闭时 /meetings 接口 503，行为与无此功能完全一致。
+    asr_enabled: bool = False
+    asr_data_path: str = "./data/meetings"
+    meeting_max_upload_bytes: int = 500 * 1024 * 1024
+    # 说话人分离开关（cam++ 聚类）；关闭后只出转写不出发言人
+    asr_speaker_enabled: bool = True
 
     # MinerU 深度解析（可选远程服务；失败自动回退本地管线，默认关闭）
     # backend 可选：pipeline（无 GPU、多语言）/ vlm-engine / vlm-http-client / hybrid-*（需配套 vllm 服务）
@@ -100,6 +110,12 @@ class Settings(BaseSettings):
     # introspection 回查 /system/user/getInfo，见 app/auth/sso.py。空=关闭。
     control_plane_url: str = ""
     control_plane_client_id: str = "e5cd7e4891bf95d1d19206ce24a7b32e"
+
+    # AI 能力管理端配置化（2026-10-12）：控制面下发的 AI 配置覆盖层经
+    # PUT /admin/ai-config 推送到本服务，X-Service-Secret 头鉴权；
+    # 密钥与 sys_config drive.service.ai.secret 同值，deploy 脚本生成。空=推送通道关闭。
+    control_plane_service_secret: str = ""
+    runtime_config_path: str = "./data/runtime_config.json"
 
     # 目录监听自动入库（分号分隔目录，空=关闭；指向共享盘/钉盘同步夹即"文件沼泽一键变知识"）
     watch_dirs: str = ""

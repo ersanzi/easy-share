@@ -10,16 +10,18 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api.routes import router
+from app.admin.routes import router as admin_router
 from app.auth.routes import router as auth_router
 from app.debug.routes import router as debug_router
 from app.lab.routes import router as lab_router
+from app.meetings.routes import router as meetings_router
 from app.services import AppServices, build_services
 from app.wps_addon.routes import router as wps_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # AUTH_ENABLED=true 时要求登录的业务前缀；/auth、/health、/docs、/lab、/debug（回环守卫）不受令牌保护
-_PROTECTED_PREFIXES = ("/documents", "/query", "/ingest", "/lab/api/uploads")
+_PROTECTED_PREFIXES = ("/documents", "/query", "/ingest", "/lab/api/uploads", "/meetings")
 
 
 def create_app(services: AppServices | None = None) -> FastAPI:
@@ -43,6 +45,8 @@ def create_app(services: AppServices | None = None) -> FastAPI:
     application.include_router(router)
     application.include_router(auth_router)
     application.include_router(lab_router)
+    application.include_router(meetings_router)
+    application.include_router(admin_router)
     application.include_router(debug_router)
     application.include_router(wps_router)
 

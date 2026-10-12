@@ -82,6 +82,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		APIHost:        "127.0.0.1",
 		APIPort:        19079,
 		APIToken:       "api-token",
+		MCPToken:       "mcp-token",
 		DiscoveryPort:  9527,
 		TransferPort:   9528,
 		ReceiveDir:     `C:\Users\tester\Downloads\EasyShare`,
@@ -150,6 +151,35 @@ func TestLoadMigratesMissingPlatformURLs(t *testing.T) {
 	}
 	if got.AdminConsoleURL != "http://localhost:8091" {
 		t.Errorf("AdminConsoleURL = %q, want default", got.AdminConsoleURL)
+	}
+}
+
+// 听记 MCP 配对令牌：旧配置缺省回填一次并落盘——重启后必须保持不变
+// （否则 AI 客户端里的令牌天天失效），吊销 = 显式重新生成。
+func TestLoadMigratesMissingMCPToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	legacy := `{
+		"deviceId":"device-id","deviceName":"legacy","apiHost":"127.0.0.1","apiPort":19079,
+		"apiToken":"api-token","discoveryPort":9527,"transferPort":9528,
+		"receiveDir":"C:\\tmp\\recv","webdavRoot":"C:\\tmp\\share","webdavPort":19080,
+		"webdavUsername":"EasyShare","webdavPassword":"webdav-password"
+	}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if first.MCPToken == "" {
+		t.Fatal("MCPToken was not backfilled for legacy config")
+	}
+	second, err := Load(path)
+	if err != nil {
+		t.Fatalf("second Load() error = %v", err)
+	}
+	if second.MCPToken != first.MCPToken {
+		t.Error("MCPToken was regenerated on reload; it must persist across restarts")
 	}
 }
 

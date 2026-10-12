@@ -115,6 +115,22 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/knowledge/logout", server.auth(http.HandlerFunc(server.knowledgeLogout)))
 	mux.Handle("POST /api/knowledge/health", server.auth(http.HandlerFunc(server.knowledgeHealth)))
 	mux.Handle("POST /api/knowledge/query", server.auth(http.HandlerFunc(server.knowledgeQuery)))
+	// 会议听记：列表/详情/管理走 JSON 代理，上传与音频回放走流式透传
+	mux.Handle("POST /api/knowledge/meetings/transcribe", server.auth(http.HandlerFunc(server.knowledgeMeetingCreate)))
+	mux.Handle("GET /api/knowledge/meetings", server.auth(http.HandlerFunc(server.knowledgeMeetings)))
+	mux.Handle("GET /api/knowledge/meetings/{id}", server.auth(http.HandlerFunc(server.knowledgeMeeting)))
+	mux.Handle("GET /api/knowledge/meetings/{id}/audio", server.auth(http.HandlerFunc(server.knowledgeMeetingAudio)))
+	mux.Handle("GET /api/knowledge/meetings/{id}/export/{format}", server.auth(http.HandlerFunc(server.knowledgeMeetingExport)))
+	mux.Handle("PATCH /api/knowledge/meetings/{id}/speakers", server.auth(http.HandlerFunc(server.knowledgeMeetingRename)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/archive", server.auth(http.HandlerFunc(server.knowledgeMeetingArchive)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/mindmap", server.auth(http.HandlerFunc(server.knowledgeMeetingMindmap)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/summary", server.auth(http.HandlerFunc(server.knowledgeMeetingSummaryRegen)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/ask", server.auth(http.HandlerFunc(server.knowledgeMeetingAsk)))
+	mux.Handle("DELETE /api/knowledge/meetings/{id}", server.auth(http.HandlerFunc(server.knowledgeMeetingDelete)))
+	// 听记 MCP：自带配对令牌校验（不能用 auth 中间件——那认的是桌面 apiToken）；管理端点走 apiToken
+	mux.Handle("/mcp", http.HandlerFunc(server.serveMCP))
+	mux.Handle("GET /api/mcp/info", server.auth(http.HandlerFunc(server.mcpInfo)))
+	mux.Handle("POST /api/mcp/regenerate", server.auth(http.HandlerFunc(server.mcpRegenerate)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, pattern := mux.Handler(request)
 		if pattern == "" {

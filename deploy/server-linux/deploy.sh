@@ -41,6 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log()  { printf '\n==> %s\n' "$1"; }
 ok()   { printf '    [OK] %s\n' "$1"; }
 fail() { printf '    [失败] %s\n' "$1" >&2; }
+warn() { printf '    [警告] %s\n' "$1"; }
 
 ask() { # ask <提示> <默认值>
     local prompt="$1" default="$2" value
@@ -172,6 +173,18 @@ log "生成知识服务 .env"
 # 入库目录先兜底：.env 已存在时从中回读，供末尾生成使用指引引用
 WATCH_DIR=$(grep '^WATCH_DIRS=' "$KN/.env" 2>/dev/null | cut -d= -f2- || true)
 WATCH_DIR="${WATCH_DIR:-$ROOT/watch-inbox}"
+# AI 配置下发服务密钥：控制面 sys_config 与知识服务 .env 同值（管理端保存 AI
+# 配置时控制面凭此推送到知识服务热生效）。已有 .env 沿用旧值，全新部署随机生成。
+AI_SECRET=$(grep '^CONTROL_PLANE_SERVICE_SECRET=' "$KN/.env" 2>/dev/null | cut -d= -f2- || true)
+if [[ -z "$AI_SECRET" ]]; then
+    AI_SECRET=$(openssl rand -hex 16)
+fi
+# 幂等写入控制面 sys_config（config_key 无唯一约束，用 NOT EXISTS + UPDATE 双段式）
+docker exec easyshare-ruoyi-pg psql -U ruoyi -d ryvue -c "INSERT INTO sys_config (config_id, config_name, config_key, config_value, config_type, remark, create_time, update_time) SELECT 1900000000000009001, 'AI 能力下发服务密钥', 'drive.service.ai.secret', '$AI_SECRET', 'N', 'EasyShare AI 配置下发通道（控制面↔知识服务）', now(), now() WHERE NOT EXISTS (SELECT 1 FROM sys_config WHERE config_key='drive.service.ai.secret');" >/dev/null 2>&1 || warn "sys_config 密钥写入失败（PG 未就绪？部署完成后手动补）"
+docker exec easyshare-ruoyi-pg psql -U ruoyi -d ryvue -c "UPDATE sys_config SET config_value='$AI_SECRET', update_time=now() WHERE config_key='drive.service.ai.secret';" >/dev/null 2>&1 || true
+if [[ -f "$KN/.env" ]] && ! grep -q '^CONTROL_PLANE_SERVICE_SECRET=' "$KN/.env"; then
+    echo "CONTROL_PLANE_SERVICE_SECRET=$AI_SECRET" >> "$KN/.env"
+fi
 if [[ -f "$KN/.env" ]]; then
     ok "已存在，保留（重置请删 $KN/.env 后重跑）"
 else
@@ -220,6 +233,9 @@ AUTH_TOKEN_EXPIRY_HOURS=168
 # 控制面 SSO：知识服务信任控制面登录令牌（同事一套账号；标准部署同主机 :8090）
 CONTROL_PLANE_URL=http://127.0.0.1:8090
 CONTROL_PLANE_CLIENT_ID=e5cd7e4891bf95d1d19206ce24a7b32e
+
+# AI 配置下发通道：与管理端「AI 能力」卡片配套，值已同步写入控制面 sys_config
+CONTROL_PLANE_SERVICE_SECRET=${AI_SECRET}
 
 WATCH_DIRS=${WATCH_DIR}
 WATCH_INTERVAL_SECONDS=30

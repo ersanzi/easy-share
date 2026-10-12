@@ -113,6 +113,13 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
+| `POST` | `/api/knowledge/meetings/transcribe` | 会议音频上传代理（multipart 流式透传，远端异步转写，202 回受理记录） |
+| `GET` | `/api/knowledge/meetings` | 会议听记列表（不含分段全文） |
+| `GET` | `/api/knowledge/meetings/{id}` | 会议详情（分段/发言人/总结；受理后前端轮询） |
+| `GET` | `/api/knowledge/meetings/{id}/audio` | 会议音频回放代理（流式透传） |
+| `PATCH` | `/api/knowledge/meetings/{id}/speakers` | 发言人改名 |
+| `POST` | `/api/knowledge/meetings/{id}/archive` | 会议纪要归档入知识库 |
+| `DELETE` | `/api/knowledge/meetings/{id}` | 删除会议记录与音频 |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
 
 ## 4b. 控制面升级接口（platform-drive，2026-08-31 起）
@@ -138,6 +145,10 @@ Authorization: Bearer <apiToken>
 | --- | --- | --- | --- |
 | `GET` | `/easyshare/service/config` | 登录 | 下发服务配置（未登记项空串，客户端回退推导） |
 | `PUT` | `/easyshare/service/config` | superadmin | 登记知识服务地址（空串=清除，回退推导；自动 strip 尾斜杠/校验 http 前缀） |
+| `GET` | `/easyshare/service/ai-config` | superadmin | 读 AI 能力配置（LLM 地址/模型/密钥掩码 + 听记开关；密钥明文不出控制面） |
+| `PUT` | `/easyshare/service/ai-config` | superadmin | 保存 AI 配置（sys_config `drive.service.ai.config` 权威）并凭服务密钥（`drive.service.ai.secret`）**同步推送到知识服务 `PUT /admin/ai-config` 热生效**；推送失败不阻断保存，结果在响应 `pushed/pushError` |
+
+**AI 配置热生效链路（2026-10-12）**：管理页「AI 能力」卡片 → 控制面 sys_config（权威）→ 服务密钥头 `X-Service-Secret` 推送 → 知识服务写 `data/runtime_config.json` 覆盖层（优先于 .env，重启仍在）→ 原地重建 LLM 消费组件（RAG Generator/MultiHop/ContextualBuilder/听记 Summarizer）与 ASR 开关。知识服务推送端点固定收 camelCase（pydantic alias）。**坑：Java 推送客户端必须钉死 HTTP/1.1**——JDK HttpClient 默认 HTTP/2 语义对明文地址带 h2c 升级头，uvicorn/h11 回 422（排障实录见 `iterations/2026-10-12-AI能力配置化.md`）。
 
 ## 4c. 插件系统与商城接口（2026-08-31 起）
 
@@ -236,8 +247,9 @@ desktop eventStream (Go 协程，指数退避重连)
 
 ## 8a. 知识网关（桌面端 ↔ 知识服务）
 
-- `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
+- `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答/会议听记，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
 - 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
+- **会议听记大文件通道（2026-10-12）**：音频上传/回放不经 Wails 绑定（绑定是 JSON 通道，塞不下上百 MB），前端同源 `fetch /kapi/meetings/*` → 桌面进程 `pluginAssetMiddleware` 接管（`appmeetings.go`；dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截）→ desktop.Client 流式转发 → Core 上述 meetings 路由 → 知识服务 `/meetings`。列表/详情/管理/归档走常规 Wails 绑定。
 
 ## 9. 跨平台抽象
 

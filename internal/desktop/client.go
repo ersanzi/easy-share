@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -173,6 +176,166 @@ func (client *Client) KnowledgeSearch(ctx context.Context, question string) (kno
 	err := client.request(ctx, http.MethodPost, "/api/knowledge/query",
 		map[string]string{"question": question, "mode": "search"}, &result)
 	return result, err
+}
+
+// --- 会议听记（列表/详情/管理走 JSON；上传与音频走流式专用方法） ---
+
+// Meetings 会议听记列表（不含分段全文）。
+func (client *Client) Meetings(ctx context.Context, limit int) ([]knowledge.Meeting, error) {
+	var payload struct {
+		Meetings []knowledge.Meeting `json:"meetings"`
+	}
+	err := client.request(ctx, http.MethodGet, fmt.Sprintf("/api/knowledge/meetings?limit=%d", limit), nil, &payload)
+	return payload.Meetings, err
+}
+
+// Meeting 单条完整记录（分段 + 总结），受理后轮询用。
+func (client *Client) Meeting(ctx context.Context, id string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.request(ctx, http.MethodGet, "/api/knowledge/meetings/"+url.PathEscape(id), nil, &result)
+	return result, err
+}
+
+// MeetingDelete 删除会议记录与音频。
+func (client *Client) MeetingDelete(ctx context.Context, id string) error {
+	return client.request(ctx, http.MethodDelete, "/api/knowledge/meetings/"+url.PathEscape(id), nil, nil)
+}
+
+// MeetingRenameSpeaker 发言人改名。
+func (client *Client) MeetingRenameSpeaker(ctx context.Context, id, speaker, name string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	input := map[string]string{"speaker": speaker, "name": name}
+	err := client.request(ctx, http.MethodPatch, "/api/knowledge/meetings/"+url.PathEscape(id)+"/speakers", input, &result)
+	return result, err
+}
+
+// MeetingSummaryRegenerate 按记录登记的模板重新生成总结（LLM 调用，慢链路）。
+func (client *Client) MeetingSummaryRegenerate(ctx context.Context, id, templateID string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/summary",
+		map[string]string{"template_id": templateID}, &result)
+	return result, err
+}
+
+// MeetingAsk 听记 AI 问答（纪要+转写全文进上下文，LLM 调用，慢链路）。
+func (client *Client) MeetingAsk(ctx context.Context, id, question string, history []knowledge.MeetingChatTurn) (knowledge.MeetingAskResult, error) {
+	var result knowledge.MeetingAskResult
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/ask",
+		map[string]any{"question": question, "history": history}, &result)
+	return result, err
+}
+
+// McpConnection 听记 MCP 接入信息（设置页「AI 工具连接」卡展示用）。
+type McpConnection struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`
+}
+
+// McpInfo 取听记 MCP 接入信息。
+func (client *Client) McpInfo(ctx context.Context) (McpConnection, error) {
+	var result McpConnection
+	err := client.request(ctx, http.MethodGet, "/api/mcp/info", nil, &result)
+	return result, err
+}
+
+// McpRegenerate 重新生成听记 MCP 配对令牌（吊销旧令牌）。
+func (client *Client) McpRegenerate(ctx context.Context) (McpConnection, error) {
+	var result McpConnection
+	err := client.request(ctx, http.MethodPost, "/api/mcp/regenerate", nil, &result)
+	return result, err
+}
+
+// MeetingMindmapRegenerate 重新生成思维导图（LLM 调用，慢链路）。
+func (client *Client) MeetingMindmapRegenerate(ctx context.Context, id string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/mindmap", nil, &result)
+	return result, err
+}
+
+// MeetingArchive 归档进知识库。
+func (client *Client) MeetingArchive(ctx context.Context, id string) (knowledge.ArchiveResult, error) {
+	var result knowledge.ArchiveResult
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/archive", nil, &result)
+	return result, err
+}
+
+// MeetingUpload 流式转发会议音频 multipart 上传体（无客户端超时，Core 侧上下文兜底）。
+func (client *Client) MeetingUpload(ctx context.Context, contentType string, body io.Reader, out *knowledge.Meeting) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/knowledge/meetings/transcribe", body)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("Content-Type", contentType)
+	response, err := client.slowHTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		return fmt.Errorf("%s", apiError.Message)
+	}
+	return json.NewDecoder(response.Body).Decode(out)
+}
+
+// MeetingAudioStream 把会议音频响应流式写入 writer（同源网关透传）。
+func (client *Client) MeetingAudioStream(ctx context.Context, id string, writer http.ResponseWriter) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/api/knowledge/meetings/"+url.PathEscape(id)+"/audio", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.slowHTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		return fmt.Errorf("%s", apiError.Message)
+	}
+	writer.Header().Set("Content-Type", "audio/wav")
+	if response.ContentLength > 0 {
+		writer.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
+	}
+	writer.WriteHeader(http.StatusOK)
+	_, err = io.Copy(writer, response.Body)
+	return err
+}
+
+// MeetingExportStream 把备忘录导出文件（format: markdown|docx）流式写入 writer。
+func (client *Client) MeetingExportStream(ctx context.Context, id, format string, writer http.ResponseWriter) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		client.baseURL+"/api/knowledge/meetings/"+url.PathEscape(id)+"/export/"+url.PathEscape(format), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.slowHTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		return fmt.Errorf("%s", apiError.Message)
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		writer.Header().Set("Content-Type", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition != "" {
+		writer.Header().Set("Content-Disposition", disposition)
+	}
+	if response.ContentLength > 0 {
+		writer.Header().Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))
+	}
+	writer.WriteHeader(http.StatusOK)
+	_, err = io.Copy(writer, response.Body)
+	return err
 }
 
 // SubscribeEvents 通过 WebSocket 订阅 Core 的实时事件流。

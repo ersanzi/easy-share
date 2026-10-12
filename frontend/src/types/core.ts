@@ -130,6 +130,93 @@ export interface KnowledgeAnswer {
   contexts: KnowledgeContext[]
 }
 
+// ─── 会议听记（知识服务 /meetings；音频大文件走 /kapi 同源网关）───
+
+export interface MeetingSegment {
+  start: number
+  end: number
+  text: string
+  speaker: string
+}
+
+export interface MeetingTodo {
+  task: string
+  owner_hint: string
+  due_hint: string
+}
+
+export interface MeetingSection {
+  title: string
+  text: string
+}
+
+export interface MeetingSummary {
+  // 默认模板（会议纪要）：旧固定字段
+  minutes?: string
+  key_points?: string[]
+  // 其他模板：通用小节结构
+  sections?: MeetingSection[]
+  todos: MeetingTodo[]
+}
+
+// status: processing=转写中 completed=可查看 failed=失败（error 给原因）
+// speaker 为引擎输出的序号字符串，展示名以 speaker_names 为准（用户改名后解耦）
+export interface MeetingRecord {
+  id: string
+  title: string
+  created_at: string
+  owner: string | null
+  status: 'processing' | 'completed' | 'failed'
+  error: string | null
+  duration_seconds: number | null
+  speaker_count: number
+  speaker_names: Record<string, string>
+  segments: MeetingSegment[]
+  summary: MeetingSummary | null
+  mindmap: string | null
+  template_id: string | null
+  segment_count?: number
+}
+
+export interface MeetingArchiveResult {
+  doc_id: string
+  filename: string
+  chunks: number
+  chars: number
+}
+
+// 听记 AI 问答（对标钉钉听记问答：单条记录纪要+转写全文直接进上下文）
+export interface MeetingChatTurn {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface MeetingAskResult {
+  answer: string
+}
+
+// 听记 MCP（AI 工具连接）：地址+配对令牌粘进 MCP 客户端即接入，只读
+export interface McpConnection {
+  url: string
+  token: string
+}
+
+// ─── AI 能力配置（控制面管理端；密钥掩码回显，推送结果随保存返回）───
+
+export interface AiCapabilityConfig {
+  llmBaseUrl: string
+  llmModel: string
+  apiKeySet: boolean
+  apiKeyMasked: string
+  // null = 未设置（知识服务沿用部署 .env）
+  asrEnabled: boolean | null
+  asrSpeakerEnabled: boolean | null
+  pushed: boolean
+  pushError: string
+}
+
+
+
 export interface CoreSnapshot {
   status: ServiceStatus
   peers: Peer[]
