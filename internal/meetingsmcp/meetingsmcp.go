@@ -7,6 +7,7 @@ package meetingsmcp
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -20,6 +21,8 @@ type SessionLookup func() (knowledge.Session, error)
 type Options struct {
 	// Version 随 EasyShare 版本号写入 serverInfo。
 	Version string
+	// BaseURL 是本机 Core 基址（如 http://127.0.0.1:19080），用于拼音频地址。
+	BaseURL string
 	Lookup  SessionLookup
 }
 
@@ -40,13 +43,16 @@ type askIn struct {
 }
 
 // New 构建听记只读 MCP 服务端：list_meetings / get_meeting_summary /
-// get_meeting_transcript / ask_meeting 四个工具。
+// get_meeting_transcript / get_meeting_keywords / get_meeting_todos /
+// get_meeting_audio / ask_meeting 七个工具（前六个对齐钉钉听记 MCP 的只读数据面
+// 六件套：列表/摘要/转写原文/关键词/待办/音频地址）。
 func New(opts Options) *mcp.Server {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "easyshare-meetings", Version: opts.Version},
 		&mcp.ServerOptions{
 			Instructions: "EasyShare 会议听记只读工具集。先用 list_meetings 拿到会议列表" +
-				"（返回 id 与一句话摘要），再按需取详情或直接提问。" +
+				"（返回 id 与一句话摘要），再按需取摘要/逐字稿/关键词/待办/录音地址，或直接提问。" +
+				"写周报或追进度时优先组合 list_meetings + get_meeting_todos。" +
 				"数据可见范围 = 用户在 EasyShare 桌面端登录的账号。",
 		},
 	)
@@ -145,6 +151,74 @@ func New(opts Options) *mcp.Server {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_meeting_keywords",
+		Description: "获取一条听记的 AI 关键词（6-10 个短词：项目名/人名/指标/期限，按重要性排序）。适合快速判断这条听记讲什么。参数 id 来自 list_meetings。",
+	}, func(ctx context.Context, _ *mcp.ServerSession, params *mcp.CallToolParamsFor[idIn]) (*mcp.CallToolResult, error) {
+		knowledgeClient, session, err := client(ctx)
+		if err != nil {
+			return fail("EasyShare 未登录知识服务：%v", err)
+		}
+		meeting, err := knowledgeClient.Meeting(ctx, session.Token, params.Arguments.ID)
+		if err != nil {
+			return fail("获取听记失败：%v", err)
+		}
+		if len(meeting.Keywords) == 0 {
+			return result("该记录暂无关键词（可能尚未生成，可在 EasyShare 听记详情页点「生成关键词」补跑）"), nil
+		}
+		return result(strings.Join(meeting.Keywords, "、")), nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_meeting_todos",
+		Description: "获取一条听记的待办清单（每条含负责人、期限与是否完成）。参数 id 来自 list_meetings。",
+	}, func(ctx context.Context, _ *mcp.ServerSession, params *mcp.CallToolParamsFor[idIn]) (*mcp.CallToolResult, error) {
+		knowledgeClient, session, err := client(ctx)
+		if err != nil {
+			return fail("EasyShare 未登录知识服务：%v", err)
+		}
+		meeting, err := knowledgeClient.Meeting(ctx, session.Token, params.Arguments.ID)
+		if err != nil {
+			return fail("获取听记失败：%v", err)
+		}
+		if len(meeting.Todos) == 0 {
+			return result("该记录没有待办"), nil
+		}
+		var builder strings.Builder
+		for _, todo := range meeting.Todos {
+			builder.WriteString(todoText(&todo) + "\n")
+		}
+		fmt.Fprintf(&builder, "（共 %d 条，未完成 %d 条）", len(meeting.Todos), pendingTodos(meeting.Todos))
+		return result(strings.TrimRight(builder.String(), "\n")), nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_meeting_audio",
+		Description: "获取一条听记的原始录音下载地址（WAV，16kHz 单声道）。用连接本 MCP 的同一个配对令牌作为 Authorization: Bearer <token> 直接 GET 该地址即可取到音频。参数 id 来自 list_meetings。",
+	}, func(ctx context.Context, _ *mcp.ServerSession, params *mcp.CallToolParamsFor[idIn]) (*mcp.CallToolResult, error) {
+		knowledgeClient, session, err := client(ctx)
+		if err != nil {
+			return fail("EasyShare 未登录知识服务：%v", err)
+		}
+		id := strings.TrimSpace(params.Arguments.ID)
+		if id == "" {
+			return fail("id 不能为空")
+		}
+		meeting, err := knowledgeClient.Meeting(ctx, session.Token, id)
+		if err != nil {
+			return fail("获取听记失败：%v", err)
+		}
+		audioURL := strings.TrimRight(opts.BaseURL, "/") + "/mcp/meetings/" + url.PathEscape(id) + "/audio"
+		var builder strings.Builder
+		fmt.Fprintf(&builder, "录音地址：%s\n", audioURL)
+		fmt.Fprintf(&builder, "标题：%s\n鉴权：Authorization: Bearer <MCP 配对令牌>", meeting.Title)
+		if meeting.DurationSeconds != nil {
+			total := int(*meeting.DurationSeconds)
+			fmt.Fprintf(&builder, "\n时长：%02d:%02d", total/60, total%60)
+		}
+		return result(builder.String()), nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ask_meeting",
 		Description: "对一条听记提问（EasyShare 服务端 LLM 基于该会议的纪要与转写全文作答，通常 5-30 秒）。参数 id 来自 list_meetings，question 为中文问题。",
 	}, func(ctx context.Context, _ *mcp.ServerSession, params *mcp.CallToolParamsFor[askIn]) (*mcp.CallToolResult, error) {
@@ -212,22 +286,43 @@ func meetingSummaryText(meeting *knowledge.Meeting) string {
 			}
 		}
 	}
-	if len(summary.Todos) > 0 {
+	if len(meeting.Todos) > 0 {
 		builder.WriteString("\n【待办】\n")
-		for _, todo := range summary.Todos {
-			builder.WriteString("- " + todo.Task)
-			var extra []string
-			if todo.OwnerHint != "" {
-				extra = append(extra, todo.OwnerHint)
-			}
-			if todo.DueHint != "" {
-				extra = append(extra, todo.DueHint)
-			}
-			if len(extra) > 0 {
-				fmt.Fprintf(&builder, "（%s）", strings.Join(extra, "，"))
-			}
-			builder.WriteString("\n")
+		for _, todo := range meeting.Todos {
+			builder.WriteString(todoText(&todo) + "\n")
 		}
 	}
 	return strings.TrimRight(builder.String(), "\n")
+}
+
+// todoText 待办的单行文本（与知识服务 _todo_line 同口径：内容（负责人，期限）+ 完成标记）。
+func todoText(todo *knowledge.MeetingTodo) string {
+	var parts []string
+	if todo.OwnerHint != "" {
+		parts = append(parts, todo.OwnerHint)
+	}
+	if todo.DueHint != "" {
+		parts = append(parts, todo.DueHint)
+	}
+	text := "- [ ] " + todo.Task
+	if todo.Done {
+		text = "- [x] " + todo.Task
+	}
+	if len(parts) > 0 {
+		text += fmt.Sprintf("（%s）", strings.Join(parts, "，"))
+	}
+	if todo.Done {
+		text += "〔已完成〕"
+	}
+	return text
+}
+
+func pendingTodos(todos []knowledge.MeetingTodo) int {
+	count := 0
+	for _, todo := range todos {
+		if !todo.Done {
+			count++
+		}
+	}
+	return count
 }

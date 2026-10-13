@@ -139,15 +139,28 @@ export interface MeetingSegment {
   speaker: string
 }
 
+// 待办是一等实体（对标钉钉 MinutesTodoI）：可增删改与勾选完成。
+// source: ai=随总结刷新，manual=用户手工（重生成总结时保留）
 export interface MeetingTodo {
+  id: string
   task: string
   owner_hint: string
   due_hint: string
+  done: boolean
+  source: 'ai' | 'manual' | string
 }
 
 export interface MeetingSection {
   title: string
   text: string
+}
+
+// 智能切片章节（start/end 为秒；点击章节条跳转播放）
+export interface MeetingChapter {
+  title: string
+  start: number
+  end: number
+  gist?: string
 }
 
 export interface MeetingSummary {
@@ -156,23 +169,32 @@ export interface MeetingSummary {
   key_points?: string[]
   // 其他模板：通用小节结构
   sections?: MeetingSection[]
-  todos: MeetingTodo[]
+  // 智能切片：按话题切段的时间锚点
+  chapters?: MeetingChapter[]
 }
 
-// status: processing=转写中 completed=可查看 failed=失败（error 给原因）
+// AI 区块独立状态（对标钉钉分任务状态）：某块失败只补跑那块
+export type MeetingBlockState = 'pending' | 'processing' | 'ready' | 'failed' | 'skipped'
+export type MeetingBlockName = 'transcript' | 'keywords' | 'summary' | 'mindmap'
+
+// status: recording=实时录制中 processing=转写中 completed=可查看 failed=失败（error 给原因）
 // speaker 为引擎输出的序号字符串，展示名以 speaker_names 为准（用户改名后解耦）
 export interface MeetingRecord {
   id: string
   title: string
   created_at: string
   owner: string | null
-  status: 'processing' | 'completed' | 'failed'
+  status: 'recording' | 'processing' | 'completed' | 'failed'
   error: string | null
   duration_seconds: number | null
   speaker_count: number
   speaker_names: Record<string, string>
   segments: MeetingSegment[]
   summary: MeetingSummary | null
+  keywords: string[]
+  todos: MeetingTodo[]
+  blocks?: Partial<Record<MeetingBlockName, MeetingBlockState>>
+  block_errors?: Partial<Record<MeetingBlockName, string>>
   mindmap: string | null
   template_id: string | null
   segment_count?: number
@@ -193,6 +215,31 @@ export interface MeetingChatTurn {
 
 export interface MeetingAskResult {
   answer: string
+}
+
+// 个性化热词（对标钉钉 hotwords：转写时优先识别，提高专名准确率）
+export interface MeetingHotwords {
+  words: string[]
+  max: number
+}
+
+// 已登记声纹（轻口径：改名即沉淀；向量本体不出服务端，此处只有元数据）
+export interface MeetingVoiceprint {
+  name: string
+  sample_seconds: number
+  updated_at: string
+}
+
+// 实时上屏（边说边出字）：会话快照 = 已定行 + 进行中的一句
+export interface MeetingLiveLine {
+  text: string
+  at: number
+}
+
+export interface MeetingLiveView {
+  lines: MeetingLiveLine[]
+  current: string
+  elapsed_seconds: number
 }
 
 // 听记 MCP（AI 工具连接）：地址+配对令牌粘进 MCP 客户端即接入，只读

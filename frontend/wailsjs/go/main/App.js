@@ -210,6 +210,26 @@ export function MeetingDetail(arg1) {
   return window['go']['main']['App']['MeetingDetail'](arg1);
 }
 
+export function MeetingHotwordRemove(arg1) {
+  return window['go']['main']['App']['MeetingHotwordRemove'](arg1);
+}
+
+export function MeetingHotwordsAdd(arg1) {
+  return window['go']['main']['App']['MeetingHotwordsAdd'](arg1);
+}
+
+export function MeetingHotwordsGet() {
+  return window['go']['main']['App']['MeetingHotwordsGet']();
+}
+
+export function MeetingKeywordsRegenerate(arg1) {
+  return window['go']['main']['App']['MeetingKeywordsRegenerate'](arg1);
+}
+
+export function MeetingLivePoints(arg1) {
+  return window['go']['main']['App']['MeetingLivePoints'](arg1);
+}
+
 export function MeetingMindmapRegenerate(arg1) {
   return window['go']['main']['App']['MeetingMindmapRegenerate'](arg1);
 }
@@ -218,12 +238,52 @@ export function MeetingRemove(arg1) {
   return window['go']['main']['App']['MeetingRemove'](arg1);
 }
 
+export function MeetingRetranscribe(arg1) {
+  return window['go']['main']['App']['MeetingRetranscribe'](arg1);
+}
+
 export function MeetingSpeakerRename(arg1, arg2, arg3) {
   return window['go']['main']['App']['MeetingSpeakerRename'](arg1, arg2, arg3);
 }
 
+export function MeetingStreamChunk(arg1, arg2) {
+  return window['go']['main']['App']['MeetingStreamChunk'](arg1, arg2);
+}
+
+export function MeetingStreamOpen(arg1, arg2) {
+  return window['go']['main']['App']['MeetingStreamOpen'](arg1, arg2);
+}
+
+export function MeetingStreamStop(arg1) {
+  return window['go']['main']['App']['MeetingStreamStop'](arg1);
+}
+
+export function MeetingStreamWarm() {
+  return window['go']['main']['App']['MeetingStreamWarm']();
+}
+
 export function MeetingSummaryRegenerate(arg1, arg2) {
   return window['go']['main']['App']['MeetingSummaryRegenerate'](arg1, arg2);
+}
+
+export function MeetingTodoAdd(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MeetingTodoAdd'](arg1, arg2, arg3, arg4);
+}
+
+export function MeetingTodoRemove(arg1, arg2) {
+  return window['go']['main']['App']['MeetingTodoRemove'](arg1, arg2);
+}
+
+export function MeetingTodoUpdate(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['MeetingTodoUpdate'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function MeetingVoiceprintRemove(arg1) {
+  return window['go']['main']['App']['MeetingVoiceprintRemove'](arg1);
+}
+
+export function MeetingVoiceprintsGet() {
+  return window['go']['main']['App']['MeetingVoiceprintsGet']();
 }
 
 export function MeetingsList(arg1) {

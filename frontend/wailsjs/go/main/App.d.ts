@@ -114,13 +114,43 @@ export function MeetingAsk(arg1:string,arg2:string,arg3:Array<knowledge.MeetingC
 
 export function MeetingDetail(arg1:string):Promise<knowledge.Meeting>;
 
+export function MeetingHotwordRemove(arg1:string):Promise<knowledge.HotwordsResult>;
+
+export function MeetingHotwordsAdd(arg1:Array<string>):Promise<knowledge.HotwordsResult>;
+
+export function MeetingHotwordsGet():Promise<knowledge.HotwordsResult>;
+
+export function MeetingKeywordsRegenerate(arg1:string):Promise<knowledge.Meeting>;
+
+export function MeetingLivePoints(arg1:string):Promise<Array<string>>;
+
 export function MeetingMindmapRegenerate(arg1:string):Promise<knowledge.Meeting>;
 
 export function MeetingRemove(arg1:string):Promise<void>;
 
+export function MeetingRetranscribe(arg1:string):Promise<knowledge.Meeting>;
+
 export function MeetingSpeakerRename(arg1:string,arg2:string,arg3:string):Promise<knowledge.Meeting>;
 
+export function MeetingStreamChunk(arg1:string,arg2:string):Promise<knowledge.MeetingLiveView>;
+
+export function MeetingStreamOpen(arg1:string,arg2:string):Promise<knowledge.Meeting>;
+
+export function MeetingStreamStop(arg1:string):Promise<knowledge.MeetingLiveView>;
+
+export function MeetingStreamWarm():Promise<void>;
+
 export function MeetingSummaryRegenerate(arg1:string,arg2:string):Promise<knowledge.Meeting>;
+
+export function MeetingTodoAdd(arg1:string,arg2:string,arg3:string,arg4:string):Promise<knowledge.Meeting>;
+
+export function MeetingTodoRemove(arg1:string,arg2:string):Promise<knowledge.Meeting>;
+
+export function MeetingTodoUpdate(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:boolean):Promise<knowledge.Meeting>;
+
+export function MeetingVoiceprintRemove(arg1:string):Promise<Array<knowledge.MeetingVoiceprint>>;
+
+export function MeetingVoiceprintsGet():Promise<Array<knowledge.MeetingVoiceprint>>;
 
 export function MeetingsList(arg1:number):Promise<Array<knowledge.Meeting>>;
 

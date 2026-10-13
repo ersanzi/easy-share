@@ -62,10 +62,17 @@ class MeetingTranscriber:
             self._model = AutoModel(**kwargs)
             return self._model
 
-    def transcribe(self, wav_path: str | Path) -> list[dict]:
-        """转写单个 WAV，返回发言轮次列表 [{start, end, text, speaker}]（start/end 秒）。"""
+    def transcribe(self, wav_path: str | Path, hotword: str = "") -> list[dict]:
+        """转写单个 WAV，返回发言轮次列表 [{start, end, text, speaker}]（start/end 秒）。
+
+        hotword 是空格分隔的个性化热词串（seaco 模型级上下文增强）；本机 FunASR 实测
+        只接受字符串，传 list 会在 os.path.isfile 处 TypeError。
+        """
         model = self._ensure_model()
-        result = model.generate(input=str(wav_path), batch_size_s=300)
+        kwargs: dict = {"input": str(wav_path), "batch_size_s": 300}
+        if hotword.strip():
+            kwargs["hotword"] = hotword.strip()
+        result = model.generate(**kwargs)
         if not result:
             return []
         data = result[0]

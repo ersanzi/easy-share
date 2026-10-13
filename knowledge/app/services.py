@@ -17,8 +17,11 @@ from app.kb.query_log import QueryLog
 from app.kb.reranker import Reranker, NoopReranker, build_reranker
 from app.kb.store import VectorStore
 from app.meetings.engine import MeetingTranscriber
+from app.meetings.hotwords import HotwordStore
 from app.meetings.service import MeetingService
 from app.meetings.store import MeetingStore
+from app.meetings.voiceprint import VoiceprintStore
+from app.meetings.stream import StreamingTranscriber
 from app.meetings.summarizer import MeetingSummarizer
 from app.pipeline.service import DocumentPipeline
 from app.ocr import OCRProvider, build_paddle_provider
@@ -58,6 +61,15 @@ class AppServices:
     watcher: DirectoryWatcher | None = None
     sso: ControlPlaneSSO | None = None
     meetings: MeetingService | None = None
+    hotwords: HotwordStore | None = None
+    voiceprints: VoiceprintStore | None = None
+    streamer: StreamingTranscriber | None = None
+
+    def ensure_streamer(self) -> StreamingTranscriber:
+        """流式转写容器全局唯一：模型权重约 1GB，AI 配置热重载也不重新拉起。"""
+        if self.streamer is None:
+            self.streamer = StreamingTranscriber()
+        return self.streamer
 
     def start(self) -> None:
         self.job_runner.start()
@@ -111,6 +123,8 @@ class AppServices:
                 self.meetings.shutdown()
                 self.meetings = None
             if new_config.asr_enabled:
+                self.hotwords = HotwordStore(_hotwords_path(new_config.asr_data_path))
+                self.voiceprints = VoiceprintStore(_voiceprints_path(new_config.asr_data_path))
                 self.meetings = MeetingService(
                     store=MeetingStore(new_config.asr_data_path),
                     transcriber=MeetingTranscriber(speaker_enabled=new_config.asr_speaker_enabled),
@@ -120,6 +134,10 @@ class AppServices:
                         new_config.llm_model,
                         trust_env=new_config.llm_trust_env,
                     ),
+                    # 流式模型约 1GB，配置热重载不重建它（否则每次改配置都要重新拉权重）
+                    streamer=self.ensure_streamer(),
+                    hotwords=self.hotwords,
+                    voiceprints=self.voiceprints,
                 )
             applied.append("asr")
 
@@ -127,6 +145,22 @@ class AppServices:
             warnings.append("配置与当前生效值一致，无需重载")
         self.config = new_config
         return applied, warnings
+
+
+def _sibling_path(asr_data_path: str, filename: str) -> str:
+    """听记附属表（热词/声纹）与会议数据同目录，不另开一套存储。"""
+    from pathlib import PurePosixPath
+
+    base = PurePosixPath(str(asr_data_path).replace("\\", "/"))
+    return str(base.parent / filename)
+
+
+def _hotwords_path(asr_data_path: str) -> str:
+    return _sibling_path(asr_data_path, "hotwords.json")
+
+
+def _voiceprints_path(asr_data_path: str) -> str:
+    return _sibling_path(asr_data_path, "voiceprints.json")
 
 
 def build_vector_store(config: Settings) -> VectorStore:
@@ -229,6 +263,8 @@ def build_services(config: Settings = settings) -> AppServices:
         )
     if config.asr_enabled:
         # 会议听记：引擎在首个任务时才拉起 FunASR 模型，这里只建轻量容器
+        app_services.hotwords = HotwordStore(_hotwords_path(config.asr_data_path))
+        app_services.voiceprints = VoiceprintStore(_voiceprints_path(config.asr_data_path))
         app_services.meetings = MeetingService(
             store=MeetingStore(config.asr_data_path),
             transcriber=MeetingTranscriber(speaker_enabled=config.asr_speaker_enabled),
@@ -238,6 +274,9 @@ def build_services(config: Settings = settings) -> AppServices:
                 config.llm_model,
                 trust_env=config.llm_trust_env,
             ),
+            streamer=app_services.ensure_streamer(),
+            hotwords=app_services.hotwords,
+            voiceprints=app_services.voiceprints,
         )
         logger.info("会议听记已启用（数据目录 %s）", config.asr_data_path)
     return app_services

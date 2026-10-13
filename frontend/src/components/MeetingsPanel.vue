@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
-import type { KnowledgeStatus, MeetingChatTurn, MeetingRecord } from '../types/core'
+import type { KnowledgeStatus, MeetingChatTurn, MeetingLiveLine, MeetingRecord, MeetingTodo, MeetingVoiceprint } from '../types/core'
 import { MeetingRecorder, decodeAudioFileToWav } from '../services/recorder'
 import type { RecordingSource } from '../services/recorder'
 import MeetingPoster from './MeetingPoster.vue'
@@ -35,7 +35,7 @@ const title = ref('')
 const uploading = ref(false)
 let timerHandle: number | null = null
 
-// 音源：mic=麦克风；system=系统声音（Windows；共享选择器里勾「同时分享系统音频」）
+// 音源：mic=麦克风；system=系统声音+麦克风混流（Windows；共享选择器里勾「同时分享系统音频」）
 const audioSource = ref<RecordingSource>('mic')
 
 // 总结模板（与知识服务 templates.py 内置清单同步；对标钉钉「选择模板发起听记」：
@@ -83,14 +83,120 @@ const refreshList = async () => {
 
 // ─── 录音 ───
 
+const liveSessionId = ref('')
+const liveLines = ref<MeetingLiveLine[]>([])
+const liveCurrent = ref('')
+const livePoints = ref<string[]>([])
+const liveFailed = ref(false)
+const liveBox = ref<HTMLElement | null>(null)
+
+// 推流队列：600ms 一片；网络卡顿时丢最旧，宁缺字也不无限积压
+const STREAM_QUEUE_MAX = 20
+let streamQueue: Uint8Array[] = []
+let streamPumping = false
+let pointsBusy = false
+let lastPointsLines = 0
+
+const toBase64 = (bytes: Uint8Array) => {
+  let binary = ''
+  const step = 0x8000
+  for (let start = 0; start < bytes.length; start += step) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + step))
+  }
+  return btoa(binary)
+}
+
+const refreshLivePoints = async () => {
+  const id = liveSessionId.value
+  if (!id || pointsBusy) return
+  pointsBusy = true
+  try {
+    livePoints.value = await core.meetingLivePoints(id)
+  } catch {
+    // 会中要点是增值层：失败下一轮再试，不打断录音与字幕
+  } finally {
+    pointsBusy = false
+  }
+}
+
+const pumpStream = async () => {
+  if (streamPumping) return
+  streamPumping = true
+  try {
+    while (streamQueue.length && liveSessionId.value) {
+      const piece = streamQueue.shift()
+      if (!piece) break
+      try {
+        const view = await core.meetingStreamChunk(liveSessionId.value, toBase64(piece))
+        liveLines.value = view.lines
+        liveCurrent.value = view.current
+        if (view.lines.length - lastPointsLines >= 8) {
+          lastPointsLines = view.lines.length
+          void refreshLivePoints()
+        }
+      } catch {
+        // 推流断了就收摊：剩下的音频仍会在录制结束后整段离线转写
+        liveFailed.value = true
+        streamQueue = []
+        break
+      }
+    }
+  } finally {
+    streamPumping = false
+  }
+}
+
+const enqueueChunk = (pcm: Uint8Array) => {
+  streamQueue.push(pcm)
+  if (streamQueue.length > STREAM_QUEUE_MAX) streamQueue.splice(0, streamQueue.length - STREAM_QUEUE_MAX)
+  void pumpStream()
+}
+
+const resetLive = () => {
+  liveSessionId.value = ''
+  liveLines.value = []
+  liveCurrent.value = ''
+  livePoints.value = []
+  liveFailed.value = false
+  streamQueue = []
+  lastPointsLines = 0
+}
+
+// 字幕跟随最新一行（像钉钉那样贴着底部滚动）
+watch(
+  () => liveLines.value.length + liveCurrent.value.length,
+  async () => {
+    await nextTick()
+    if (liveBox.value) liveBox.value.scrollTop = liveBox.value.scrollHeight
+  },
+)
+
+const fallbackTitle = () => new Date().toLocaleString('zh-CN', { hour12: false }) + ' 的会议'
+
 const start = async () => {
   notice.value = ''
+  resetLive()
+  // 先落一条 recording 记录当推流会话；录完的整段上传复用同一条，不落两条听记
   try {
-    await recorder.start(audioSource.value, value => { level.value = value })
+    const session = await core.meetingStreamOpen(title.value.trim() || fallbackTitle(), templateId.value)
+    liveSessionId.value = session.id
+  } catch {
+    liveFailed.value = true
+    showNotice('实时上屏本次不可用（流式模型未就绪），仍可正常录音并转写', 'error')
+  }
+  try {
+    await recorder.start(
+      audioSource.value,
+      value => { level.value = value },
+      liveSessionId.value ? enqueueChunk : undefined,
+    )
     recording.value = true
     elapsed.value = 0
     timerHandle = window.setInterval(() => { elapsed.value = recorder.elapsedSeconds() }, 500)
   } catch (e) {
+    // 采集失败：把刚建的会话记录收掉，别留孤儿条目
+    if (liveSessionId.value) await core.meetingRemove(liveSessionId.value).catch(() => {})
+    resetLive()
     // 采集层抛出的文案已面向用户（取消选择/未勾选音频/不支持），直接展示
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   }
@@ -102,30 +208,47 @@ const stop = async () => {
   level.value = 0
   recording.value = false
   uploading.value = true
+  const sessionId = liveSessionId.value
   try {
     const { blob, durationSeconds } = await recorder.stop()
     if (durationSeconds < 1) {
+      if (sessionId) await core.meetingRemove(sessionId).catch(() => {})
+      resetLive()
       showNotice('录音太短（不足 1 秒），已丢弃', 'error')
       return
     }
-    const fallback = new Date().toLocaleString('zh-CN', { hour12: false })
-    const created = await core.meetingUpload(blob, title.value.trim() || `${fallback} 的会议`, templateId.value)
+    if (sessionId) {
+      try {
+        const final = await core.meetingStreamStop(sessionId)
+        liveLines.value = final.lines
+      } catch {
+        // 收尾包失败不影响整段重跑
+      }
+    }
+    liveSessionId.value = ''
+    streamQueue = []
+    const created = await core.meetingUpload(blob, title.value.trim() || fallbackTitle(), templateId.value, sessionId)
     title.value = ''
     await refreshList()
     await openDetail(created.id)
+    resetLive()
     showNotice('录音已上传，正在转写…')
   } catch (e) {
+    resetLive()
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
     uploading.value = false
   }
 }
 
-const cancelRecording = () => {
+const cancelRecording = async () => {
   stopTimer()
   recording.value = false
   level.value = 0
   recorder.abort()
+  const sessionId = liveSessionId.value
+  resetLive()
+  if (sessionId) await core.meetingRemove(sessionId).catch(() => {})
 }
 
 const stopTimer = () => {
@@ -315,6 +438,212 @@ const remove = async () => {
   }
 }
 
+// ─── 区块状态与关键词（对标钉钉分任务状态：某块失败只补跑那块）───
+
+const BLOCK_LABELS: Record<string, string> = { transcript: '转写', keywords: '关键词', summary: '总结', mindmap: '导图' }
+const BLOCK_STATE_LABELS: Record<string, string> = {
+  pending: '待生成',
+  processing: '生成中',
+  ready: '已生成',
+  failed: '失败',
+  skipped: '未生成',
+}
+
+const blockChips = computed(() => {
+  const blocks = selected.value?.blocks || {}
+  const errors = selected.value?.block_errors || {}
+  return Object.entries(BLOCK_LABELS).map(([key, label]) => ({
+    key,
+    label,
+    state: blocks[key as keyof typeof blocks] || 'pending',
+    error: errors[key as keyof typeof errors] || '',
+  }))
+})
+
+const stateLabel = (state: string) => BLOCK_STATE_LABELS[state] || state
+
+const pendingTodosCount = computed(() => (selected.value?.todos || []).filter(todo => !todo.done).length)
+
+const keywordsBusy = ref(false)
+
+const regenKeywords = async () => {
+  if (!selected.value || keywordsBusy.value) return
+  keywordsBusy.value = true
+  try {
+    selected.value = await core.meetingKeywordsRegenerate(selected.value.id)
+    showNotice('关键词已更新')
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    keywordsBusy.value = false
+  }
+}
+
+// ─── 个性化热词（对标钉钉：转写时优先识别专名，提高准确率）───
+
+const hotwords = ref<string[]>([])
+const hotwordsMax = ref(100)
+const newHotword = ref('')
+const hotwordsBusy = ref(false)
+const hotwordsOpen = ref(false)
+
+const loadHotwords = async () => {
+  try {
+    const result = await core.meetingHotwordsGet()
+    hotwords.value = result.words || []
+    hotwordsMax.value = result.max || 100
+  } catch {
+    // 词表读不到不影响录音：转写按无热词走
+  }
+}
+
+const addHotword = async () => {
+  const word = newHotword.value.trim()
+  if (!word || hotwordsBusy.value) return
+  hotwordsBusy.value = true
+  try {
+    const result = await core.meetingHotwordsAdd([word])
+    hotwords.value = result.words || []
+    hotwordsMax.value = result.max || hotwordsMax.value
+    newHotword.value = ''
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    hotwordsBusy.value = false
+  }
+}
+
+const removeHotword = async (word: string) => {
+  if (hotwordsBusy.value) return
+  hotwordsBusy.value = true
+  try {
+    const result = await core.meetingHotwordRemove(word)
+    hotwords.value = result.words || []
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    hotwordsBusy.value = false
+  }
+}
+
+// ─── 声纹（轻口径：改过的名字会沉淀成声纹，下次自动认；必须可删）───
+
+const voiceprints = ref<MeetingVoiceprint[]>([])
+
+const loadVoiceprints = async () => {
+  try {
+    voiceprints.value = (await core.meetingVoiceprints()) || []
+  } catch {
+    // 读不到不影响改名，只是下次不会自动认领
+  }
+}
+
+const removeVoiceprint = async (name: string) => {
+  if (hotwordsBusy.value) return
+  hotwordsBusy.value = true
+  try {
+    voiceprints.value = (await core.meetingVoiceprintRemove(name)) || []
+    showNotice(`已删除「${name}」的声纹，之后的会议不再自动认领`)
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    hotwordsBusy.value = false
+  }
+}
+
+// ─── 重新转写（加了热词后让老记录重跑全管线）───
+
+const retranscribeBusy = ref(false)
+
+const retranscribe = async () => {
+  if (!selected.value || retranscribeBusy.value) return
+  retranscribeBusy.value = true
+  try {
+    await core.meetingRetranscribe(selected.value.id)
+    await openDetail(selected.value.id)
+    showNotice('已重新排队转写，热词将参与识别')
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    retranscribeBusy.value = false
+  }
+}
+
+// ─── 待办（一等实体：勾选完成、编辑、删除、手工新增）───
+
+const newTodoTask = ref('')
+const newTodoOwner = ref('')
+const todoBusy = ref(false)
+const editingTodoId = ref('')
+const editingTask = ref('')
+
+const addTodo = async () => {
+  if (!selected.value || todoBusy.value) return
+  const task = newTodoTask.value.trim()
+  if (!task) {
+    showNotice('请先填写待办内容', 'error')
+    return
+  }
+  todoBusy.value = true
+  try {
+    selected.value = await core.meetingTodoAdd(selected.value.id, task, newTodoOwner.value.trim())
+    newTodoTask.value = ''
+    newTodoOwner.value = ''
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    todoBusy.value = false
+  }
+}
+
+const patchTodo = async (todo: MeetingTodo, patch: Partial<MeetingTodo>) => {
+  if (!selected.value || todoBusy.value) return
+  todoBusy.value = true
+  try {
+    selected.value = await core.meetingTodoUpdate(
+      selected.value.id,
+      todo.id,
+      patch.task ?? todo.task,
+      patch.owner_hint ?? todo.owner_hint,
+      patch.due_hint ?? todo.due_hint,
+      patch.done ?? todo.done,
+    )
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    editingTodoId.value = ''
+    todoBusy.value = false
+  }
+}
+
+const toggleTodo = (todo: MeetingTodo) => patchTodo(todo, { done: !todo.done })
+
+const startEditTodo = (todo: MeetingTodo) => {
+  editingTodoId.value = todo.id
+  editingTask.value = todo.task
+}
+
+const saveEditTodo = (todo: MeetingTodo) => {
+  const task = editingTask.value.trim()
+  if (!task) {
+    showNotice('待办内容不能为空', 'error')
+    return
+  }
+  patchTodo(todo, { task })
+}
+
+const removeTodo = async (todo: MeetingTodo) => {
+  if (!selected.value || todoBusy.value) return
+  todoBusy.value = true
+  try {
+    selected.value = await core.meetingTodoRemove(selected.value.id, todo.id)
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    todoBusy.value = false
+  }
+}
+
 // ─── 思维导图（LLM 大纲 → 自绘结构树，零依赖必然可见；markmap 图形渲染待查后置）───
 
 const mindmapBusy = ref(false)
@@ -407,10 +736,11 @@ const buildMarkdown = (meeting: MeetingRecord) => {
   const summary = meeting.summary
   if (summary?.minutes) lines.push('## 纪要', summary.minutes, '')
   if (summary?.key_points?.length) lines.push('## 要点', ...summary.key_points.map(p => `- ${p}`), '')
-  if (summary?.todos?.length) {
-    lines.push('## 待办', ...summary.todos.map(t => {
+  if (meeting.keywords?.length) lines.push('## 关键词', meeting.keywords.join('、'), '')
+  if (meeting.todos?.length) {
+    lines.push('## 待办', ...meeting.todos.map(t => {
       const suffix = t.owner_hint || t.due_hint ? `（${[t.owner_hint, t.due_hint].filter(Boolean).join('，')}）` : ''
-      return `- [ ] ${t.task}${suffix}`
+      return `- [${t.done ? 'x' : ' '}] ${t.task}${suffix}`
     }), '')
   }
   lines.push('## 转写全文')
@@ -523,6 +853,52 @@ const copyPoster = async () => {
   }
 }
 
+// ─── 播放联动（智能切片章节 + 转写点击定位；对标钉钉结构化章节纪要） ───
+
+const audioPlayer = ref<HTMLAudioElement | null>(null)
+const playhead = ref(0)
+const playing = ref(false)
+const meetingQuery = ref('')
+
+const chapters = computed(() => selected.value?.summary?.chapters ?? [])
+const activeChapterIndex = computed(() => {
+  let index = -1
+  chapters.value.forEach((chapter, i) => { if (playhead.value >= chapter.start) index = i })
+  return index
+})
+const activeSegmentIndex = computed(() => {
+  const segments = selected.value?.segments ?? []
+  let index = -1
+  segments.forEach((segment, i) => { if (playhead.value >= segment.start) index = i })
+  return index
+})
+
+const filteredMeetings = computed(() => {
+  const query = meetingQuery.value.trim().toLowerCase()
+  if (!query) return meetings.value
+  return meetings.value.filter(meeting =>
+    meeting.title.toLowerCase().includes(query) || (previewOf(meeting) || '').toLowerCase().includes(query)
+  )
+})
+
+const onTimeUpdate = () => {
+  if (audioPlayer.value) playhead.value = audioPlayer.value.currentTime
+}
+
+const seekTo = (seconds: number) => {
+  const audio = audioPlayer.value
+  if (!audio) return
+  audio.currentTime = seconds
+  void audio.play().catch(() => {})
+}
+
+// 播放跟随：转写区滚动到当前句（仅播放中，避免浏览时被抢滚动）
+watch(activeSegmentIndex, async () => {
+  if (!playing.value || activeSegmentIndex.value < 0) return
+  await nextTick()
+  document.getElementById(`meeting-segment-${activeSegmentIndex.value}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+})
+
 // ─── 展示辅助 ───
 
 // 列表一行摘要预览（对标钉钉听记列表的 AI 摘要列）：纪要或首个小节截断
@@ -545,16 +921,26 @@ const formatTime = (seconds: number) => {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
+// 列表缩略图：标题首字 + 哈希配色（对标钉钉列表的文档缩略图块）
+const THUMB_COLORS = ['#5b8def', '#7c6cf2', '#34a7a1', '#e0833c', '#d9648a', '#5aa66a', '#ba6ad6']
+const thumbColor = (title: string) => {
+  let hash = 0
+  for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) >>> 0
+  return THUMB_COLORS[hash % THUMB_COLORS.length]
+}
+
 const formatDate = (value: string) => value.replace('T', ' ').slice(0, 16)
 
 const durationLabel = (meeting: MeetingRecord) =>
   meeting.duration_seconds ? formatTime(meeting.duration_seconds) : '--:--'
 
-const statusLabel = computed(() => ({
+const statusLabels: Record<string, string> = {
+  recording: '录制中',
   processing: '转写中',
   completed: '已完成',
   failed: '失败',
-}))
+}
+const statusLabel = (status: string) => statusLabels[status] || status
 
 const levelBars = computed(() => {
   const active = Math.min(5, Math.max(0, Math.round(level.value * 8)))
@@ -563,7 +949,13 @@ const levelBars = computed(() => {
 
 onMounted(async () => {
   await refreshStatus()
-  if (status.value.loggedIn) await refreshList()
+  if (status.value.loggedIn) {
+    await refreshList()
+    void loadHotwords()
+    void loadVoiceprints()
+    // 流式模型冷加载实测约 70s，进页面就后台预热，别让用户在按下录音后等首片
+    void core.meetingStreamWarm().catch(() => {})
+  }
 })
 
 onBeforeUnmount(() => {
@@ -628,7 +1020,7 @@ onBeforeUnmount(() => {
                 type="button"
                 :disabled="uploading"
                 @click="audioSource = 'system'"
-              >系统声音</button>
+              >系统声音+麦克风</button>
             </div>
             <input v-model="title" class="setting-input meeting-title-input" type="text" placeholder="会议主题（可选，默认用当前时间）" @keydown.enter="start" />
             <input ref="audioFileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg" hidden @change="onImportFile" />
@@ -640,9 +1032,52 @@ onBeforeUnmount(() => {
               开始录音
             </button>
           </div>
+          <!-- 个性化热词（对标钉钉 hotwords）：转写时优先识别专名 -->
+          <div class="meeting-hotwords">
+            <button class="text-button" type="button" @click="hotwordsOpen = !hotwordsOpen">
+              {{ hotwordsOpen ? '收起识别热词与声纹' : `识别热词 ${hotwords.length}/${hotwordsMax} · 声纹 ${voiceprints.length}` }}
+            </button>
+            <div v-if="hotwordsOpen" class="meeting-hotwords-body">
+              <p class="meeting-hint">
+                加入人名、产品名、项目名等专名，转写时优先识别。改完可在听记详情页点「重新转写」让老记录也用上。
+              </p>
+              <div v-if="hotwords.length" class="meeting-keywords">
+                <span v-for="word in hotwords" :key="word" class="meeting-keyword is-owned">
+                  {{ word }}
+                  <button type="button" :disabled="hotwordsBusy" aria-label="删除热词" @click="removeHotword(word)">×</button>
+                </span>
+              </div>
+              <p v-else class="meeting-hint">还没有热词。</p>
+              <div class="meeting-todo-add">
+                <input
+                  v-model="newHotword"
+                  class="meeting-todo-input"
+                  type="text"
+                  placeholder="新增一个热词…"
+                  :disabled="hotwordsBusy"
+                  @keyup.enter="addHotword"
+                />
+                <button class="text-button" type="button" :disabled="hotwordsBusy || !newHotword.trim()" @click="addHotword">添加</button>
+              </div>
+              <!-- 声纹：把发言人改成真名即自动登记，之后的会议会自己认出这个人 -->
+              <div class="meeting-voiceprints">
+                <div class="meeting-live-title">我的声纹（{{ voiceprints.length }}）</div>
+                <p class="meeting-hint">
+                  在听记里把「说话人 N」改成真名，就会记下这个人的声纹；以后的会议自动认领，不必再改一次。声纹属个人生物特征，可随时删除。
+                </p>
+                <div v-if="voiceprints.length" class="meeting-keywords">
+                  <span v-for="item in voiceprints" :key="item.name" class="meeting-keyword is-owned">
+                    {{ item.name }} · {{ item.sample_seconds.toFixed(0) }}s
+                    <button type="button" :disabled="hotwordsBusy" aria-label="删除声纹" @click="removeVoiceprint(item.name)">×</button>
+                  </span>
+                </div>
+                <p v-else class="meeting-hint">还没有登记过声纹。</p>
+              </div>
+            </div>
+          </div>
         </div>
         <p v-if="!recording && !uploading && audioSource === 'system'" class="setting-hint meeting-source-hint">
-          录制电脑正在播放的声音（线上会议开系统声音即可录到对方发言）。点开始后会弹出共享选择器：选「整个屏幕」并勾选「同时分享系统音频」。
+          线上会议用这个：同时录下电脑正在播放的声音（对方发言）与你自己说的话，两路在本地合成一路音再转写。点「开始录音」后会弹出共享选择器：选「整个屏幕」并勾选「同时分享系统音频」（选单个窗口目前拿不到系统声音）。
         </p>
         <div v-else-if="recording" class="meeting-record-active">
           <span class="meeting-level" aria-hidden="true">
@@ -653,6 +1088,24 @@ onBeforeUnmount(() => {
           <span class="meeting-hint">正在录音，请保持应用打开</span>
           <button class="primary-button" type="button" @click="stop">完成并转写</button>
           <button class="text-button" type="button" @click="cancelRecording">取消</button>
+          <!-- 实时上屏（对标钉钉边说边出字 + 会中要点）：预览性质，终态以录制后的整段转写为准 -->
+          <div v-if="liveSessionId" ref="liveBox" class="meeting-live">
+            <div v-if="livePoints.length" class="meeting-live-points">
+              <div class="meeting-live-title">会中要点</div>
+              <ul>
+                <li v-for="(point, index) in livePoints" :key="index">{{ point }}</li>
+              </ul>
+            </div>
+            <div class="meeting-live-title">实时字幕</div>
+            <div class="meeting-live-lines">
+              <p v-for="(line, index) in liveLines" :key="index" class="meeting-live-line">
+                <span class="meeting-segment-time">{{ formatTime(line.at) }}</span>{{ line.text }}
+              </p>
+              <p v-if="liveCurrent" class="meeting-live-line is-current">{{ liveCurrent }}</p>
+              <p v-if="!liveLines.length && !liveCurrent" class="meeting-hint">正在听…说几句话就出字</p>
+            </div>
+          </div>
+          <p v-else-if="liveFailed" class="meeting-hint">实时上屏本次不可用，录完照常出完整转写</p>
         </div>
         <div v-else class="meeting-record-active">
           <span class="knowledge-spinner" aria-hidden="true" />
@@ -670,6 +1123,16 @@ onBeforeUnmount(() => {
               <template v-if="selected.duration_seconds"> · 时长 {{ durationLabel(selected) }}</template>
               <template v-if="selected.speaker_count"> · {{ selected.speaker_count }} 位发言人</template>
             </p>
+            <!-- 区块独立状态（对标钉钉：转写/关键词/总结/导图各自一个状态，失败只补跑那块） -->
+            <div class="meeting-block-chips">
+              <span
+                v-for="chip in blockChips"
+                :key="chip.key"
+                class="meeting-block-chip"
+                :class="`is-${chip.state}`"
+                :title="chip.error || `${chip.label}：${stateLabel(chip.state)}`"
+              >{{ chip.label }} · {{ stateLabel(chip.state) }}</span>
+            </div>
           </div>
           <div class="meeting-detail-actions">
             <button class="text-button" type="button" :disabled="archiving || selected.status !== 'completed'" @click="archive">
@@ -697,6 +1160,15 @@ onBeforeUnmount(() => {
             >
               {{ summaryRegenBusy ? '生成中…' : '按模板重生成' }}
             </button>
+            <button
+              class="text-button"
+              type="button"
+              :disabled="retranscribeBusy || selected.status === 'processing'"
+              title="重跑转写+总结+关键词+导图（改了热词后让本场用上）"
+              @click="retranscribe"
+            >
+              {{ retranscribeBusy ? '排队中…' : '重新转写' }}
+            </button>
             <button class="text-button meeting-danger" type="button" @click="remove">
               {{ confirmingDelete ? '再点一次确认删除' : '删除' }}
             </button>
@@ -712,54 +1184,153 @@ onBeforeUnmount(() => {
           转写失败：{{ selected.error || '未知原因' }}
         </p>
           <template v-else>
-            <div v-if="selected.summary?.sections?.length" class="meeting-section-nav" role="navigation" aria-label="章节导航">
-              <button v-for="(section, index) in selected.summary.sections" :key="section.title" type="button" class="meeting-section-chip" @click="scrollToSection(index)">{{ section.title }}</button>
-            </div>
             <div class="meeting-detail-body">
               <div class="meeting-detail-main">
-            <audio v-if="audioUrl" :src="audioUrl" controls class="meeting-audio" />
-
-            <template v-if="selected.summary?.sections?.length">
-              <div v-for="(section, index) in selected.summary.sections" :key="section.title" :id="`meeting-section-${index}`" class="meeting-summary">
-                <h3>{{ section.title }}</h3>
-                <ul v-if="section.text.includes('\n- ') || section.text.startsWith('- ')">
-                  <li v-for="(line, index) in section.text.split('\n').filter(l => l.trim())" :key="index">
-                    {{ line.replace(/^- */, '').trim() }}
-                  </li>
-                </ul>
-                <p v-else>{{ section.text }}</p>
-              </div>
-            </template>
-            <template v-else>
-              <div v-if="selected.summary?.minutes" class="meeting-summary">
-                <h3>纪要</h3>
-                <p>{{ selected.summary.minutes }}</p>
-              </div>
-              <div v-if="selected.summary?.key_points?.length" class="meeting-summary">
-                <h3>要点</h3>
-                <ul>
-                  <li v-for="(point, index) in selected.summary.key_points" :key="index">{{ point }}</li>
-                </ul>
-              </div>
-            </template>
-            <div v-if="selected.summary?.todos?.length" class="meeting-summary">
-              <h3>待办</h3>
-              <ul class="meeting-todos">
-                <li v-for="(todo, index) in selected.summary.todos" :key="index">
-                  {{ todo.task
-                  }}<span v-if="todo.owner_hint" class="meeting-todo-owner">{{ todo.owner_hint }}</span
-                  ><span v-if="todo.due_hint" class="meeting-todo-owner">{{ todo.due_hint }}</span>
-                </li>
-              </ul>
+            <!-- 播放器卡：智能切片章节 + 音频，详情页的驾驶台 -->
+            <div class="meeting-player-card">
+            <div v-if="chapters.length" class="meeting-chapters" role="group" aria-label="智能切片章节">
+              <button
+                v-for="(chapter, index) in chapters"
+                :key="chapter.start"
+                type="button"
+                :class="['meeting-chapter', { on: index === activeChapterIndex }]"
+                :title="chapter.gist"
+                @click="seekTo(chapter.start)"
+              >
+                <span class="meeting-chapter-time">{{ formatTime(chapter.start) }}</span>
+                <span class="meeting-chapter-name">{{ chapter.title }}</span>
+              </button>
+            </div>
+            <audio
+              v-if="audioUrl"
+              ref="audioPlayer"
+              :src="audioUrl"
+              controls
+              class="meeting-audio"
+              @timeupdate="onTimeUpdate"
+              @play="playing = true"
+              @pause="playing = false"
+              @ended="playing = false"
+            />
             </div>
 
-            <div class="meeting-mindmap">
-              <div class="meeting-mindmap-head">
-                <h3 class="meeting-transcript-title">思维导图</h3>
+            <!-- 纪要卡 -->
+            <section class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>纪要</h3>
+                <span class="meeting-block-tag">{{ templateName(selected.template_id) }}</span>
+              </header>
+              <div v-if="selected.summary?.sections?.length" class="meeting-section-nav" role="navigation" aria-label="小节导航">
+                <button v-for="(section, index) in selected.summary.sections" :key="section.title" type="button" class="meeting-section-chip" @click="scrollToSection(index)">{{ section.title }}</button>
+              </div>
+              <template v-if="selected.summary?.sections?.length">
+                <div v-for="(section, index) in selected.summary.sections" :key="section.title" :id="`meeting-section-${index}`" class="meeting-summary">
+                  <h3>{{ section.title }}</h3>
+                  <ul v-if="section.text.includes('\n- ') || section.text.startsWith('- ')">
+                    <li v-for="(line, index) in section.text.split('\n').filter(l => l.trim())" :key="index">
+                      {{ line.replace(/^- */, '').trim() }}
+                    </li>
+                  </ul>
+                  <p v-else>{{ section.text }}</p>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="selected.summary?.minutes" class="meeting-summary">
+                  <h3>全文</h3>
+                  <p>{{ selected.summary.minutes }}</p>
+                </div>
+                <div v-if="selected.summary?.key_points?.length" class="meeting-summary">
+                  <h3>要点</h3>
+                  <ul>
+                    <li v-for="(point, index) in selected.summary.key_points" :key="index">{{ point }}</li>
+                  </ul>
+                </div>
+              </template>
+              <p v-if="!selected.summary || (!selected.summary.minutes && !selected.summary.key_points?.length && !selected.summary.sections?.length)" class="meeting-hint">
+                还没有纪要内容，点上方「按模板重生成」用 AI 提炼
+              </p>
+            </section>
+
+            <!-- 关键词卡（对标钉钉 queryKeywords：独立区块，可单独补跑） -->
+            <section class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>关键词</h3>
+                <button class="text-button" type="button" :disabled="keywordsBusy || selected.status !== 'completed'" @click="regenKeywords">
+                  {{ keywordsBusy ? '生成中…' : selected.keywords?.length ? '重新生成' : '生成关键词' }}
+                </button>
+              </header>
+              <div v-if="selected.keywords?.length" class="meeting-keywords">
+                <span v-for="word in selected.keywords" :key="word" class="meeting-keyword">{{ word }}</span>
+              </div>
+              <p v-else-if="!keywordsBusy" class="meeting-hint">还没有关键词，点「生成关键词」由 AI 从转写提炼（对标钉钉听记的关键词位）</p>
+            </section>
+
+            <!-- 待办卡（一等实体：勾选完成 / 点击编辑 / 删除 / 手工补一条） -->
+            <section class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>待办</h3>
+                <span class="meeting-block-count">
+                  {{ selected.todos?.length ? `${pendingTodosCount} 项未完成 / 共 ${selected.todos.length} 项` : '暂无待办' }}
+                </span>
+              </header>
+              <ul v-if="selected.todos?.length" class="meeting-todos">
+                <li v-for="todo in selected.todos" :key="todo.id" class="meeting-todo-item" :class="{ 'is-done': todo.done }">
+                  <input
+                    class="meeting-todo-check"
+                    type="checkbox"
+                    :checked="todo.done"
+                    :disabled="todoBusy"
+                    title="勾选完成"
+                    @change="toggleTodo(todo)"
+                  />
+                  <template v-if="editingTodoId === todo.id">
+                    <input
+                      v-model="editingTask"
+                      class="meeting-todo-input"
+                      type="text"
+                      @keyup.enter="saveEditTodo(todo)"
+                      @keyup.esc="editingTodoId = ''"
+                    />
+                    <button class="text-button" type="button" :disabled="todoBusy" @click="saveEditTodo(todo)">保存</button>
+                    <button class="text-button" type="button" @click="editingTodoId = ''">取消</button>
+                  </template>
+                  <template v-else>
+                    <button class="meeting-todo-text" type="button" title="点击修改内容" @click="startEditTodo(todo)">{{ todo.task }}</button>
+                    <span v-if="todo.owner_hint" class="meeting-todo-owner">{{ todo.owner_hint }}</span>
+                    <span v-if="todo.due_hint" class="meeting-todo-owner">{{ todo.due_hint }}</span>
+                    <button class="text-button meeting-danger" type="button" :disabled="todoBusy" @click="removeTodo(todo)">删除</button>
+                  </template>
+                </li>
+              </ul>
+              <div class="meeting-todo-add">
+                <input
+                  v-model="newTodoTask"
+                  class="meeting-todo-input"
+                  type="text"
+                  placeholder="补一条待办…"
+                  :disabled="todoBusy"
+                  @keyup.enter="addTodo"
+                />
+                <input
+                  v-model="newTodoOwner"
+                  class="meeting-todo-input meeting-todo-owner-input"
+                  type="text"
+                  placeholder="负责人（可空）"
+                  :disabled="todoBusy"
+                  @keyup.enter="addTodo"
+                />
+                <button class="text-button" type="button" :disabled="todoBusy || !newTodoTask.trim()" @click="addTodo">添加</button>
+              </div>
+            </section>
+
+            <!-- 思维导图卡 -->
+            <section class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>思维导图</h3>
                 <button class="text-button" type="button" :disabled="mindmapBusy" @click="regenMindmap">
                   {{ mindmapBusy ? '生成中…（AI 从转写提取）' : selected.mindmap ? '重新生成' : '生成导图' }}
                 </button>
-              </div>
+              </header>
               <div v-if="mindmapTree.title || mindmapTree.branches.length" class="meeting-map-tree">
                 <div class="meeting-map-root">{{ mindmapTree.title || selected.title }}</div>
                 <div class="meeting-map-branches">
@@ -779,21 +1350,35 @@ onBeforeUnmount(() => {
               <p v-else-if="!mindmapBusy" class="meeting-hint">
                 {{ selected.segments.length ? '还没有导图，点「生成导图」用 AI 从转写提炼结构' : '本次录音没有可提炼的发言内容' }}
               </p>
-            </div>
+            </section>
 
-            <h3 class="meeting-transcript-title">转写记录</h3>
+            <!-- 转写卡 -->
+            <section class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>转写记录</h3>
+                <span class="meeting-block-count">{{ selected.segments.length }} 句 · 点击句子跳转播放</span>
+              </header>
           <div class="meeting-transcript">
-            <div v-for="(segment, index) in selected.segments" :key="index" class="meeting-segment">
+            <div
+              v-for="(segment, index) in selected.segments"
+              :id="`meeting-segment-${index}`"
+              :key="index"
+              :class="['meeting-segment', { on: index === activeSegmentIndex }]"
+              :title="'点击跳转播放'"
+              @click="seekTo(segment.start)"
+            >
               <template v-if="renamingSpeaker === segment.speaker">
-                <input
-                  v-model="renamingName"
-                  class="setting-input meeting-rename-input"
-                  type="text"
-                  @keydown.enter="confirmRename"
-                  @keydown.esc="renamingSpeaker = ''"
-                />
-                <button class="text-button" type="button" @click="confirmRename">确定</button>
-                <button class="text-button" type="button" @click="renamingSpeaker = ''">取消</button>
+                <div class="meeting-segment-edit" @click.stop>
+                  <input
+                    v-model="renamingName"
+                    class="setting-input meeting-rename-input"
+                    type="text"
+                    @keydown.enter="confirmRename"
+                    @keydown.esc="renamingSpeaker = ''"
+                  />
+                  <button class="text-button" type="button" @click="confirmRename">确定</button>
+                  <button class="text-button" type="button" @click="renamingSpeaker = ''">取消</button>
+                </div>
               </template>
               <template v-else>
                 <button class="meeting-speaker-chip" type="button" :title="'点击改名'" @click="beginRename(segment.speaker)">
@@ -804,6 +1389,7 @@ onBeforeUnmount(() => {
               </template>
             </div>
           </div>
+            </section>
               </div>
               <aside class="meeting-qa">
                 <div class="meeting-qa-head">
@@ -876,9 +1462,14 @@ onBeforeUnmount(() => {
 
       <!-- 记录列表 -->
       <div class="card meeting-list-card">
-        <div class="card-header"><h2>听记记录</h2></div>
+        <div class="card-header">
+          <h2>听记记录</h2>
+          <input v-model="meetingQuery" class="setting-input meeting-search" type="text" placeholder="搜索标题或摘要…" />
+        </div>
         <p v-if="!meetings.length" class="meeting-hint">还没有记录，点上方「开始录音」创建第一条听记。</p>
-        <div v-for="meeting in meetings" :key="meeting.id" class="meeting-item" @click="openDetail(meeting.id)">
+        <p v-else-if="!filteredMeetings.length" class="meeting-hint">没有匹配「{{ meetingQuery }}」的记录。</p>
+        <div v-for="meeting in filteredMeetings" :key="meeting.id" class="meeting-item" @click="openDetail(meeting.id)">
+          <span class="meeting-thumb" :style="{ background: thumbColor(meeting.title) }" aria-hidden="true">{{ meeting.title.slice(0, 1) }}</span>
           <div class="meeting-item-main">
             <strong>{{ meeting.title }}</strong>
             <span v-if="previewOf(meeting)" class="meeting-item-preview">{{ previewOf(meeting) }}</span>
@@ -890,7 +1481,7 @@ onBeforeUnmount(() => {
           </div>
           <span :class="['meeting-status', meeting.status]">
             <span v-if="meeting.status === 'processing'" class="knowledge-spinner" aria-hidden="true" />
-            {{ statusLabel[meeting.status] }}
+            {{ statusLabel(meeting.status) }}
           </span>
         </div>
       </div>

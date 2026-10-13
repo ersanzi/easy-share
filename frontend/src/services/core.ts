@@ -45,11 +45,26 @@
   MeetingArchiveToKnowledge,
   MeetingAsk,
   MeetingDetail,
+  MeetingKeywordsRegenerate,
+  MeetingHotwordRemove,
+  MeetingHotwordsAdd,
+  MeetingHotwordsGet,
   MeetingMindmapRegenerate,
   MeetingSummaryRegenerate,
   MeetingRemove,
+  MeetingRetranscribe,
+  MeetingTodoAdd,
+  MeetingTodoRemove,
+  MeetingTodoUpdate,
   MeetingsList,
   MeetingSpeakerRename,
+  MeetingStreamChunk,
+  MeetingStreamOpen,
+  MeetingStreamStop,
+  MeetingStreamWarm,
+  MeetingVoiceprintRemove,
+  MeetingVoiceprintsGet,
+  MeetingLivePoints,
   McpConnectionGet,
   McpConnectionRegenerate,
   MySpaces,
@@ -98,9 +113,11 @@ import type {
   ManagedUserPage,
   AiCapabilityConfig,
   MarketItem,
-  MeetingArchiveResult,
-  MeetingAskResult,
+  MeetingArchiveResult,  MeetingAskResult,
   MeetingChatTurn,
+  MeetingLiveView,
+  MeetingHotwords,
+  MeetingVoiceprint,
   McpConnection,
   MeetingRecord,
   PluginInfo,
@@ -166,13 +183,36 @@ export const core = {
     MeetingSummaryRegenerate(id, templateId) as Promise<MeetingRecord>,
   meetingAsk: (id: string, question: string, history: MeetingChatTurn[]) =>
     MeetingAsk(id, question, history) as Promise<MeetingAskResult>,
+  // 区块级补跑与待办实体（对标钉钉分任务状态 + MinutesTodoI）
+  meetingKeywordsRegenerate: (id: string) => MeetingKeywordsRegenerate(id) as Promise<MeetingRecord>,
+  meetingTodoAdd: (id: string, task: string, ownerHint = '', dueHint = '') =>
+    MeetingTodoAdd(id, task, ownerHint, dueHint) as Promise<MeetingRecord>,
+  meetingTodoUpdate: (id: string, todoId: string, task: string, ownerHint: string, dueHint: string, done: boolean) =>
+    MeetingTodoUpdate(id, todoId, task, ownerHint, dueHint, done) as Promise<MeetingRecord>,
+  meetingTodoRemove: (id: string, todoId: string) => MeetingTodoRemove(id, todoId) as Promise<MeetingRecord>,
+  // 实时上屏：开会话 → 边录边推 600ms 分片 → 收尾；终态仍由整段离线重跑给出
+  meetingStreamWarm: () => MeetingStreamWarm() as Promise<void>,
+  meetingStreamOpen: (title: string, templateId = '') => MeetingStreamOpen(title, templateId) as Promise<MeetingRecord>,
+  meetingStreamChunk: (id: string, pcmBase64: string) => MeetingStreamChunk(id, pcmBase64) as Promise<MeetingLiveView>,
+  meetingStreamStop: (id: string) => MeetingStreamStop(id) as Promise<MeetingLiveView>,
+  meetingLivePoints: (id: string) => MeetingLivePoints(id) as Promise<string[]>,
+  // 个性化热词与重新转写（加了热词后让老记录重跑）
+  meetingHotwordsGet: () => MeetingHotwordsGet() as Promise<MeetingHotwords>,
+  meetingHotwordsAdd: (words: string[]) => MeetingHotwordsAdd(words) as Promise<MeetingHotwords>,
+  meetingHotwordRemove: (word: string) => MeetingHotwordRemove(word) as Promise<MeetingHotwords>,
+  meetingRetranscribe: (id: string) => MeetingRetranscribe(id) as Promise<MeetingRecord>,
+  // 声纹元数据查看与删除（生物特征数据必须可删）
+  meetingVoiceprints: () => MeetingVoiceprintsGet() as Promise<MeetingVoiceprint[]>,
+  meetingVoiceprintRemove: (name: string) => MeetingVoiceprintRemove(name) as Promise<MeetingVoiceprint[]>,
   mcpInfo: () => McpConnectionGet() as Promise<McpConnection>,
   mcpRegenerate: () => McpConnectionRegenerate() as Promise<McpConnection>,
-  meetingUpload: async (blob: Blob, title: string, templateId = ''): Promise<MeetingRecord> => {
+  meetingUpload: async (blob: Blob, title: string, templateId = '', meetingId = ''): Promise<MeetingRecord> => {
     const form = new FormData()
     form.append('audio', blob, 'meeting.wav')
     form.append('title', title)
     if (templateId) form.append('template_id', templateId)
+    // 复用实时会话先建的那条记录，避免一场会落两条听记
+    if (meetingId) form.append('meeting_id', meetingId)
     const response = await fetch('/kapi/meetings/transcribe', { method: 'POST', body: form })
     if (!response.ok) throw new Error((await response.text()) || `上传失败（${response.status}）`)
     return response.json()

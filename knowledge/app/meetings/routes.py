@@ -6,6 +6,7 @@ owner 可见性口径与 2b/2c 一致：owner 为空=共享，非空仅本人与
 from __future__ import annotations
 
 import logging
+import threading
 import urllib.parse
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, status
@@ -82,8 +83,12 @@ async def transcribe_meeting(
     audio: UploadFile,
     title: str = Form(""),
     template_id: str = Form(""),
+    meeting_id: str = Form(""),
 ) -> dict:
-    """上传会议录音，转写+总结异步执行；立即返回 processing 记录，前端轮询详情。"""
+    """上传会议录音，转写+总结异步执行；立即返回 processing 记录，前端轮询详情。
+
+    meeting_id 非空时复用该记录（实时录制会话先建的那条），不再新建。
+    """
     service = _meetings(request)
     user = _current_user(request)
     owner = (user or {}).get("username")
@@ -93,10 +98,175 @@ async def transcribe_meeting(
         owner=owner,
         max_bytes=_services(request).config.meeting_max_upload_bytes,
         template_id=template_id.strip() or None,
+        meeting_id=meeting_id.strip() or None,
     )
     service.submit(meta["id"])
     logger.info("会议听记已受理: id=%s owner=%s title=%s", meta["id"], owner, meta["title"])
     return meta
+
+
+# --- 实时上屏（边说边出字；预览性质，终态仍由上面的整段离线重跑给出） ---
+
+# 单次推流片段的硬上限（600ms@16k s16 ≈ 19KB，留足冗余防大包打爆内存）
+_STREAM_MAX_BYTES = 1024 * 1024
+
+
+@router.post("/meetings/stream/warm", status_code=status.HTTP_202_ACCEPTED)
+def warm_stream(request: Request) -> dict:
+    """后台预热流式模型：听记页一开就调，避免第一个分片卡在几十秒的权重冷加载。"""
+    service = _meetings(request)
+    if service.streamer is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "实时转写不可用")
+    threading.Thread(target=service.streamer.prewarm, daemon=True).start()
+    return {"warming": True}
+
+
+@router.post("/meetings/stream/session", status_code=status.HTTP_201_CREATED)
+def open_stream_session(
+    request: Request,
+    title: str = Form(""),
+    template_id: str = Form(""),
+) -> dict:
+    """开一场录制会话，先落一条 recording 记录，返回的 id 即推流会话 id。"""
+    service = _meetings(request)
+    user = _current_user(request)
+    meta = service.open_stream(
+        title=title.strip(),
+        owner=(user or {}).get("username"),
+        template_id=template_id.strip() or None,
+    )
+    return meta
+
+
+def _stream_meeting_or_404(service, meeting_id: str, request: Request) -> dict:
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_visible(meta, _current_user(request))
+    return meta
+
+
+@router.post("/meetings/{meeting_id}/stream")
+async def feed_stream(meeting_id: str, request: Request) -> dict:
+    """推一段 PCM16/16kHz/单声道，回当前已上屏行与进行中的一句。"""
+    service = _meetings(request)
+    _stream_meeting_or_404(service, meeting_id, request)
+    body = await request.body()
+    if len(body) > _STREAM_MAX_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "单次推流片段过大")
+    return service.feed_stream(meeting_id, body)
+
+
+@router.post("/meetings/{meeting_id}/stream/stop")
+def stop_stream(meeting_id: str, request: Request) -> dict:
+    """结束推流会话（冲掉尾包），返回完整实时字幕行。"""
+    service = _meetings(request)
+    _stream_meeting_or_404(service, meeting_id, request)
+    return service.close_stream(meeting_id)
+
+
+@router.get("/meetings/{meeting_id}/stream/live")
+def stream_live(meeting_id: str, request: Request) -> dict:
+    """不推音频也能取当前上屏状态（前端断线重连/切走再回来时用）。"""
+    service = _meetings(request)
+    _stream_meeting_or_404(service, meeting_id, request)
+    return service.streamer.snapshot(meeting_id) if service.streamer else {
+        "lines": [], "current": "", "elapsed_seconds": 0
+    }
+
+
+@router.post("/meetings/{meeting_id}/live-points")
+def live_points(meeting_id: str, request: Request) -> dict:
+    """会中要点（对标钉钉实时摘要树）：LLM 基于已上屏内容归纳，随录随长。"""
+    service = _meetings(request)
+    _stream_meeting_or_404(service, meeting_id, request)
+    return {"points": service.live_points(meeting_id)}
+
+
+# --- 个性化热词（必须先于 /meetings/{meeting_id} 注册，否则 "hotwords" 会被当成会议 id） ---
+
+class HotwordsBody(BaseModel):
+    """批量新增热词；单条也以长度为 1 的数组提交。"""
+
+    words: list[str] = []
+
+
+@router.get("/meetings/hotwords")
+def get_hotwords(request: Request) -> dict:
+    from app.meetings.hotwords import MAX_WORDS_PER_USER
+
+    store = _services(request).hotwords
+    if store is None:
+        return {"words": [], "max": MAX_WORDS_PER_USER}
+    user = _current_user(request)
+    return {"words": store.list((user or {}).get("username")), "max": MAX_WORDS_PER_USER}
+
+
+@router.post("/meetings/hotwords")
+def add_hotwords(body: HotwordsBody, request: Request) -> dict:
+    from app.meetings.hotwords import HotwordError, MAX_WORDS_PER_USER
+
+    store = _services(request).hotwords
+    if store is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "热词存储不可用")
+    user = _current_user(request)
+    try:
+        words = store.add((user or {}).get("username"), body.words)
+    except HotwordError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return {"words": words, "max": MAX_WORDS_PER_USER}
+
+
+@router.delete("/meetings/hotwords/{word}")
+def delete_hotword(word: str, request: Request) -> dict:
+    from app.meetings.hotwords import MAX_WORDS_PER_USER
+
+    store = _services(request).hotwords
+    if store is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "热词存储不可用")
+    user = _current_user(request)
+    return {
+        "words": store.remove((user or {}).get("username"), word),
+        "max": MAX_WORDS_PER_USER,
+    }
+
+
+@router.post("/meetings/{meeting_id}/retranscribe", status_code=status.HTTP_202_ACCEPTED)
+def retranscribe_meeting(meeting_id: str, request: Request) -> dict:
+    """重新转写整场（加了热词后让老记录重跑全管线），异步受理。"""
+    service = _meetings(request)
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_manageable(meta, _current_user(request))
+    try:
+        return service.retranscribe(meeting_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+# --- 声纹（生物特征个人信息：必须可查、可删） ---
+
+@router.get("/meetings/voiceprints")
+def list_voiceprints(request: Request) -> dict:
+    """列出当前用户已登记的声纹（只回名字与样本时长，不外泄向量）。"""
+    store = _services(request).voiceprints
+    if store is None:
+        return {"voiceprints": []}
+    user = _current_user(request)
+    return {"voiceprints": store.list((user or {}).get("username"))}
+
+
+@router.delete("/meetings/voiceprints/{name}")
+def delete_voiceprint(name: str, request: Request) -> dict:
+    """删除一条声纹（彻底不保留向量）。"""
+    store = _services(request).voiceprints
+    if store is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "声纹存储不可用")
+    user = _current_user(request)
+    return {"voiceprints": store.remove((user or {}).get("username"), name)}
 
 
 @router.get("/meetings")
@@ -153,7 +323,86 @@ def rename_speaker(meeting_id: str, req: SpeakerRenameRequest, request: Request)
     name = req.name.strip()
     if not name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "发言人名称不能为空")
-    return service.store.rename_speaker(meeting_id, req.speaker.strip(), name)
+    return service.rename_speaker(meeting_id, req.speaker.strip(), name)
+
+
+@router.post("/meetings/{meeting_id}/keywords")
+def regenerate_keywords(meeting_id: str, request: Request) -> dict:
+    """单独补跑关键词区块（LLM 调用，慢链路），返回更新后的完整记录。"""
+    service = _meetings(request)
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_manageable(meta, _current_user(request))
+    try:
+        return service.regenerate_keywords(meeting_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+# --- 待办（一等实体：对标钉钉 MinutesTodoI 的增删改与完成态） ---
+
+class TodoBody(BaseModel):
+    """新增/编辑待办；字段留空表示不改动（新增时 task 必填）。"""
+
+    task: str | None = None
+    owner_hint: str | None = None
+    due_hint: str | None = None
+    done: bool | None = None
+
+
+def _meeting_or_404(service, meeting_id: str, user: dict | None) -> dict:
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_manageable(meta, user)
+    return meta
+
+
+@router.post("/meetings/{meeting_id}/todos")
+def add_todo(meeting_id: str, body: TodoBody, request: Request) -> dict:
+    """手工新增待办，返回更新后的完整记录。"""
+    service = _meetings(request)
+    _meeting_or_404(service, meeting_id, _current_user(request))
+    try:
+        service.add_todo(
+            meeting_id,
+            task=body.task or "",
+            owner_hint=body.owner_hint or "",
+            due_hint=body.due_hint or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return service.store.get(meeting_id)
+
+
+@router.patch("/meetings/{meeting_id}/todos/{todo_id}")
+def update_todo(meeting_id: str, todo_id: str, body: TodoBody, request: Request) -> dict:
+    """编辑待办内容/负责人/期限，或勾选完成；返回更新后的完整记录。"""
+    service = _meetings(request)
+    _meeting_or_404(service, meeting_id, _current_user(request))
+    fields = {key: value for key, value in body.model_dump().items() if value is not None}
+    if not fields:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "没有要更新的字段")
+    try:
+        service.update_todo(meeting_id, todo_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return service.store.get(meeting_id)
+
+
+@router.delete("/meetings/{meeting_id}/todos/{todo_id}")
+def delete_todo(meeting_id: str, todo_id: str, request: Request) -> dict:
+    """删除一条待办；返回更新后的完整记录。"""
+    service = _meetings(request)
+    _meeting_or_404(service, meeting_id, _current_user(request))
+    try:
+        service.remove_todo(meeting_id, todo_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    return service.store.get(meeting_id)
 
 
 @router.post("/meetings/{meeting_id}/mindmap")

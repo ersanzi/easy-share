@@ -44,6 +44,33 @@ func (client *Client) slowRequest(ctx context.Context, method, path string, inpu
 	return client.do(ctx, client.slowHTTP, method, path, input, output)
 }
 
+// slowRequestRaw 推原始字节体（实时 PCM 分片），不能走 do()——那会把 []byte 再 JSON 编码成 base64 字符串。
+func (client *Client) slowRequestRaw(ctx context.Context, method, path string, payload []byte, output any) error {
+	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("Content-Type", "application/octet-stream")
+	response, err := client.slowHTTP.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		if apiError.Message != "" {
+			return fmt.Errorf("%s", apiError.Message)
+		}
+		return fmt.Errorf("core 返回状态 %d", response.StatusCode)
+	}
+	if output == nil {
+		return nil
+	}
+	return json.NewDecoder(response.Body).Decode(output)
+}
+
 func (client *Client) do(ctx context.Context, httpClient *http.Client, method, path string, input, output any) error {
 	var body *bytes.Reader
 	if input == nil {
@@ -250,6 +277,128 @@ func (client *Client) MeetingMindmapRegenerate(ctx context.Context, id string) (
 	var result knowledge.Meeting
 	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/mindmap", nil, &result)
 	return result, err
+}
+
+// MeetingKeywordsRegenerate 单独补跑关键词区块（LLM 调用，慢链路）。
+func (client *Client) MeetingKeywordsRegenerate(ctx context.Context, id string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/keywords", map[string]any{}, &result)
+	return result, err
+}
+
+// MeetingTodoAdd 手工新增待办（快链路）。
+func (client *Client) MeetingTodoAdd(ctx context.Context, id string, input knowledge.MeetingTodoInput) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/todos", input, &result)
+	return result, err
+}
+
+// MeetingTodoUpdate 编辑待办或勾选完成（快链路）。
+func (client *Client) MeetingTodoUpdate(ctx context.Context, id, todoID string, input knowledge.MeetingTodoInput) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.request(ctx, http.MethodPatch,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/todos/"+url.PathEscape(todoID), input, &result)
+	return result, err
+}
+
+// MeetingTodoRemove 删除一条待办（快链路）。
+func (client *Client) MeetingTodoRemove(ctx context.Context, id, todoID string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.request(ctx, http.MethodDelete,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/todos/"+url.PathEscape(todoID), nil, &result)
+	return result, err
+}
+
+// --- 实时上屏（边说边出字） ---
+
+// MeetingStreamWarm 让知识服务后台预热流式模型（首片不再卡冷加载）。
+func (client *Client) MeetingStreamWarm(ctx context.Context) error {
+	return client.request(ctx, http.MethodPost, "/api/knowledge/meetings/stream/warm", map[string]any{}, nil)
+}
+
+// MeetingStreamOpen 开实时录制会话，返回带 id 的 recording 记录。
+func (client *Client) MeetingStreamOpen(ctx context.Context, title, templateID string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	input := map[string]string{"title": title, "templateId": templateID}
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/meetings/stream/session", input, &result)
+	return result, err
+}
+
+// MeetingStreamChunk 推一片 PCM（首片含流式模型冷加载，走 slowRequest）。
+func (client *Client) MeetingStreamChunk(ctx context.Context, id string, pcm []byte) (knowledge.MeetingLiveView, error) {
+	var result knowledge.MeetingLiveView
+	err := client.slowRequestRaw(ctx, http.MethodPost,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/stream", pcm, &result)
+	return result, err
+}
+
+// MeetingStreamStop 结束推流会话，回完整实时字幕行。
+func (client *Client) MeetingStreamStop(ctx context.Context, id string) (knowledge.MeetingLiveView, error) {
+	var result knowledge.MeetingLiveView
+	err := client.slowRequest(ctx, http.MethodPost,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/stream/stop", map[string]any{}, &result)
+	return result, err
+}
+
+// MeetingLivePoints 会中要点（LLM 慢链路）。
+func (client *Client) MeetingLivePoints(ctx context.Context, id string) ([]string, error) {
+	var payload struct {
+		Points []string `json:"points"`
+	}
+	err := client.slowRequest(ctx, http.MethodPost,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/live-points", map[string]any{}, &payload)
+	return payload.Points, err
+}
+
+// --- 个性化热词与重新转写 ---
+
+// MeetingHotwords 读当前用户热词表。
+func (client *Client) MeetingHotwords(ctx context.Context) (knowledge.HotwordsResult, error) {
+	var result knowledge.HotwordsResult
+	err := client.request(ctx, http.MethodGet, "/api/knowledge/meetings/hotwords", nil, &result)
+	return result, err
+}
+
+// MeetingHotwordsAdd 批量新增热词，返回最新词表。
+func (client *Client) MeetingHotwordsAdd(ctx context.Context, words []string) (knowledge.HotwordsResult, error) {
+	var result knowledge.HotwordsResult
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/meetings/hotwords", map[string]any{"words": words}, &result)
+	return result, err
+}
+
+// MeetingHotwordRemove 删除一条热词，返回最新词表。
+func (client *Client) MeetingHotwordRemove(ctx context.Context, word string) (knowledge.HotwordsResult, error) {
+	var result knowledge.HotwordsResult
+	err := client.request(ctx, http.MethodDelete,
+		"/api/knowledge/meetings/hotwords/"+url.PathEscape(word), nil, &result)
+	return result, err
+}
+
+// MeetingRetranscribe 重新转写整场（异步受理）。
+func (client *Client) MeetingRetranscribe(ctx context.Context, id string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	err := client.request(ctx, http.MethodPost,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/retranscribe", map[string]any{}, &result)
+	return result, err
+}
+
+// MeetingVoiceprints 列出当前用户已登记声纹（仅元数据）。
+func (client *Client) MeetingVoiceprints(ctx context.Context) ([]knowledge.MeetingVoiceprint, error) {
+	var payload struct {
+		Voiceprints []knowledge.MeetingVoiceprint `json:"voiceprints"`
+	}
+	err := client.request(ctx, http.MethodGet, "/api/knowledge/meetings/voiceprints", nil, &payload)
+	return payload.Voiceprints, err
+}
+
+// MeetingVoiceprintRemove 删除一条声纹。
+func (client *Client) MeetingVoiceprintRemove(ctx context.Context, name string) ([]knowledge.MeetingVoiceprint, error) {
+	var payload struct {
+		Voiceprints []knowledge.MeetingVoiceprint `json:"voiceprints"`
+	}
+	err := client.request(ctx, http.MethodDelete,
+		"/api/knowledge/meetings/voiceprints/"+url.PathEscape(name), nil, &payload)
+	return payload.Voiceprints, err
 }
 
 // MeetingArchive 归档进知识库。

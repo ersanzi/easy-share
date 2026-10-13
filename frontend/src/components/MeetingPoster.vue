@@ -36,7 +36,7 @@ const sections = computed<PosterSection[]>(() => {
   return normalized
 })
 
-const todos = computed(() => props.meeting.summary?.todos ?? [])
+const todos = computed(() => props.meeting.todos ?? [])
 
 // 已改名的发言人展示在头部（「说话人 N」默认名不占版面）
 const attendees = computed(() => {

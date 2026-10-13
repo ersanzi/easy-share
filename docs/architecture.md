@@ -113,13 +113,33 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
-| `POST` | `/api/knowledge/meetings/transcribe` | 会议音频上传代理（multipart 流式透传，远端异步转写，202 回受理记录） |
+| `POST` | `/api/knowledge/meetings/transcribe` | 会议音频上传代理（multipart 流式透传，远端异步转写，202 回受理记录；带 `meeting_id` 时复用实时会话那条记录，不新建） |
 | `GET` | `/api/knowledge/meetings` | 会议听记列表（不含分段全文） |
-| `GET` | `/api/knowledge/meetings/{id}` | 会议详情（分段/发言人/总结；受理后前端轮询） |
+| `GET` | `/api/knowledge/meetings/{id}` | 会议详情（分段/发言人/总结/关键词/待办/区块状态；受理后前端轮询） |
 | `GET` | `/api/knowledge/meetings/{id}/audio` | 会议音频回放代理（流式透传） |
+| `GET` | `/api/knowledge/meetings/{id}/export/{format}` | 备忘录导出（`markdown`\|`docx`，流式透传） |
 | `PATCH` | `/api/knowledge/meetings/{id}/speakers` | 发言人改名 |
 | `POST` | `/api/knowledge/meetings/{id}/archive` | 会议纪要归档入知识库 |
+| `POST` | `/api/knowledge/meetings/{id}/mindmap` | 重新生成思维导图区块（LLM 慢链路） |
+| `POST` | `/api/knowledge/meetings/{id}/summary` | 按模板重生成总结区块（可选 `template_id`；刷新 AI 待办，保留手工待办） |
+| `POST` | `/api/knowledge/meetings/{id}/keywords` | 补跑关键词区块（LLM 慢链路） |
+| `POST` | `/api/knowledge/meetings/stream/warm` | 后台预热流式 ASR 模型（进听记页即调；首次加载约 70s，不预热首片会卡住） |
+| `POST` | `/api/knowledge/meetings/stream/session` | 开实时录制会话（先落一条 `status=recording` 记录，其 id 即推流会话 id） |
+| `POST` | `/api/knowledge/meetings/{id}/stream` | 推一片 PCM16/16kHz/单声道（600ms=19200B，`application/octet-stream` 原样转发），回当前已上屏字幕 |
+| `POST` | `/api/knowledge/meetings/{id}/stream/stop` | 结束推流会话（冲尾包），回完整实时字幕行 |
+| `POST` | `/api/knowledge/meetings/{id}/live-points` | 会中要点（LLM 归纳已上屏内容，对标钉钉实时摘要树） |
+| `GET` / `POST` | `/api/knowledge/meetings/hotwords` | 读 / 批量新增当前用户个性化热词（seaco 模型级上下文增强；校验字符合法性与每人上限） |
+| `DELETE` | `/api/knowledge/meetings/hotwords/{word}` | 删除一条热词 |
+| `POST` | `/api/knowledge/meetings/{id}/retranscribe` | 重新转写整场（区块状态复位后重跑转写+总结+关键词+导图，热词在此生效；原始音频缺失则拒绝） |
+| `GET` | `/api/knowledge/meetings/voiceprints` | 当前用户已登记声纹列表（**仅名字与样本时长，向量本体不出服务端**） |
+| `DELETE` | `/api/knowledge/meetings/voiceprints/{name}` | 删除一条声纹（生物特征数据必须可删，删后不再自动认领） |
+| `POST` | `/api/knowledge/meetings/{id}/todos` | 新增待办（一等实体，手工项 `source=manual`） |
+| `PATCH` | `/api/knowledge/meetings/{id}/todos/{todoId}` | 编辑待办内容/负责人/期限或勾选完成 |
+| `DELETE` | `/api/knowledge/meetings/{id}/todos/{todoId}` | 删除待办 |
 | `DELETE` | `/api/knowledge/meetings/{id}` | 删除会议记录与音频 |
+| `ANY` | `/mcp` | 听记只读 MCP（Streamable HTTP，独立配对令牌 `mcpToken` 鉴权，7 个工具） |
+| `GET` | `/mcp/meetings/{id}/audio` | MCP 侧「音频地址」取原始 WAV（同一 `mcpToken`，不复用桌面 apiToken） |
+| `GET` / `POST` | `/api/mcp/info` · `/api/mcp/regenerate` | MCP 接入信息与令牌重新生成（走 apiToken，仅设置页调用） |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
 
 ## 4b. 控制面升级接口（platform-drive，2026-08-31 起）
@@ -250,7 +270,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答/会议听记，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
 - 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
 - **会议听记大文件通道（2026-10-12）**：音频上传/回放不经 Wails 绑定（绑定是 JSON 通道，塞不下上百 MB），前端同源 `fetch /kapi/meetings/*` → 桌面进程 `pluginAssetMiddleware` 接管（`appmeetings.go`；dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截）→ desktop.Client 流式转发 → Core 上述 meetings 路由 → 知识服务 `/meetings`。列表/详情/管理/归档走常规 Wails 绑定。
-
+- **听记实时上屏（2026-10-13，刻意不用 WebSocket）**：录音时按 600ms 定长分片（16kHz 单声道 s16le = 19200 字节）经 Wails 绑定（base64）→ Core → 知识服务 `POST /meetings/{id}/stream`，**请求即回当前字幕快照**——推流方向是采集端主动供数，请求-响应天然带背压，避开 WebView 跨源与 apiToken 不能进前端两件事。稳态单片往返实测 176ms（RTF 0.303）。流式会话只活在知识服务内存（闲置 30min 回收），**实时文本是预览**：停止后整段离线重跑（同一条记录，`transcribe` 带 `meeting_id` 复用）给出终态分段/标点/说话人。听记页挂载即调 `stream/warm`，否则首片承担约 70s 的模型冷加载。
 ## 9. 跨平台抽象
 
 | 能力 | Windows | macOS |

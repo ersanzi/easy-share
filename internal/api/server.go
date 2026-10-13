@@ -126,9 +126,28 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/knowledge/meetings/{id}/mindmap", server.auth(http.HandlerFunc(server.knowledgeMeetingMindmap)))
 	mux.Handle("POST /api/knowledge/meetings/{id}/summary", server.auth(http.HandlerFunc(server.knowledgeMeetingSummaryRegen)))
 	mux.Handle("POST /api/knowledge/meetings/{id}/ask", server.auth(http.HandlerFunc(server.knowledgeMeetingAsk)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/keywords", server.auth(http.HandlerFunc(server.knowledgeMeetingKeywordsRegen)))
+	// 实时上屏：预热/会话/推流/收尾/会中要点
+	mux.Handle("POST /api/knowledge/meetings/stream/warm", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamWarm)))
+	mux.Handle("POST /api/knowledge/meetings/stream/session", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamOpen)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/stream", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamChunk)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/stream/stop", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamStop)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/live-points", server.auth(http.HandlerFunc(server.knowledgeMeetingLivePoints)))
+	// 个性化热词与重新转写（字面量段优先于 {id} 通配，不会被误当成会议 id）
+	mux.Handle("GET /api/knowledge/meetings/hotwords", server.auth(http.HandlerFunc(server.knowledgeMeetingHotwords)))
+	mux.Handle("POST /api/knowledge/meetings/hotwords", server.auth(http.HandlerFunc(server.knowledgeMeetingHotwordsAdd)))
+	mux.Handle("DELETE /api/knowledge/meetings/hotwords/{word}", server.auth(http.HandlerFunc(server.knowledgeMeetingHotwordDelete)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/retranscribe", server.auth(http.HandlerFunc(server.knowledgeMeetingRetranscribe)))
+	// 声纹元数据查看与删除（生物特征数据必须可删）
+	mux.Handle("GET /api/knowledge/meetings/voiceprints", server.auth(http.HandlerFunc(server.knowledgeMeetingVoiceprints)))
+	mux.Handle("DELETE /api/knowledge/meetings/voiceprints/{name}", server.auth(http.HandlerFunc(server.knowledgeMeetingVoiceprintDelete)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/todos", server.auth(http.HandlerFunc(server.knowledgeMeetingTodoAdd)))
+	mux.Handle("PATCH /api/knowledge/meetings/{id}/todos/{todoId}", server.auth(http.HandlerFunc(server.knowledgeMeetingTodoUpdate)))
+	mux.Handle("DELETE /api/knowledge/meetings/{id}/todos/{todoId}", server.auth(http.HandlerFunc(server.knowledgeMeetingTodoDelete)))
 	mux.Handle("DELETE /api/knowledge/meetings/{id}", server.auth(http.HandlerFunc(server.knowledgeMeetingDelete)))
 	// 听记 MCP：自带配对令牌校验（不能用 auth 中间件——那认的是桌面 apiToken）；管理端点走 apiToken
 	mux.Handle("/mcp", http.HandlerFunc(server.serveMCP))
+	mux.Handle("GET /mcp/meetings/{id}/audio", http.HandlerFunc(server.serveMCPMeetingAudio))
 	mux.Handle("GET /api/mcp/info", server.auth(http.HandlerFunc(server.mcpInfo)))
 	mux.Handle("POST /api/mcp/regenerate", server.auth(http.HandlerFunc(server.mcpRegenerate)))
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

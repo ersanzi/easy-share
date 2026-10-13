@@ -8,8 +8,10 @@ export interface MeetingRecording {
   durationSeconds: number
 }
 
-// 录音音源：mic=麦克风（双平台）；system=系统输出声音（Windows，经屏幕共享勾选
-// 系统音频拿 MediaStream，macOS WKWebView 不支持——入口在 macOS 隐藏）
+// 录音音源：mic=麦克风（双平台）；system=系统声音+麦克风混流（Windows，macOS 隐藏入口）。
+// system 走钉钉听记同款做法（逆向证据 E9）：把 getDisplayMedia 的系统音频轨与麦克风轨
+// connect 到同一个 MediaStreamAudioDestinationNode，合成一路音再采样——后端只见一路音，
+// 且线上会议同时录到对方发言与自己的发言。
 export type RecordingSource = 'mic' | 'system'
 
 interface CaptureHandler {
@@ -28,9 +30,15 @@ registerProcessor('eshare-capture', EshareCapture);
 `
 
 const TARGET_RATE = 16000
+// 实时推流单元：与知识服务流式模型对齐（600ms = 9600 样本 = 19200 字节 s16le）
+export const STREAM_CHUNK_SAMPLES = 9600
+
+export type ChunkHandler = (pcm: Uint8Array) => void
 
 export class MeetingRecorder {
   private stream: MediaStream | null = null
+  private micStream: MediaStream | null = null
+  private displayStream: MediaStream | null = null
   private context: AudioContext | null = null
   private source: MediaStreamAudioSourceNode | null = null
   private worklet: AudioWorkletNode | null = null
@@ -39,24 +47,26 @@ export class MeetingRecorder {
   private totalFrames = 0
   private startedAt = 0
   private lastLevelAt = 0
+  private chunkHandler: ChunkHandler | null = null
+  private carry: Int16Array[] = []
+  private carryFrames = 0
 
   recording = false
 
   // 系统声音共享被用户从浏览器条「停止共享」时触发（UI 侧应收尾本次录音）
   onAudioEnded: (() => void) | null = null
 
-  async start(source: RecordingSource = 'mic', onLevel?: (level: number) => void): Promise<void> {
+  async start(
+    source: RecordingSource = 'mic',
+    onLevel?: (level: number) => void,
+    onChunk?: ChunkHandler,
+  ): Promise<void> {
     if (this.recording) return
-    this.stream =
-      source === 'system'
-        ? await this.acquireSystemAudio()
-        : await navigator.mediaDevices.getUserMedia({
-            audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          })
-    this.stream.getAudioTracks().forEach(track => {
-      track.onended = () => {
-        if (this.recording && this.onAudioEnded) this.onAudioEnded()
-      }
+    this.chunkHandler = onChunk ?? null
+    this.carry = []
+    this.carryFrames = 0
+    this.micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     })
     // 刻意请求 16kHz 上下文；浏览器不给就手动降采样
     let context: AudioContext
@@ -66,12 +76,26 @@ export class MeetingRecorder {
       context = new AudioContext()
     }
     this.context = context
-    this.source = context.createMediaStreamSource(this.stream)
+
+    let sampled = this.micStream
     if (source === 'system') {
-      // 系统声音通常是立体声：显式要求 WebAudio 下混为单声道再进采集
-      this.source.channelCount = 1
-      this.source.channelCountMode = 'explicit'
+      try {
+        this.displayStream = await this.acquireSystemAudio()
+      } catch (e) {
+        // 共享选择器被取消：不能让麦克风与 AudioContext 悬着（系统麦克风灯会一直亮）
+        this.releaseStreams()
+        void this.context?.close()
+        this.context = null
+        throw e
+      }
+      sampled = this.mixInto(context, this.micStream, this.displayStream)
     }
+    this.stream = sampled
+    this.bindEndedSignal(source === 'system' ? this.displayStream : this.micStream)
+
+    this.source = context.createMediaStreamSource(sampled)
+    this.source.channelCount = 1
+    this.source.channelCountMode = 'explicit'
     this.chunks = []
     this.totalFrames = 0
     this.startedAt = Date.now()
@@ -93,14 +117,38 @@ export class MeetingRecorder {
       }
     }
     if (!workletReady) {
-      // 兜底：ScriptProcessor 已废弃但 WebView2/WKWebView 都还支持
+      // 兜底：ScriptProcessor 已废弃但 WebView2/WKWebView 都还支持。
+      // 经零增益节点接回 destination——只为满足拉流，不能把采到的声音真放出来（否则啸叫）
+      const mute = context.createGain()
+      mute.gain.value = 0
+      mute.connect(context.destination)
       const processor = context.createScriptProcessor(4096, 1, 1)
       processor.onaudioprocess = event => handler(event.inputBuffer.getChannelData(0))
       this.source.connect(processor)
-      processor.connect(context.destination)
+      processor.connect(mute)
       this.processor = processor
     }
     this.recording = true
+  }
+
+  // 混流：麦克风轨 + 系统声音轨 → 同一个 destination，产出单声道合成流
+  private mixInto(context: AudioContext, mic: MediaStream, display: MediaStream): MediaStream {
+    const destination = context.createMediaStreamDestination()
+    destination.channelCount = 1
+    destination.channelCountMode = 'explicit'
+    context.createMediaStreamSource(mic).connect(destination)
+    const systemStream = new MediaStream(display.getAudioTracks())
+    context.createMediaStreamSource(systemStream).connect(destination)
+    return destination.stream
+  }
+
+  // 用户从浏览器共享条「停止共享」时音频轨 ended，需要收尾本次录音
+  private bindEndedSignal(origin: MediaStream | null): void {
+    origin?.getAudioTracks().forEach(track => {
+      track.onended = () => {
+        if (this.recording && this.onAudioEnded) this.onAudioEnded()
+      }
+    })
   }
 
   // 系统声音：走屏幕共享拿系统音频轨（WebView2/Chromium 会弹共享选择器，
@@ -138,15 +186,13 @@ export class MeetingRecorder {
     this.worklet?.disconnect()
     this.processor?.disconnect()
     this.source?.disconnect()
-    this.stream?.getTracks().forEach(track => track.stop())
-    const sampleRate = this.context?.sampleRate ?? TARGET_RATE
+    this.releaseStreams()
     const durationSeconds = this.totalFrames / TARGET_RATE
     await this.context?.close()
     this.worklet = null
     this.processor = null
     this.source = null
     this.context = null
-    this.stream = null
     return { blob: encodeWav(this.chunks, TARGET_RATE), durationSeconds }
   }
 
@@ -155,15 +201,25 @@ export class MeetingRecorder {
     this.worklet?.disconnect()
     this.processor?.disconnect()
     this.source?.disconnect()
-    this.stream?.getTracks().forEach(track => track.stop())
+    this.releaseStreams()
     void this.context?.close()
     this.worklet = null
     this.processor = null
     this.source = null
     this.context = null
-    this.stream = null
     this.chunks = []
     this.totalFrames = 0
+  }
+
+  // 混流模式下 this.stream 是 destination 的合成流（停它没用），必须停掉来源轨道；
+  // 共享的 video 轨也要停，否则 Chromium 顶部「正在共享屏幕」提示条不消失
+  private releaseStreams(): void {
+    for (const stream of [this.stream, this.micStream, this.displayStream]) {
+      stream?.getTracks().forEach(track => track.stop())
+    }
+    this.stream = null
+    this.micStream = null
+    this.displayStream = null
   }
 
   elapsedSeconds(): number {
@@ -182,11 +238,33 @@ export class MeetingRecorder {
     }
     this.chunks.push(int16)
     this.totalFrames += int16.length
+    this.emitChunk(int16)
     // 电平节流到 ~10 次/秒，驱动波形动画足够
     const now = Date.now()
     if (onLevel && now - this.lastLevelAt > 100) {
       this.lastLevelAt = now
       onLevel(Math.sqrt(sumSquares / pcm.length))
+    }
+  }
+
+  // 攒够 600ms 就吐一片给实时推流（不足一片的尾巴留在 carry 里，下次补齐）
+  private emitChunk(pcm: Int16Array): void {
+    if (!this.chunkHandler || pcm.length === 0) return
+    this.carry.push(pcm)
+    this.carryFrames += pcm.length
+    while (this.carryFrames >= STREAM_CHUNK_SAMPLES) {
+      const merged = new Int16Array(this.carryFrames)
+      let offset = 0
+      for (const piece of this.carry) {
+        merged.set(piece, offset)
+        offset += piece.length
+      }
+      const take = merged.subarray(0, STREAM_CHUNK_SAMPLES)
+      const rest = merged.subarray(STREAM_CHUNK_SAMPLES)
+      this.carry = rest.length ? [new Int16Array(rest)] : []
+      this.carryFrames = rest.length
+      // Int16Array → 小端字节流（WebAudio 与知识服务口径一致，不做字节序转换）
+      this.chunkHandler(new Uint8Array(take.buffer, take.byteOffset, take.byteLength).slice())
     }
   }
 }

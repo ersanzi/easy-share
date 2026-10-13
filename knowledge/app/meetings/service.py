@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.meetings.engine import MeetingTranscriber, audio_duration, render_transcript
 from app.meetings.templates import find_template
-from app.meetings.store import MeetingStore
+from app.meetings.store import MeetingStore, _blank_blocks
 from app.meetings.summarizer import MeetingSummarizer
 
 logger = logging.getLogger(__name__)
@@ -25,15 +25,41 @@ class MeetingService:
         store: MeetingStore,
         transcriber: MeetingTranscriber,
         summarizer: MeetingSummarizer,
+        streamer=None,
+        hotwords=None,
+        voiceprints=None,
     ) -> None:
         self.store = store
         self.transcriber = transcriber
         self.summarizer = summarizer
+        self.streamer = streamer
+        self.hotwords = hotwords
+        self.voiceprints = voiceprints
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="meeting")
 
-    async def save_upload(self, audio, title: str, owner: str | None, max_bytes: int, template_id: str | None = None) -> dict:
-        """把上传的音频流式落盘并登记 processing 记录，返回会议元数据。"""
-        meta = self.store.create(title=title, owner=owner, template_id=template_id)
+    async def save_upload(
+        self,
+        audio,
+        title: str,
+        owner: str | None,
+        max_bytes: int,
+        template_id: str | None = None,
+        meeting_id: str | None = None,
+    ) -> dict:
+        """把上传的音频流式落盘并登记 processing 记录，返回会议元数据。
+
+        meeting_id 用于「先开实时会话边录边上屏、录完再上传整段」的路径：
+        复用同一条记录，不新建，避免一场会出现两条听记。
+        """
+        reused = None
+        if meeting_id:
+            try:
+                candidate = self.store.get(meeting_id)
+            except KeyError:
+                candidate = None
+            if candidate is not None and candidate.get("status") in ("recording", "failed"):
+                reused = candidate
+        meta = reused or self.store.create(title=title, owner=owner, template_id=template_id)
         target = self.store.audio_path(meta["id"])
         size = 0
         try:
@@ -44,92 +70,254 @@ class MeetingService:
                         raise ValueError(f"音频超过大小上限 {max_bytes // (1024 * 1024)}MB")
                     sink.write(chunk)
         except Exception:
-            target.unlink(missing_ok=True)
-            self.store.delete(meta["id"])
+            if reused is None:
+                target.unlink(missing_ok=True)
+                self.store.delete(meta["id"])
             raise
         if size == 0:
-            target.unlink(missing_ok=True)
-            self.store.delete(meta["id"])
+            if reused is None:
+                target.unlink(missing_ok=True)
+                self.store.delete(meta["id"])
             raise ValueError("音频内容为空")
+        if reused is not None:
+            meta = self.store.update(meta["id"], status="processing", error=None, blocks=_blank_blocks())
         return meta
+
+    # --- 实时上屏（边说边出字，预览性质；终态仍以离线整段重跑为准） ---
+
+    def open_stream(self, title: str, owner: str | None, template_id: str | None) -> dict:
+        """开一场录制会话：先落一条 recording 记录，返回给前端当流 id 用。"""
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        meta = self.store.create(title=title, owner=owner, template_id=template_id, status="recording")
+        self.streamer.start(meta["id"])
+        return meta
+
+    def feed_stream(self, meeting_id: str, pcm: bytes) -> dict:
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        return self.streamer.feed(meeting_id, pcm)
+
+    def close_stream(self, meeting_id: str) -> dict:
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        return self.streamer.stop(meeting_id)
+
+    def live_points(self, meeting_id: str) -> list[str]:
+        """会中要点（对标钉钉实时摘要树）：拿已上屏的行让 LLM 归纳几条，随录随长。"""
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        lines = self.streamer.active_lines(meeting_id)
+        if not lines:
+            return []
+        return self.summarizer.live_points("\n".join(lines))
 
     def submit(self, meeting_id: str) -> None:
         self._executor.submit(self._process, meeting_id)
+
+    def hotword_phrase(self, owner: str | None) -> str:
+        """该用户的热词串（无词表时为空串，引擎按无热词转写）。"""
+        return self.hotwords.asr_phrase(owner) if self.hotwords is not None else ""
+
+    def retranscribe(self, meeting_id: str) -> dict:
+        """重新转写（对标钉钉独立入口）：加了热词后让老记录重跑一遍全管线。"""
+        meta = self.store.get(meeting_id)
+        if meta.get("status") == "processing":
+            raise ValueError("本场听记正在处理中，稍后再试")
+        if not self.store.audio_path(meeting_id).is_file():
+            raise ValueError("原始音频已不在，无法重新转写")
+        updated = self.store.update(meeting_id, status="processing", error=None, blocks=_blank_blocks())
+        self.submit(meeting_id)
+        return updated
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False)
 
     # --- 内部：worker 线程执行 ---
 
+    def initial_speaker_names(self, meta: dict, segments: list[dict]) -> dict[str, str]:
+        """说话人展示名：默认「说话人 N」，重新转写时保住用户已改过的名字。"""
+        previous = meta.get("speaker_names") or {}
+        names: dict[str, str] = {}
+        for speaker in sorted({str(segment["speaker"]) for segment in segments}):
+            old = str(previous.get(speaker) or "")
+            names[speaker] = old if old and not old.startswith("说话人 ") else f"说话人 {int(speaker) + 1}"
+        return names
+
+    def apply_voiceprints(self, owner: str | None, wav, segments: list[dict], names: dict[str, str]) -> int:
+        """用已登记声纹自动认领发言人（轻口径：只填仍是默认名的，不覆盖人工改名）。"""
+        if self.voiceprints is None or not segments:
+            return 0
+        try:
+            matched = self.voiceprints.recognize(owner, wav, segments)
+        except Exception:  # noqa: BLE001 - 声纹是加分项，失败不影响转写产物
+            logger.warning("声纹识别失败，跳过自动认领: owner=%s", owner, exc_info=True)
+            return 0
+        applied = 0
+        for speaker, name in matched.items():
+            if not names.get(speaker) or names[speaker].startswith("说话人 "):
+                names[speaker] = name
+                applied += 1
+        if applied:
+            logger.info("声纹自动认领 %d 位发言人: owner=%s", applied, owner)
+        return applied
+
+    def rename_speaker(self, meeting_id: str, speaker: str, name: str) -> dict:
+        """改名，并把这次标注沉淀成声纹（样本时长不足则只改名，不报错）。"""
+        meta = self.store.rename_speaker(meeting_id, speaker, name)
+        if self.voiceprints is not None:
+            try:
+                self.voiceprints.enroll(
+                    meta.get("owner"), name, self.store.audio_path(meeting_id), meta.get("segments") or [], speaker
+                )
+            except Exception:  # noqa: BLE001 - 声纹沉淀失败不影响改名本身
+                logger.warning("声纹登记失败: meeting=%s speaker=%s", meeting_id, speaker, exc_info=True)
+        return meta
+
     def _process(self, meeting_id: str) -> None:
         meta = self.store.get(meeting_id)
         wav = self.store.audio_path(meeting_id)
         try:
-            segments = self.transcriber.transcribe(wav)
-            speaker_names = {
-                speaker: f"说话人 {int(speaker) + 1}" for speaker in sorted({s["speaker"] for s in segments})
-            }
-            mindmap = None
-            summary = None
-            if segments:
-                template = find_template(str(meta.get("template_id") or ""))
-                summary = self.summarizer.summarize(render_transcript(segments, speaker_names), template)
-                if summary:
-                    # 导图是顶层字段（可独立重生成），不进 summary
-                    mindmap = summary.pop("mindmap", None) or None
-                if segments:
-                    # 导图走 harness 管线（议题切分→逐议题深挖→确定性装配），失败回退单次大纲
-                    try:
-                        from app.meetings.mindmap_harness import build_mindmap_harness
-
-                        outline, log_lines = build_mindmap_harness(
-                            self.summarizer.ask_json, segments, speaker_names,
-                            meeting_title=str(meta.get("title") or ""),
-                        )
-                        for line in log_lines:
-                            logger.info("导图 harness: id=%s %s", meeting_id, line)
-                        mindmap = outline or mindmap
-                    except Exception:  # noqa: BLE001 - harness 失败不阻断转写主流程
-                        logger.warning("导图 harness 失败，回退单次大纲: id=%s", meeting_id, exc_info=True)
+            self.store.set_block(meeting_id, "transcript", "processing")
+            segments = self.transcriber.transcribe(wav, hotword=self.hotword_phrase(meta.get("owner")))
+            speaker_names = self.initial_speaker_names(meta, segments)
+            self.apply_voiceprints(meta.get("owner"), wav, segments, speaker_names)
             self.store.update(
                 meeting_id,
-                status="completed",
                 segments=segments,
                 speaker_names=speaker_names,
                 speaker_count=len(speaker_names),
                 duration_seconds=audio_duration(wav),
-                summary=summary,
-                mindmap=mindmap,
             )
-            logger.info(
-                "会议转写完成: id=%s segments=%d speakers=%d summarized=%s mindmap=%s",
-                meeting_id,
-                len(segments),
-                len(speaker_names),
-                summary is not None,
-                bool(mindmap),
-            )
-        except Exception as exc:  # noqa: BLE001 - 单任务失败以 failed 状态呈现
+            self.store.set_block(meeting_id, "transcript", "ready")
+        except Exception as exc:  # noqa: BLE001 - 转写是其他区块的前提，失败即整体失败
             logger.exception("会议转写失败: id=%s", meeting_id)
+            self.store.set_block(meeting_id, "transcript", "failed", error=str(exc))
             self.store.update(meeting_id, status="failed", error=str(exc))
+            return
+
+        # 以下区块彼此独立：某块失败只置该块 failed，用户可单独补跑（对标钉钉分任务状态）
+        if segments:
+            self._run_summary_block(meeting_id, meta, segments, speaker_names)
+            self._run_keywords_block(meeting_id, segments, speaker_names)
+            self._run_mindmap_block(meeting_id, segments, speaker_names)
+        self.store.update(meeting_id, status="completed")
+        fresh = self.store.get(meeting_id)
+        logger.info(
+            "会议听记处理完成: id=%s segments=%d speakers=%d blocks=%s keywords=%d todos=%d",
+            meeting_id,
+            len(segments),
+            len(speaker_names),
+            fresh.get("blocks"),
+            len(fresh.get("keywords") or []),
+            len(fresh.get("todos") or []),
+        )
+
+    def _transcript_text(self, meta: dict) -> str:
+        return render_transcript(meta.get("segments") or [], meta.get("speaker_names") or {})
+
+    def _run_summary_block(self, meeting_id: str, meta: dict, segments: list[dict], speaker_names: dict) -> dict | None:
+        """总结区块：产出纪要/要点/章节，并把 AI 待办落到待办实体。返回总结 dict 或 None。"""
+        self.store.set_block(meeting_id, "summary", "processing")
+        template = find_template(str(meta.get("template_id") or ""))
+        summary = self.summarizer.summarize(render_transcript(segments, speaker_names), template)
+        if not summary:
+            self.store.set_block(
+                meeting_id, "summary", "failed", error="总结生成失败（LLM 未配置或调用失败），可点重试"
+            )
+            return None
+        todos = summary.pop("todos", None) or []
+        summary.pop("mindmap", None)  # 导图走独立区块（harness 管线），不进 summary
+        if todos:
+            self.store.replace_ai_todos(meeting_id, todos)
+        self.store.update(meeting_id, summary=summary)
+        self.store.set_block(meeting_id, "summary", "ready")
+        return summary
+
+    def _run_keywords_block(self, meeting_id: str, segments: list[dict], speaker_names: dict) -> list[str] | None:
+        self.store.set_block(meeting_id, "keywords", "processing")
+        keywords = self.summarizer.extract_keywords(render_transcript(segments, speaker_names))
+        if keywords is None:
+            self.store.set_block(
+                meeting_id, "keywords", "failed", error="关键词生成失败（LLM 未配置或调用失败），可点重试"
+            )
+            return None
+        self.store.update(meeting_id, keywords=keywords)
+        self.store.set_block(meeting_id, "keywords", "ready")
+        return keywords
+
+    def _run_mindmap_block(self, meeting_id: str, segments: list[dict], speaker_names: dict) -> str:
+        """导图区块：harness 管线（议题切分→逐议题深挖→确定性装配），失败只置本块 failed。"""
+        self.store.set_block(meeting_id, "mindmap", "processing")
+        mindmap = ""
+        try:
+            from app.meetings.mindmap_harness import build_mindmap_harness
+
+            outline, log_lines = build_mindmap_harness(
+                self.summarizer.ask_json, segments, speaker_names,
+                meeting_title=str((self.store.get(meeting_id)).get("title") or ""),
+            )
+            for line in log_lines:
+                logger.info("导图 harness: id=%s %s", meeting_id, line)
+            mindmap = outline or ""
+        except Exception:  # noqa: BLE001 - harness 失败不阻断其他区块
+            logger.warning("导图 harness 失败: id=%s", meeting_id, exc_info=True)
+        if not mindmap.strip():
+            # 回退单次生成（总结里已剥掉 mindmap，这里单独问一次大纲）
+            summary = self.summarizer.summarize(render_transcript(segments, speaker_names))
+            mindmap = (summary or {}).get("mindmap") or ""
+        if not mindmap.strip():
+            self.store.set_block(meeting_id, "mindmap", "failed", error="导图生成失败，可点重试")
+            return ""
+        self.store.update(meeting_id, mindmap=mindmap)
+        self.store.set_block(meeting_id, "mindmap", "ready")
+        return mindmap
 
     def regenerate_summary(self, meeting_id: str, template_id: str) -> dict:
-        """按指定模板重新生成总结（不动转写/导图），返回更新后的完整记录。"""
+        """按指定模板重新生成总结（不动转写/关键词/导图），返回更新后的完整记录。
+
+        AI 待办随总结整体刷新；用户手工新增的待办保留。
+        """
         meta = self.store.get(meeting_id)
         if meta.get("status") != "completed":
             raise ValueError("仅已完成的会议可重新生成总结")
         template = find_template(template_id)
         if template is None:
             raise ValueError(f"未知模板：{template_id}")
-        names = meta.get("speaker_names") or {}
-        transcript = render_transcript(meta.get("segments") or [], names)
+        self.store.set_block(meeting_id, "summary", "processing")
+        transcript = self._transcript_text(meta)
         summary = self.summarizer.summarize(transcript, template)
         if not summary:
+            self.store.set_block(meeting_id, "summary", "failed", error="总结生成失败（LLM 未配置或调用失败），可点重试")
             raise ValueError("总结生成失败（LLM 未配置或调用失败），请稍后重试")
-        mindmap = meta.get("mindmap")
-        if not mindmap and summary.get("mindmap"):
-            mindmap = summary["mindmap"]
-        return self.store.update(meeting_id, summary=summary, mindmap=mindmap, template_id=template["id"])
+        todos = summary.pop("todos", None) or []
+        mindmap = summary.pop("mindmap", None) or ""
+        if todos:
+            self.store.replace_ai_todos(meeting_id, todos)
+        self.store.update(
+            meeting_id,
+            summary=summary,
+            mindmap=meta.get("mindmap") or mindmap or None,
+            template_id=template["id"],
+        )
+        self.store.set_block(meeting_id, "summary", "ready")
+        return self.store.get(meeting_id)
+
+    def regenerate_keywords(self, meeting_id: str) -> dict:
+        """单独补跑关键词区块。"""
+        meta = self.store.get(meeting_id)
+        if meta.get("status") != "completed":
+            raise ValueError("仅已完成的会议可生成关键词")
+        if not (meta.get("segments") or []):
+            raise ValueError("该记录没有转写内容，无法生成关键词")
+        self.store.set_block(meeting_id, "keywords", "processing")
+        keywords = self.summarizer.extract_keywords(self._transcript_text(meta))
+        if keywords is None:
+            self.store.set_block(meeting_id, "keywords", "failed", error="关键词生成失败（LLM 未配置或调用失败），可点重试")
+            raise ValueError("关键词生成失败（LLM 未配置或调用失败），请稍后重试")
+        self.store.update(meeting_id, keywords=keywords)
+        self.store.set_block(meeting_id, "keywords", "ready")
+        return self.store.get(meeting_id)
 
     def regenerate_mindmap(self, meeting_id: str) -> str:
         """对已完成的会议重新生成思维导图大纲，返回 markdown（LLM 未配置/失败抛错）。
@@ -139,27 +327,35 @@ class MeetingService:
         meta = self.store.get(meeting_id)
         if meta.get("status") != "completed":
             raise ValueError("仅已完成的会议可生成导图")
-        names = meta.get("speaker_names") or {}
         segments = meta.get("segments") or []
-        mindmap = ""
-        if segments:
-            try:
-                from app.meetings.mindmap_harness import build_mindmap_harness
-
-                mindmap, _ = build_mindmap_harness(
-                    self.summarizer.ask_json, segments, names, meeting_title=str(meta.get("title") or "")
-                )
-            except Exception:  # noqa: BLE001 - harness 失败回退单次
-                logger.warning("导图 harness 失败，回退单次生成: id=%s", meeting_id, exc_info=True)
-                mindmap = ""
-        if not mindmap.strip():
-            transcript = render_transcript(segments, names)
-            summary = self.summarizer.summarize(transcript)
-            mindmap = (summary or {}).get("mindmap") or ""
+        mindmap = self._run_mindmap_block(meeting_id, segments, meta.get("speaker_names") or {})
         if not mindmap.strip():
             raise ValueError("导图生成失败（LLM 未返回有效大纲），请稍后重试")
-        self.store.update(meeting_id, mindmap=mindmap)
         return mindmap
+
+    # --- 待办（一等实体 CRUD，对标钉钉 MinutesTodoI） ---
+
+    def add_todo(self, meeting_id: str, task: str, owner_hint: str = "", due_hint: str = "") -> dict:
+        task = (task or "").strip()
+        if not task:
+            raise ValueError("待办内容不能为空")
+        return self.store.add_todo(meeting_id, task, owner_hint.strip(), due_hint.strip(), source="manual")
+
+    def update_todo(self, meeting_id: str, todo_id: str, **fields) -> dict:
+        if "task" in fields and fields["task"] is not None:
+            fields["task"] = str(fields["task"]).strip()
+            if not fields["task"]:
+                raise ValueError("待办内容不能为空")
+        try:
+            return self.store.update_todo(meeting_id, todo_id, **fields)
+        except KeyError as exc:
+            raise ValueError("待办不存在") from exc
+
+    def remove_todo(self, meeting_id: str, todo_id: str) -> list[dict]:
+        try:
+            return self.store.remove_todo(meeting_id, todo_id)
+        except KeyError as exc:
+            raise ValueError("待办不存在") from exc
 
     # --- 听记 AI 问答（对标钉钉听记问答：单条记录全文进上下文，无需检索） ---
 
@@ -207,15 +403,22 @@ class MeetingService:
                 lines += ["【纪要】", str(summary["minutes"])]
             if summary.get("key_points"):
                 lines += ["【要点】"] + [f"- {point}" for point in summary["key_points"]]
-        if summary.get("todos"):
+        if meta.get("todos"):
             lines.append("【待办】")
-            lines += [
-                "- " + todo.get("task", "")
-                + (f"（{todo.get('owner_hint')}" + (f"，{todo.get('due_hint')}" if todo.get("due_hint") else "") + "）" if todo.get("owner_hint") or todo.get("due_hint") else "")
-                for todo in summary["todos"]
-            ]
+            lines += [f"- {self._todo_line(todo)}" for todo in meta["todos"]]
         lines += ["【转写全文】", render_transcript(meta.get("segments") or [], names)]
         return "\n".join(lines)
+
+    @staticmethod
+    def _todo_line(todo: dict) -> str:
+        """待办的单行文本口径（问答/归档/导出共用）：内容（负责人，期限）+ 完成标记。"""
+        parts = [p for p in (str(todo.get("owner_hint") or ""), str(todo.get("due_hint") or "")) if p]
+        text = str(todo.get("task") or "")
+        if parts:
+            text += f"（{'，'.join(parts)}）"
+        if todo.get("done"):
+            text += "〔已完成〕"
+        return text
 
     # --- 归档入知识库（与知识问答共享检索面） ---
 
@@ -239,14 +442,13 @@ class MeetingService:
                 lines += ["## 纪要", summary["minutes"], ""]
             if summary.get("key_points"):
                 lines += ["## 要点"] + [f"- {point}" for point in summary["key_points"]] + [""]
-            if summary.get("todos"):
-                lines += ["## 待办"]
-                lines += [
-                    "- [ ] " + todo["task"]
-                    + (f"（{todo['owner_hint']}" + (f"，{todo['due_hint']}" if todo.get("due_hint") else "") + "）" if todo.get("owner_hint") or todo.get("due_hint") else "")
-                    for todo in summary["todos"]
-                ]
-                lines.append("")
+        if meta.get("todos"):
+            lines += ["## 待办"]
+            lines += [
+                ("- [x] " if todo.get("done") else "- [ ] ") + self._todo_line(todo)
+                for todo in meta["todos"]
+            ]
+            lines.append("")
         if meta.get("mindmap"):
             lines += ["## 思维导图大纲", "```", meta["mindmap"], "```", ""]
         lines += ["## 转写全文", render_transcript(meta.get("segments") or [], names)]
@@ -287,14 +489,11 @@ class MeetingService:
                 document.add_heading("要点", level=1)
                 for point in summary["key_points"]:
                     document.add_paragraph(point, style="List Bullet")
-            if summary.get("todos"):
-                document.add_heading("待办", level=1)
-                for todo in summary["todos"]:
-                    suffix = ""
-                    if todo.get("owner_hint") or todo.get("due_hint"):
-                        parts = [p for p in (todo.get("owner_hint"), todo.get("due_hint")) if p]
-                        suffix = f"（{'，'.join(parts)}）"
-                    document.add_paragraph(todo["task"] + suffix, style="List Number")
+        if meta.get("todos"):
+            document.add_heading("待办", level=1)
+            for todo in meta["todos"]:
+                mark = "✓ " if todo.get("done") else ""
+                document.add_paragraph(mark + self._todo_line(todo), style="List Number")
         if meta.get("mindmap"):
             document.add_heading("思维导图大纲", level=1)
             for line in meta["mindmap"].splitlines():

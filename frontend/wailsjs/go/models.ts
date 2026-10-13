@@ -562,6 +562,20 @@ export namespace knowledge {
 	        this.watch_dirs = source["watch_dirs"];
 	    }
 	}
+	export class HotwordsResult {
+	    words: string[];
+	    max: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HotwordsResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.words = source["words"];
+	        this.max = source["max"];
+	    }
+	}
 	export class KnowledgeStats {
 	    days: number;
 	    total_queries: number;
@@ -607,9 +621,12 @@ export namespace knowledge {
 		}
 	}
 	export class MeetingTodo {
+	    id: string;
 	    task: string;
 	    owner_hint: string;
 	    due_hint: string;
+	    done: boolean;
+	    source: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new MeetingTodo(source);
@@ -617,9 +634,30 @@ export namespace knowledge {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.task = source["task"];
 	        this.owner_hint = source["owner_hint"];
 	        this.due_hint = source["due_hint"];
+	        this.done = source["done"];
+	        this.source = source["source"];
+	    }
+	}
+	export class MeetingChapter {
+	    title: string;
+	    start: number;
+	    end: number;
+	    gist?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingChapter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.start = source["start"];
+	        this.end = source["end"];
+	        this.gist = source["gist"];
 	    }
 	}
 	export class MeetingSection {
@@ -642,7 +680,7 @@ export namespace knowledge {
 	    minutes?: string;
 	    key_points?: string[];
 	    sections?: MeetingSection[];
-	    todos: MeetingTodo[];
+	    chapters?: MeetingChapter[];
 	
 	    static createFrom(source: any = {}) {
 	        return new MeetingSummary(source);
@@ -653,7 +691,7 @@ export namespace knowledge {
 	        this.minutes = source["minutes"];
 	        this.key_points = source["key_points"];
 	        this.sections = this.convertValues(source["sections"], MeetingSection);
-	        this.todos = this.convertValues(source["todos"], MeetingTodo);
+	        this.chapters = this.convertValues(source["chapters"], MeetingChapter);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -704,6 +742,10 @@ export namespace knowledge {
 	    speaker_names: Record<string, string>;
 	    segments: MeetingSegment[];
 	    summary?: MeetingSummary;
+	    keywords: string[];
+	    todos: MeetingTodo[];
+	    blocks: Record<string, string>;
+	    block_errors: Record<string, string>;
 	    mindmap?: string;
 	    template_id?: string;
 	    segment_count: number;
@@ -725,6 +767,10 @@ export namespace knowledge {
 	        this.speaker_names = source["speaker_names"];
 	        this.segments = this.convertValues(source["segments"], MeetingSegment);
 	        this.summary = this.convertValues(source["summary"], MeetingSummary);
+	        this.keywords = source["keywords"];
+	        this.todos = this.convertValues(source["todos"], MeetingTodo);
+	        this.blocks = source["blocks"];
+	        this.block_errors = source["block_errors"];
 	        this.mindmap = source["mindmap"];
 	        this.template_id = source["template_id"];
 	        this.segment_count = source["segment_count"];
@@ -760,6 +806,7 @@ export namespace knowledge {
 	        this.answer = source["answer"];
 	    }
 	}
+	
 	export class MeetingChatTurn {
 	    role: string;
 	    content: string;
@@ -774,10 +821,74 @@ export namespace knowledge {
 	        this.content = source["content"];
 	    }
 	}
+	export class MeetingLiveLine {
+	    text: string;
+	    at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingLiveLine(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.at = source["at"];
+	    }
+	}
+	export class MeetingLiveView {
+	    lines: MeetingLiveLine[];
+	    current: string;
+	    elapsed_seconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingLiveView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.lines = this.convertValues(source["lines"], MeetingLiveLine);
+	        this.current = source["current"];
+	        this.elapsed_seconds = source["elapsed_seconds"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
 	
 	
+	export class MeetingVoiceprint {
+	    name: string;
+	    sample_seconds: number;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingVoiceprint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.sample_seconds = source["sample_seconds"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	
 	export class StatusView {
 	    configured: boolean;

@@ -1131,10 +1131,43 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .meeting-summary h3, .meeting-transcript-title { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--muted); margin: 6px 0 4px; font-weight: 700; }
 .meeting-summary p { margin: 0; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 .meeting-summary ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; }
-.meeting-todos { list-style: none; padding-left: 4px !important; }
-.meeting-todos li { display: flex; align-items: center; gap: 6px; }
-.meeting-todos li::before { content: '☐'; color: var(--muted); }
+.meeting-todos { list-style: none; padding-left: 4px !important; display: flex; flex-direction: column; gap: 6px; }
+.meeting-todo-item { display: flex; align-items: center; gap: 6px; }
+.meeting-todo-item.is-done .meeting-todo-text { text-decoration: line-through; color: var(--muted); }
+.meeting-todo-check { width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--accent, #007aff); cursor: pointer; }
+.meeting-todo-text { border: none; background: none; padding: 0; font: inherit; text-align: left; cursor: text; border-radius: 6px; }
+.meeting-todo-text:hover { background: rgba(127,127,127,.12); }
+.meeting-todo-input { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; border-radius: 7px; border: 1px solid rgba(127,127,127,.28); background: transparent; color: inherit; }
+.meeting-todo-add { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.meeting-todo-owner-input { max-width: 110px; flex: 0 0 110px; }
 .meeting-todo-owner { font-size: 11px; color: var(--muted); background: rgba(127,127,127,.14); border-radius: 8px; padding: 1px 7px; }
+/* 关键词（对标钉钉听记关键词位） */
+.meeting-keywords { display: flex; flex-wrap: wrap; gap: 6px; }
+.meeting-keyword { font-size: 12px; color: var(--accent, #007aff); background: rgba(0,122,255,.1); border-radius: 8px; padding: 2px 9px; }
+/* 实时上屏（边说边出字 + 会中要点） */
+.meeting-live { flex-basis: 100%; width: 100%; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(127,127,127,.18); text-align: left; }
+.meeting-live-title { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .04em; margin: 6px 0 4px; }
+.meeting-live-points ul { list-style: none; padding-left: 0; margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.meeting-live-points li { font-size: 12px; line-height: 1.5; padding-left: 12px; position: relative; }
+.meeting-live-points li::before { content: ''; position: absolute; left: 2px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent, #007aff); opacity: .7; }
+.meeting-live-lines { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding-right: 4px; }
+.meeting-live-line { font-size: 12.5px; line-height: 1.55; margin: 0; display: flex; align-items: baseline; gap: 7px; }
+.meeting-live-line.is-current { color: var(--muted); font-style: italic; }
+
+/* 个性化热词管理（录音卡内折叠区） */
+.meeting-hotwords { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.meeting-hotwords-body { width: 100%; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 10px; background: rgba(127,127,127,.07); }
+.meeting-voiceprints { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid rgba(127,127,127,.18); }
+.meeting-keyword.is-owned { display: inline-flex; align-items: center; gap: 5px; }
+.meeting-keyword.is-owned button { border: none; background: none; color: inherit; cursor: pointer; font-size: 13px; line-height: 1; opacity: .65; padding: 0; }
+.meeting-keyword.is-owned button:hover { opacity: 1; }
+
+/* 区块独立状态 chips：转写/关键词/总结/导图各自一态 */
+.meeting-block-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.meeting-block-chip { font-size: 10.5px; color: var(--muted); background: rgba(127,127,127,.12); border-radius: 7px; padding: 1px 7px; cursor: default; }
+.meeting-block-chip.is-ready { color: #1f7a3d; background: rgba(52,199,89,.14); }
+.meeting-block-chip.is-processing { color: #b06a00; background: rgba(255,160,0,.16); }
+.meeting-block-chip.is-failed { color: #c0392b; background: rgba(255,59,48,.14); }
 .meeting-transcript { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
 .meeting-segment { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.55; }
 .meeting-speaker-chip { flex-shrink: 0; border: none; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--accent, #007aff); background: rgba(0,122,255,.1); border-radius: 9px; padding: 2px 8px; }
@@ -1154,7 +1187,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 @media (prefers-color-scheme: dark) {
   .meeting-status.processing { color: #ffb340; }
   .meeting-status.completed { color: #4cd964; }
-  .meeting-todos li::before { color: var(--muted); }
+  .meeting-block-chip.is-ready { color: #6ee7a0; }
+  .meeting-block-chip.is-processing { color: #ffb340; }
+  .meeting-block-chip.is-failed { color: #ff8f86; }
+  .meeting-keyword { color: #6ab8ff; }
 }
 
 /* 会议听记·音源切换 */
@@ -1224,6 +1260,31 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .mcp-value { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; background: var(--soft-bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; }
 .mcp-regen { align-self: flex-start; }
 .mcp-regen.meeting-danger { color: #ff3b30; }
+
+/* 听记·智能切片章节条 + 播放联动（对标钉钉结构化章节纪要） */
+.meeting-chapters { display: flex; gap: 6px; flex-wrap: wrap; }
+.meeting-chapter { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(127,127,127,.28); background: transparent; border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; color: var(--text, #333); }
+.meeting-chapter-time { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); }
+.meeting-chapter.on { border-color: var(--blue, #007aff); background: rgba(0,122,255,.12); color: var(--blue, #007aff); font-weight: 700; }
+.meeting-chapter.on .meeting-chapter-time { color: var(--blue, #007aff); }
+.meeting-segment { cursor: pointer; border-radius: 8px; padding: 4px 6px; margin: -2px -6px; }
+.meeting-segment:hover { background: rgba(127,127,127,.08); }
+.meeting-segment.on { background: rgba(0,122,255,.1); }
+.meeting-segment.on .meeting-speaker-chip { background: rgba(0,122,255,.18); }
+.meeting-segment-edit { display: flex; align-items: center; gap: 8px; }
+.meeting-list-card .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.meeting-search { width: 220px; padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
+
+/* 听记·详情页分区卡片化（对标钉听详情页：播放器驾驶台 + 纪要/待办/导图/转写分区卡） */
+.meeting-player-card { display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(0,122,255,.22); border-radius: 12px; padding: 12px 14px; background: linear-gradient(135deg, rgba(0,122,255,.06), rgba(124,108,242,.05)); }
+.meeting-block { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.55); }
+.meeting-block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.meeting-block-head h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--text, #333); }
+.meeting-block-tag { flex-shrink: 0; font-size: 11px; color: var(--blue, #007aff); background: rgba(0,122,255,.1); border-radius: 8px; padding: 1px 8px; }
+.meeting-block-count { flex-shrink: 0; font-size: 11px; color: var(--muted); background: var(--soft-bg); border-radius: 8px; padding: 1px 8px; }
+
+/* 听记·列表缩略图色块（对标钉钉列表文档缩略图） */
+.meeting-thumb { flex-shrink: 0; width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; font-weight: 700; }
 
 /* 听记·图文海报（内置主题皮肤；截图走 html2canvas，仅用其支持的特性：
    hex/rgba 颜色 + linear-gradient，不用 oklch/box-shadow，离屏实例全尺寸导出） */

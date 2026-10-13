@@ -17,14 +17,19 @@ _REDUCE_CHUNK = 30000
 
 def _template_prompt(template: dict | None) -> str:
     """按模板生成 sections 结构指令；默认模板走旧版固定字段（纪要/要点），避免回归。"""
+    chapters_shape = (
+        '"chapters": [{"title": "章节标题", "start": "mm:ss", "end": "mm:ss", "gist": "一句话内容概括"}], '
+    )
     if not template or template.get("id") == "meeting-minutes":
         return (
             '{"minutes": "400字以内的会议纪要，按议题归纳，保留数据与结论", '
             '"key_points": ["讨论要点，每条一句话，保留数据/数字/期限"], '
+            + chapters_shape +
             '"todos": [...], "mindmap": "..."}'
         )
     return (
         '{"sections": [{"title": "小节标题", "content": "本节内容：要么是连贯段落，要么是多行以 `- ` 开头的列表"}], '
+        + chapters_shape +
         '"todos": [...], "mindmap": "..."}\n'
         f"sections 按以下结构组织（小节标题与顺序遵循）：{template.get('sections')}"
     )
@@ -37,6 +42,9 @@ _SYSTEM_PROMPT_HEAD = (
 _SYSTEM_PROMPT_TAIL = (
     '\ntodos 形如 [{"task": "待办事项", "owner_hint": "负责人或空字符串", "due_hint": "期限或空字符串"}]，'
     "任何模板都必须提取待办。\n"
+    'chapters 是智能切片：把转写按话题切成 3-8 段，start/end 直接抄转写行里的 [mm:ss] 时间戳'
+    "（start 为该话题第一句的时间，end 为下一话题第一句的时间或最后一句时间）；"
+    "title 10 字以内概括话题，gist 一句话说明这段聊了什么；按时间顺序排列、不重叠。\n"
     'mindmap 是会议结构的 markdown 层级大纲：第一行 "# 会议主题"；二级 "## 议题/模块"'
     "（按会议实际议题划分）；三级 \"- 要点\"；四级 \"  - 补充细节\"（可选）。要求：\n"
     "1. 总节点 15-40 个，宁可信息完整也不要干瘪；\n"
@@ -49,6 +57,47 @@ _SYSTEM_PROMPT_TAIL = (
 def _system_prompt(template: dict | None) -> str:
     return _SYSTEM_PROMPT_HEAD + _template_prompt(template) + _SYSTEM_PROMPT_TAIL
 
+
+
+def _parse_mmss(value) -> int | None:
+    """把 LLM 给的时间锚点归一为秒；接受 "mm:ss"、"hh:mm:ss" 或纯秒数，坏值返回 None。"""
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3 or not all(part.strip().isdigit() for part in parts):
+        return None
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + int(part)
+    return seconds
+
+
+def _parse_chapters(raw) -> list[dict]:
+    """智能切片归一：坏项丢弃、按时间排序；全坏返回空列表（前端回退无章节条）。"""
+    if not isinstance(raw, list):
+        return []
+    chapters: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        start = _parse_mmss(item.get("start"))
+        if not title or start is None:
+            continue
+        end = _parse_mmss(item.get("end"))
+        if end is None or end < start:
+            end = start
+        chapters.append({
+            "title": title[:30],
+            "start": start,
+            "end": end,
+            "gist": str(item.get("gist") or "").strip(),
+        })
+    chapters.sort(key=lambda chapter: chapter["start"])
+    return chapters
 
 
 def _extract_last_json(text: str) -> dict | None:
@@ -145,6 +194,57 @@ class MeetingSummarizer:
             logger.warning("会议总结生成失败", exc_info=True)
             return None
 
+    # --- 会中要点（对标钉钉实时摘要树：随录随长，只看已上屏内容） ---
+
+    _LIVE_POINTS_SYSTEM = (
+        "你是会议实时助理。根据目前已上屏的会议片段，提炼 3-6 条本场要点，"
+        '输出严格 JSON 对象 {"points": ["要点1", "要点2"]}，不输出其他字段。\n'
+        "每条一句话、不超过 30 字，只依据给定内容，不预测未出现的信息，不编造。"
+    )
+    # 要点关心"最近在聊什么"，取尾部即可，避免长会议把整篇再灌一遍
+    _LIVE_POINTS_LIMIT = 4000
+
+    def live_points(self, material: str) -> list[str]:
+        if not self.configured or not material.strip():
+            return []
+        parsed = self.ask_json(self._LIVE_POINTS_SYSTEM, "已上屏内容如下：\n" + material[-self._LIVE_POINTS_LIMIT :])
+        if not parsed:
+            return []
+        points: list[str] = []
+        for item in parsed.get("points") or []:
+            text = " ".join(str(item or "").split())[:40]
+            if text and text not in points:
+                points.append(text)
+        return points[:6]
+
+    # --- 关键词（对标钉钉 queryKeywords：独立一次调用，可单独补跑，与总结互不牵连） ---
+
+    _KEYWORDS_SYSTEM = (
+        "你是企业会议分析助手。从带说话人标签的会议转写中提取 6-10 个关键词，"
+        '输出严格 JSON 对象 {"keywords": ["词1", "词2"]}，不输出其他字段。\n'
+        "要求：关键词是名词或短短语（项目名/产品名/人名/技术名词/数字指标/期限），"
+        "每个不超过 10 个字，按重要性从高到低排序，只依据转写内容，不编造。"
+    )
+    # 关键词只要覆盖面不要精确性：超长会议截前段，避免整篇再跑一次 map-reduce
+    _KEYWORDS_LIMIT = 20000
+
+    def extract_keywords(self, transcript: str) -> list[str] | None:
+        """返回关键词列表；LLM 未配置/调用失败返回 None（调用方据此置 failed）。"""
+        if not self.configured or not transcript.strip():
+            return None
+        parsed = self.ask_json(self._KEYWORDS_SYSTEM, "会议转写如下：\n" + transcript[: self._KEYWORDS_LIMIT])
+        if parsed is None:
+            return None
+        raw = parsed.get("keywords")
+        if not isinstance(raw, list):
+            return []
+        keywords: list[str] = []
+        for item in raw:
+            word = " ".join(str(item or "").split())[:12]
+            if word and word not in keywords:
+                keywords.append(word)
+        return keywords[:10]
+
     def _summarize_guarded(self, transcript: str, template: dict | None = None) -> dict | None:
         client = self._client()
         if len(transcript) > _REDUCE_THRESHOLD:
@@ -193,6 +293,9 @@ class MeetingSummarizer:
             if isinstance(item, dict) and item.get("task")
         ]
         result: dict = {"todos": todos, "mindmap": str(parsed.get("mindmap") or "")}
+        chapters = _parse_chapters(parsed.get("chapters"))
+        if chapters:
+            result["chapters"] = chapters
         sections = parsed.get("sections")
         is_default = not template or template.get("id") == "meeting-minutes"
         if isinstance(sections, list) and sections:

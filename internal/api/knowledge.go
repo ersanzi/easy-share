@@ -3,12 +3,13 @@
 package api
 
 import (
-	"strconv"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ const knowledgeQueryTimeout = 120 * time.Second
 
 // knowledgeUploadTimeout 会议音频上传受理上限：本机/局域网传数百 MB WAV，远端只落盘即返回。
 const knowledgeUploadTimeout = 10 * time.Minute
+
+// streamChunkMaxBytes 实时推流单片上限：600ms@16k s16 ≈ 19KB，留足冗余挡住异常大包。
+const streamChunkMaxBytes = 1024 * 1024
 
 // knowledgeSession 取当前会话（须已登录），未登录时写 401 并返回 false。
 func (server *Server) knowledgeSession(writer http.ResponseWriter) (knowledge.Session, bool) {
@@ -457,6 +461,351 @@ func (server *Server) knowledgeMeetingAsk(writer http.ResponseWriter, request *h
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+// knowledgeMeetingKeywordsRegen 代理关键词区块补跑（LLM 慢链路）。
+func (server *Server) knowledgeMeetingKeywordsRegen(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetReadDeadline(time.Time{})
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).RegenerateMeetingKeywords(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting keywords regen", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
+}
+
+// --- 待办（一等实体的增删改，对标钉钉 MinutesTodoI；快链路，沿用全局 30s 期限） ---
+
+// knowledgeMeetingTodoAdd 手工新增待办。
+func (server *Server) knowledgeMeetingTodoAdd(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	var input knowledge.MeetingTodoInput
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeKnowledgeError(writer, "meeting todo add decode", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).AddMeetingTodo(ctx, session.Token, knowledgeMeetingByID(request), input)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting todo add", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
+}
+
+// knowledgeMeetingTodoUpdate 编辑待办内容/负责人/期限或勾选完成。
+func (server *Server) knowledgeMeetingTodoUpdate(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	var input knowledge.MeetingTodoInput
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeKnowledgeError(writer, "meeting todo update decode", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).UpdateMeetingTodo(
+		ctx, session.Token, knowledgeMeetingByID(request), request.PathValue("todoId"), input)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting todo update", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
+}
+
+// knowledgeMeetingTodoDelete 删除一条待办。
+func (server *Server) knowledgeMeetingTodoDelete(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).DeleteMeetingTodo(
+		ctx, session.Token, knowledgeMeetingByID(request), request.PathValue("todoId"))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting todo delete", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
+}
+
+// --- 实时上屏（推流边说边出字；预览性质，终态仍由整段离线重跑给出） ---
+
+// knowledgeMeetingStreamWarm 触发知识服务后台预热流式模型（听记页一打开就调）。
+func (server *Server) knowledgeMeetingStreamWarm(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	if err := knowledge.NewClient(session.ServerURL).WarmMeetingStream(ctx, session.Token); err != nil {
+		writeKnowledgeError(writer, "meeting stream warm", err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, map[string]bool{"warming": true})
+}
+
+// knowledgeMeetingStreamOpen 开实时会话，先落一条 recording 记录。
+func (server *Server) knowledgeMeetingStreamOpen(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	var input struct {
+		Title      string `json:"title"`
+		TemplateID string `json:"templateId"`
+	}
+	_ = json.NewDecoder(request.Body).Decode(&input)
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).OpenMeetingStream(ctx, session.Token, input.Title, input.TemplateID)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting stream open", err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, meeting)
+}
+
+// knowledgeMeetingStreamChunk 转发一片 PCM 给知识服务，回当前上屏字幕。
+// 首片可能触发流式模型冷加载（GB 级权重），因此解除 30s 写超时、上下文给到 120s。
+func (server *Server) knowledgeMeetingStreamChunk(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(request.Body, streamChunkMaxBytes+1))
+	if err != nil || len(body) == 0 {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "推流片段为空或读取失败"})
+		return
+	}
+	if len(body) > streamChunkMaxBytes {
+		writeJSON(writer, http.StatusRequestEntityTooLarge, ErrorResponse{Code: "stream_chunk_too_large", Message: "推流片段过大"})
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	defer cancel()
+	view, err := knowledge.NewClient(session.ServerURL).MeetingStreamChunk(ctx, session.Token, knowledgeMeetingByID(request), body)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting stream chunk", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// knowledgeMeetingStreamStop 结束推流会话，回完整实时字幕行。
+func (server *Server) knowledgeMeetingStreamStop(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	defer cancel()
+	view, err := knowledge.NewClient(session.ServerURL).MeetingStreamStop(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting stream stop", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// knowledgeMeetingLivePoints 会中要点（LLM 慢链路，随录随长）。
+func (server *Server) knowledgeMeetingLivePoints(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	defer cancel()
+	points, err := knowledge.NewClient(session.ServerURL).MeetingLivePoints(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting live points", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"points": points})
+}
+
+// --- 个性化热词与重新转写（对标钉钉 hotwords / retranscribe） ---
+
+// knowledgeMeetingHotwords 读当前用户热词表。
+func (server *Server) knowledgeMeetingHotwords(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	result, err := knowledge.NewClient(session.ServerURL).MeetingHotwords(ctx, session.Token)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting hotwords list", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+// knowledgeMeetingHotwordsAdd 批量新增热词（校验在知识服务，错误文案直达）。
+func (server *Server) knowledgeMeetingHotwordsAdd(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	var input struct {
+		Words []string `json:"words"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeKnowledgeError(writer, "meeting hotwords add decode", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	result, err := knowledge.NewClient(session.ServerURL).AddMeetingHotwords(ctx, session.Token, input.Words)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting hotwords add", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+// knowledgeMeetingHotwordDelete 删除一条热词。
+func (server *Server) knowledgeMeetingHotwordDelete(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	word := request.PathValue("word")
+	if word == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "缺少热词"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	result, err := knowledge.NewClient(session.ServerURL).DeleteMeetingHotword(ctx, session.Token, word)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting hotword delete", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+// knowledgeMeetingRetranscribe 重新转写整场（异步受理，前端轮询详情）。
+func (server *Server) knowledgeMeetingRetranscribe(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).RetranscribeMeeting(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting retranscribe", err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, meeting)
+}
+
+// --- 声纹（生物特征数据：可查可删） ---
+
+// knowledgeMeetingVoiceprints 列出当前用户已登记声纹（仅元数据）。
+func (server *Server) knowledgeMeetingVoiceprints(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	items, err := knowledge.NewClient(session.ServerURL).MeetingVoiceprints(ctx, session.Token)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting voiceprints list", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"voiceprints": items})
+}
+
+// knowledgeMeetingVoiceprintDelete 删除一条声纹。
+func (server *Server) knowledgeMeetingVoiceprintDelete(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	name := request.PathValue("name")
+	if name == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "缺少声纹名称"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	items, err := knowledge.NewClient(session.ServerURL).DeleteMeetingVoiceprint(ctx, session.Token, name)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting voiceprint delete", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"voiceprints": items})
 }
 
 // knowledgeMeetingExport 代理备忘录导出文件（markdown|docx，流式透传）。

@@ -85,14 +85,14 @@ type CitedDoc struct {
 
 // KnowledgeStats 管理员汇总页的聚合统计快照。
 type KnowledgeStats struct {
-	Days           int                `json:"days"`
-	TotalQueries   int                `json:"total_queries"`
-	RecentQueries  int                `json:"recent_queries"`
-	BlindSpotCount int                `json:"blind_spot_count"`
-	Generation     GenerationQuality  `json:"generation"`
-	MostCitedDocs  []CitedDoc         `json:"most_cited_docs"`
-	Documents      int                `json:"documents"`
-	LLM            string             `json:"llm"`
+	Days           int               `json:"days"`
+	TotalQueries   int               `json:"total_queries"`
+	RecentQueries  int               `json:"recent_queries"`
+	BlindSpotCount int               `json:"blind_spot_count"`
+	Generation     GenerationQuality `json:"generation"`
+	MostCitedDocs  []CitedDoc        `json:"most_cited_docs"`
+	Documents      int               `json:"documents"`
+	LLM            string            `json:"llm"`
 }
 
 // Stats 拉聚合统计（days 为观察窗口天数，1-90）。
@@ -259,11 +259,15 @@ type MeetingSegment struct {
 	Speaker string  `json:"speaker"`
 }
 
-// MeetingTodo 总结中提取的待办。
+// MeetingTodo 一条待办（一等实体，对标钉钉 MinutesTodoI：可增删改与勾选完成）。
+// ID 由知识服务生成；Source 为 "ai"（随总结刷新）或 "manual"（用户手工，重生成保留）。
 type MeetingTodo struct {
+	ID        string `json:"id"`
 	Task      string `json:"task"`
 	OwnerHint string `json:"owner_hint"`
 	DueHint   string `json:"due_hint"`
+	Done      bool   `json:"done"`
+	Source    string `json:"source"`
 }
 
 // MeetingSection 模板化总结的小节（title + 段落或列表）。
@@ -273,17 +277,27 @@ type MeetingSection struct {
 	Bullets []string `json:"bullets"`
 }
 
+// MeetingChapter 智能切片章节（Start/End 为秒；对标钉钉结构化章节，点击可跳转播放）。
+type MeetingChapter struct {
+	Title string `json:"title"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	Gist  string `json:"gist,omitempty"`
+}
+
 // MeetingSummary AI 总结（未生成/LLM 未配置时为 null）。
-// 默认模板填 Minutes/KeyPoints；其他模板填 Sections；Todos 任何模板都有。
+// 默认模板填 Minutes/KeyPoints；其他模板填 Sections；待办是独立实体，不在这里。
 type MeetingSummary struct {
 	Minutes   string           `json:"minutes,omitempty"`
 	KeyPoints []string         `json:"key_points,omitempty"`
 	Sections  []MeetingSection `json:"sections,omitempty"`
-	Todos     []MeetingTodo    `json:"todos"`
+	Chapters  []MeetingChapter `json:"chapters,omitempty"`
 }
 
 // Meeting 会议听记记录。列表视图时 Segments 为空、SegmentCount 给出条数；
 // 详情视图含全部分段。Owner/Error/DurationSeconds/Summary 可为 null。
+// Blocks 是各 AI 区块的独立状态（pending/processing/ready/failed/skipped），
+// 对标钉钉分任务状态：某块失败只补跑那块。
 type Meeting struct {
 	ID              string            `json:"id"`
 	Title           string            `json:"title"`
@@ -296,9 +310,190 @@ type Meeting struct {
 	SpeakerNames    map[string]string `json:"speaker_names"`
 	Segments        []MeetingSegment  `json:"segments"`
 	Summary         *MeetingSummary   `json:"summary"`
+	Keywords        []string          `json:"keywords"`
+	Todos           []MeetingTodo     `json:"todos"`
+	Blocks          map[string]string `json:"blocks"`
+	BlockErrors     map[string]string `json:"block_errors"`
 	Mindmap         *string           `json:"mindmap"`
 	TemplateID      *string           `json:"template_id"`
 	SegmentCount    int               `json:"segment_count"`
+}
+
+// MeetingLiveLine 实时字幕单行（At 为该行起始秒数）。
+type MeetingLiveLine struct {
+	Text string  `json:"text"`
+	At   float64 `json:"at"`
+}
+
+// MeetingLiveView 推流会话的当前上屏状态（预览，终态以离线重跑为准）。
+type MeetingLiveView struct {
+	Lines          []MeetingLiveLine `json:"lines"`
+	Current        string            `json:"current"`
+	ElapsedSeconds float64           `json:"elapsed_seconds"`
+}
+
+// postForm 发 x-www-form-urlencoded（FastAPI 的 Form 字段口径），返回解码后的 JSON。
+func (client *Client) postForm(ctx context.Context, path, token string, form url.Values, out any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("build form request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("connect knowledge server: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode form response: %w", err)
+	}
+	return nil
+}
+
+// postRaw 发原始字节体（实时推流的 PCM 分片），返回解码后的 JSON。
+func (client *Client) postRaw(ctx context.Context, path, token string, body []byte, out any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build raw request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/octet-stream")
+	response, err := client.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("connect knowledge server: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode raw response: %w", err)
+	}
+	return nil
+}
+
+// WarmMeetingStream 让知识服务后台预热流式模型（首次加载约 70s，否则首片卡住上屏）。
+func (client *Client) WarmMeetingStream(ctx context.Context, token string) error {
+	var ignored map[string]any
+	return client.postForm(ctx, "/meetings/stream/warm", token, url.Values{}, &ignored)
+}
+
+// OpenMeetingStream 开一场实时录制会话（先落 recording 记录，返回其 id 当推流会话 id）。
+func (client *Client) OpenMeetingStream(ctx context.Context, token, title, templateID string) (Meeting, error) {
+	var meeting Meeting
+	form := url.Values{"title": {title}}
+	if templateID != "" {
+		form.Set("template_id", templateID)
+	}
+	err := client.postForm(ctx, "/meetings/stream/session", token, form, &meeting)
+	return meeting, err
+}
+
+// MeetingStreamChunk 推一片 PCM16/16kHz/单声道，回当前上屏状态。
+func (client *Client) MeetingStreamChunk(ctx context.Context, token, id string, pcm []byte) (MeetingLiveView, error) {
+	var view MeetingLiveView
+	err := client.postRaw(ctx, "/meetings/"+url.PathEscape(id)+"/stream", token, pcm, &view)
+	return view, err
+}
+
+// MeetingStreamStop 结束推流（冲尾包），回完整实时字幕行。
+func (client *Client) MeetingStreamStop(ctx context.Context, token, id string) (MeetingLiveView, error) {
+	var view MeetingLiveView
+	err := client.postForm(ctx, "/meetings/"+url.PathEscape(id)+"/stream/stop", token, url.Values{}, &view)
+	return view, err
+}
+
+// MeetingLivePoints 会中要点（LLM 基于已上屏内容归纳，随录随长）。
+func (client *Client) MeetingLivePoints(ctx context.Context, token, id string) ([]string, error) {
+	var payload struct {
+		Points []string `json:"points"`
+	}
+	err := client.postForm(ctx, "/meetings/"+url.PathEscape(id)+"/live-points", token, url.Values{}, &payload)
+	return payload.Points, err
+}
+
+// HotwordsResult 热词读写返回（max 为服务端每人上限，供前端显示 N/max）。
+type HotwordsResult struct {
+	Words []string `json:"words"`
+	Max   int      `json:"max"`
+}
+
+// MeetingHotwords 取当前用户热词表。
+func (client *Client) MeetingHotwords(ctx context.Context, token string) (HotwordsResult, error) {
+	var result HotwordsResult
+	err := client.call(ctx, http.MethodGet, "/meetings/hotwords", token, nil, &result)
+	if result.Words == nil {
+		result.Words = []string{}
+	}
+	return result, err
+}
+
+// AddMeetingHotwords 批量新增热词（服务端校验字符合法性与上限），返回最新词表。
+func (client *Client) AddMeetingHotwords(ctx context.Context, token string, words []string) (HotwordsResult, error) {
+	var result HotwordsResult
+	if words == nil {
+		words = []string{}
+	}
+	err := client.call(ctx, http.MethodPost, "/meetings/hotwords", token, map[string]any{"words": words}, &result)
+	if result.Words == nil {
+		result.Words = []string{}
+	}
+	return result, err
+}
+
+// DeleteMeetingHotword 删除一条热词，返回最新词表。
+func (client *Client) DeleteMeetingHotword(ctx context.Context, token, word string) (HotwordsResult, error) {
+	var result HotwordsResult
+	err := client.call(ctx, http.MethodDelete, "/meetings/hotwords/"+url.PathEscape(word), token, nil, &result)
+	if result.Words == nil {
+		result.Words = []string{}
+	}
+	return result, err
+}
+
+// RetranscribeMeeting 重新转写整场（加了热词后重跑全管线），异步受理返回 processing 记录。
+func (client *Client) RetranscribeMeeting(ctx context.Context, token, id string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/retranscribe", token, map[string]any{}, &meeting)
+	return meeting, err
+}
+
+// MeetingVoiceprint 已登记声纹的元数据（向量本体不出服务端）。
+type MeetingVoiceprint struct {
+	Name          string  `json:"name"`
+	SampleSeconds float64 `json:"sample_seconds"`
+	UpdatedAt     string  `json:"updated_at"`
+}
+
+// MeetingVoiceprints 列出当前用户已登记的声纹。
+func (client *Client) MeetingVoiceprints(ctx context.Context, token string) ([]MeetingVoiceprint, error) {
+	var payload struct {
+		Voiceprints []MeetingVoiceprint `json:"voiceprints"`
+	}
+	err := client.call(ctx, http.MethodGet, "/meetings/voiceprints", token, nil, &payload)
+	if payload.Voiceprints == nil {
+		payload.Voiceprints = []MeetingVoiceprint{}
+	}
+	return payload.Voiceprints, err
+}
+
+// DeleteMeetingVoiceprint 删除一条声纹（生物特征数据必须可删）。
+func (client *Client) DeleteMeetingVoiceprint(ctx context.Context, token, name string) ([]MeetingVoiceprint, error) {
+	var payload struct {
+		Voiceprints []MeetingVoiceprint `json:"voiceprints"`
+	}
+	err := client.call(ctx, http.MethodDelete, "/meetings/voiceprints/"+url.PathEscape(name), token, nil, &payload)
+	if payload.Voiceprints == nil {
+		payload.Voiceprints = []MeetingVoiceprint{}
+	}
+	return payload.Voiceprints, err
 }
 
 // ArchiveResult 会议归档入库的结果。
@@ -367,6 +562,42 @@ func (client *Client) MeetingAsk(ctx context.Context, token, id, question string
 	body := map[string]any{"question": question, "history": history}
 	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/ask", token, body, &result)
 	return result, err
+}
+
+// RegenerateMeetingKeywords 单独补跑关键词区块（LLM 调用，较慢），返回完整记录。
+func (client *Client) RegenerateMeetingKeywords(ctx context.Context, token, id string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/keywords", token, map[string]any{}, &meeting)
+	return meeting, err
+}
+
+// MeetingTodoInput 待办新增/编辑入参（指针字段：缺省即不改动）。
+type MeetingTodoInput struct {
+	Task      *string `json:"task,omitempty"`
+	OwnerHint *string `json:"owner_hint,omitempty"`
+	DueHint   *string `json:"due_hint,omitempty"`
+	Done      *bool   `json:"done,omitempty"`
+}
+
+// AddMeetingTodo 手工新增待办，返回更新后的完整记录。
+func (client *Client) AddMeetingTodo(ctx context.Context, token, id string, input MeetingTodoInput) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/todos", token, input, &meeting)
+	return meeting, err
+}
+
+// UpdateMeetingTodo 编辑待办（内容/负责人/期限/完成态），返回更新后的完整记录。
+func (client *Client) UpdateMeetingTodo(ctx context.Context, token, id, todoID string, input MeetingTodoInput) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPatch, "/meetings/"+url.PathEscape(id)+"/todos/"+url.PathEscape(todoID), token, input, &meeting)
+	return meeting, err
+}
+
+// DeleteMeetingTodo 删除一条待办，返回更新后的完整记录。
+func (client *Client) DeleteMeetingTodo(ctx context.Context, token, id, todoID string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodDelete, "/meetings/"+url.PathEscape(id)+"/todos/"+url.PathEscape(todoID), token, nil, &meeting)
+	return meeting, err
 }
 
 // RegenerateMeetingMindmap 重新生成思维导图大纲（LLM 调用，较慢）。

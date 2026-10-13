@@ -1,11 +1,12 @@
 // 会议听记的桌面端接线：
-// 1. 小请求（列表/详情/管理/归档）走 Wails 绑定 → desktop.Client → Core JSON 代理；
-// 2. 大文件（音频上传/回放）走同源 fetch /kapi/meetings/*——经 pluginAssetMiddleware
-//    接管（dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截），流式转发，
-//    不把上百 MB 音频塞进 Wails 绑定的 JSON 通道。令牌仍不出 Core。
+//  1. 小请求（列表/详情/管理/归档）走 Wails 绑定 → desktop.Client → Core JSON 代理；
+//  2. 大文件（音频上传/回放）走同源 fetch /kapi/meetings/*——经 pluginAssetMiddleware
+//     接管（dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截），流式转发，
+//     不把上百 MB 音频塞进 Wails 绑定的 JSON 通道。令牌仍不出 Core。
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -96,6 +97,54 @@ func (a *App) MeetingMindmapRegenerate(id string) (knowledge.Meeting, error) {
 	return result, err
 }
 
+// MeetingKeywordsRegenerate 单独补跑关键词区块（LLM 调用，秒级）。
+func (a *App) MeetingKeywordsRegenerate(id string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingKeywordsRegenerate(a.ctx, id)
+	a.reportError("meeting keywords regen", err)
+	return result, err
+}
+
+// MeetingTodoAdd 手工新增一条待办（对标钉钉待办为一等实体）。
+func (a *App) MeetingTodoAdd(id, task, ownerHint, dueHint string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingTodoAdd(a.ctx, id, knowledge.MeetingTodoInput{
+		Task: &task, OwnerHint: &ownerHint, DueHint: &dueHint,
+	})
+	a.reportError("meeting todo add", err)
+	return result, err
+}
+
+// MeetingTodoUpdate 编辑待办内容/负责人/期限或勾选完成（整行提交）。
+func (a *App) MeetingTodoUpdate(id, todoID, task, ownerHint, dueHint string, done bool) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingTodoUpdate(a.ctx, id, todoID, knowledge.MeetingTodoInput{
+		Task: &task, OwnerHint: &ownerHint, DueHint: &dueHint, Done: &done,
+	})
+	a.reportError("meeting todo update", err)
+	return result, err
+}
+
+// MeetingTodoRemove 删除一条待办。
+func (a *App) MeetingTodoRemove(id, todoID string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingTodoRemove(a.ctx, id, todoID)
+	a.reportError("meeting todo remove", err)
+	return result, err
+}
+
 // MeetingArchiveToKnowledge 把纪要与转写归档进知识库（可被问答检索引用）。
 func (a *App) MeetingArchiveToKnowledge(id string) (knowledge.ArchiveResult, error) {
 	client, err := a.coreClient()
@@ -104,6 +153,141 @@ func (a *App) MeetingArchiveToKnowledge(id string) (knowledge.ArchiveResult, err
 	}
 	result, err := client.MeetingArchive(a.ctx, id)
 	a.reportError("meeting archive", err)
+	return result, err
+}
+
+// --- 实时上屏绑定（边说边出字：会话/推流/收尾/会中要点） ---
+
+// MeetingStreamWarm 请求知识服务后台预热流式模型（听记页打开即调，首片不再等冷加载）。
+func (a *App) MeetingStreamWarm() error {
+	client, err := a.coreClient()
+	if err != nil {
+		return err
+	}
+	err = client.MeetingStreamWarm(a.ctx)
+	a.reportError("meeting stream warm", err)
+	return err
+}
+
+// MeetingStreamOpen 开一场实时录制会话，返回 recording 记录（其 id 即推流会话 id）。
+func (a *App) MeetingStreamOpen(title, templateID string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingStreamOpen(a.ctx, title, templateID)
+	a.reportError("meeting stream open", err)
+	return result, err
+}
+
+// MeetingStreamChunk 推一片 PCM16/16kHz/单声道（base64），回当前已上屏字幕。
+func (a *App) MeetingStreamChunk(id, pcmBase64 string) (knowledge.MeetingLiveView, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.MeetingLiveView{}, err
+	}
+	pcm, err := base64.StdEncoding.DecodeString(pcmBase64)
+	if err != nil {
+		return knowledge.MeetingLiveView{}, err
+	}
+	view, err := client.MeetingStreamChunk(a.ctx, id, pcm)
+	a.reportError("meeting stream chunk", err)
+	return view, err
+}
+
+// MeetingStreamStop 结束推流会话，回完整实时字幕行。
+func (a *App) MeetingStreamStop(id string) (knowledge.MeetingLiveView, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.MeetingLiveView{}, err
+	}
+	view, err := client.MeetingStreamStop(a.ctx, id)
+	a.reportError("meeting stream stop", err)
+	return view, err
+}
+
+// MeetingLivePoints 会中要点（LLM 基于已上屏内容归纳，随录随长）。
+func (a *App) MeetingLivePoints(id string) ([]string, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return nil, err
+	}
+	points, err := client.MeetingLivePoints(a.ctx, id)
+	a.reportError("meeting live points", err)
+	return points, err
+}
+
+// MeetingVoiceprintsGet 当前用户已登记声纹（仅名字与样本时长，向量不出服务端）。
+func (a *App) MeetingVoiceprintsGet() ([]knowledge.MeetingVoiceprint, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return nil, err
+	}
+	items, err := client.MeetingVoiceprints(a.ctx)
+	a.reportError("meeting voiceprints get", err)
+	if items == nil {
+		items = []knowledge.MeetingVoiceprint{}
+	}
+	return items, err
+}
+
+// MeetingVoiceprintRemove 删除一条声纹（生物特征数据必须可删）。
+func (a *App) MeetingVoiceprintRemove(name string) ([]knowledge.MeetingVoiceprint, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return nil, err
+	}
+	items, err := client.MeetingVoiceprintRemove(a.ctx, name)
+	a.reportError("meeting voiceprint remove", err)
+	if items == nil {
+		items = []knowledge.MeetingVoiceprint{}
+	}
+	return items, err
+}
+
+// --- 个性化热词与重新转写 ---
+
+// MeetingHotwordsGet 当前用户热词表（含每人上限，供前端显示 N/max）。
+func (a *App) MeetingHotwordsGet() (knowledge.HotwordsResult, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.HotwordsResult{}, err
+	}
+	result, err := client.MeetingHotwords(a.ctx)
+	a.reportError("meeting hotwords get", err)
+	return result, err
+}
+
+// MeetingHotwordsAdd 批量新增热词（字符合法性与上限由知识服务校验），返回最新词表。
+func (a *App) MeetingHotwordsAdd(words []string) (knowledge.HotwordsResult, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.HotwordsResult{}, err
+	}
+	result, err := client.MeetingHotwordsAdd(a.ctx, words)
+	a.reportError("meeting hotwords add", err)
+	return result, err
+}
+
+// MeetingHotwordRemove 删除一条热词，返回最新词表。
+func (a *App) MeetingHotwordRemove(word string) (knowledge.HotwordsResult, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.HotwordsResult{}, err
+	}
+	result, err := client.MeetingHotwordRemove(a.ctx, word)
+	a.reportError("meeting hotword remove", err)
+	return result, err
+}
+
+// MeetingRetranscribe 重新转写整场（加了热词后重跑全管线，含总结/关键词/导图）。
+func (a *App) MeetingRetranscribe(id string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MeetingRetranscribe(a.ctx, id)
+	a.reportError("meeting retranscribe", err)
 	return result, err
 }
 

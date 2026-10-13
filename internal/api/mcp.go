@@ -29,9 +29,8 @@ var (
 
 // serveMCP 是 /mcp 入口：先校验配对令牌，再交给 MCP Streamable HTTP handler。
 func (server *Server) serveMCP(writer http.ResponseWriter, request *http.Request) {
-	token := mcpBearerToken(request)
-	if token == "" || !secureEquals(token, server.config.MCPToken) {
-		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "mcp_unauthorized", Message: "缺少或错误的 MCP 配对令牌"})
+	if !server.mcpAuthorized(request) {
+		writeUnauthorized(writer)
 		return
 	}
 	mcpServerOnce.Do(func() {
@@ -39,6 +38,7 @@ func (server *Server) serveMCP(writer http.ResponseWriter, request *http.Request
 			func(*http.Request) *mcp.Server {
 				return meetingsmcp.New(meetingsmcp.Options{
 					Version: version.Version,
+					BaseURL: server.mcpBaseURL(),
 					Lookup:  server.knowledgeSessionLookup,
 				})
 			},
@@ -46,6 +46,30 @@ func (server *Server) serveMCP(writer http.ResponseWriter, request *http.Request
 		)
 	})
 	mcpEndpoint.ServeHTTP(writer, request)
+}
+
+// serveMCPMeetingAudio 让 MCP 侧的「音频地址」真的可取：用同一个配对令牌（而不是
+// 桌面端 apiToken）鉴权后，复用听记音频流式代理。AI 客户端拿到地址即可下载原始录音。
+func (server *Server) serveMCPMeetingAudio(writer http.ResponseWriter, request *http.Request) {
+	if !server.mcpAuthorized(request) {
+		writeUnauthorized(writer)
+		return
+	}
+	server.knowledgeMeetingAudio(writer, request)
+}
+
+func (server *Server) mcpAuthorized(request *http.Request) bool {
+	token := mcpBearerToken(request)
+	return token != "" && secureEquals(token, server.config.MCPToken)
+}
+
+func writeUnauthorized(writer http.ResponseWriter) {
+	writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "mcp_unauthorized", Message: "缺少或错误的 MCP 配对令牌"})
+}
+
+// mcpBaseURL 是本机 Core 的对外基址（MCP 工具拼音频地址用）。
+func (server *Server) mcpBaseURL() string {
+	return "http://127.0.0.1:" + strconv.Itoa(server.config.APIPort)
 }
 
 // knowledgeSessionLookup 供 MCP 工具取桌面端登录态；未登录/网关未启用时给可行动的错误文案。
@@ -85,7 +109,7 @@ func (server *Server) mcpRegenerate(writer http.ResponseWriter, _ *http.Request)
 
 func (server *Server) mcpConnectionInfo() map[string]string {
 	return map[string]string{
-		"url":   "http://127.0.0.1:" + strconv.Itoa(server.config.APIPort) + "/mcp",
+		"url":   server.mcpBaseURL() + "/mcp",
 		"token": server.config.MCPToken,
 	}
 }
