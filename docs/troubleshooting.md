@@ -368,3 +368,12 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 1. **HashEmbedder 评测指标莫名 ±0.01 波动**：4096 维字符 trigram 哈希存在碰撞（单对概率约 1/4096，前缀×查询十几对合计约 4%）。任何切块文本增量（如 contextual 摘要前缀）都是碰撞掷骰——实测「前缀与查询共享 trigram 为空，点积却 +0.0714」。对策：该口径只做回归守门（misses 集合比单点小数更可靠），语义结论以 `scripts/eval_retrieval.py --real` 为准；追求哈希口径精确不回退是与随机数搏斗。证据与分析见 `docs/iterations/2026-09-05-contextual-chunking.md` §4。
 2. **42 条评测集对真实 embedding 已饱和（全指标 1.000）**：检索质量「有增益」类改动在这把尺子上不可测量，只能证「不回退」。要测增益需先扩充「上下文敏感性」难例（正文不含文档身份即失义的块），方案见 `docs/tasks.md` 收件箱——注意防过拟合，勿为证明某个功能反向造用例。
 3. **切块加前缀后评测排名大乱**：前缀若占用正文装箱预算（`effective_size = chunk_size - prefix_len`），切块边界整体漂移，排名变化与内容无关。正确姿势是**先装箱后加前缀**（`app/kb/chunker.py` `_chunk_section`），正文与无前缀时逐字节一致。
+
+## 16. Linux 服务器部署（2026-10-13 于 192.168.1.239 CentOS 7 首次实战收录）
+
+1. **EOL CentOS 7 三连坑**：yum 源（阿里云镜像）还活着，`git` 能装但是 1.8（不支持 `git -C`，deploy.sh/update.sh 直接炸）——用 conda-forge 的 git（Miniforge 装 py311 时顺带）软链 `/usr/local/bin/git` 覆盖；系统无 python3 且 gcc 4.8 编不了新 CPython——Miniforge（清华镜像）单目录装 `/opt/miniforge3`，软链 `python3` 进 PATH，不碰系统。
+2. **旧 glibc（<2.28）pip 装包必炸**：新版 numpy/Pillow/lxml/pydantic-core 的 wheel 只发 `manylinux_2_28`，glibc 2.17 的 pip 拿到 sdist 落源码构建，gcc 4.8（`NumPy requires GCC >= 9.3`、Pillow C99 报错）编不动。解法：先钉仍发 `manylinux_2_17` 轮子的版本（numpy 1.26.4 / pydantic 2.9.2 / pydantic-settings 2.6.1 / uvloop 0.19.0 / httptools 0.6.1 / watchfiles 0.21.0 / Pillow 10.4.0 / lxml 5.3.0），再 `-r requirements.txt`——pip 对已满足的依赖不会动它们。**坑中坑**：Pillow/lxml 不在 requirements 里（python-pptx/python-docx 的传递依赖），首轮没报错不代表安全。deploy.sh 已内置 glibc 检测自动钉版。
+3. **服务器不通 Docker Hub**（gitee/清华都通，就 registry-1.docker.io 超时）：compose 四镜像在开发机 `docker save | ssh docker load` 局域网直传，1-2GB 走内网很快。
+4. **8090 被他人业务占用**（本机裸跑着 `blade-api.jar`，/home/sub-delivery-pack）：控制面宿主端口改 8091，**三处必须同步**——compose 映射 `"8091:8090"`（容器内仍 8090）、知识服务 `.env` 的 `CONTROL_PLANE_URL=http://127.0.0.1:8091`（SSO 回调）、ship-control-plane.ps1 加 `-ControlPort 8091`；安装包烧录地址随之 `http://<IP>:8091`；deploy.sh 生成的「同事使用指引.txt」里的 8090 记得一并 sed。
+5. **Git Bash 调 PowerShell 脚本**：`-File scripts\build.ps1` 的反斜杠会被 MSYS 吃掉变成 `scriptsbuild.ps1`，结果是 PowerShell 交互式启动、exit 0 假成功——一律用正斜杠 `-File scripts/build.ps1`。
+6. **CentOS 7 systemd 是 219**：单元文件只能用基础指令（本仓的 easyshare-knowledge.service 兼容）；firewalld 未运行时 deploy.sh 防火墙段自动跳过，端口天然放行，验收以「同事网段 curl 200」为准。

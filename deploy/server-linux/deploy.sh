@@ -159,6 +159,18 @@ else
     python3 -m venv "$KN/.venv"
     ok "虚拟环境已创建"
 fi
+# 旧 glibc（CentOS 7 等 <2.28）拿不到新版 numpy/Pillow/lxml 的二进制轮子，pip 会落到
+# 源码构建而被系统老 gcc 卡死；先钉仍发 manylinux_2_17 轮子的版本（2026-10-13 于
+# 192.168.1.239 CentOS 7 实测），后续 -r requirements 对已满足的依赖不会动它们
+if ldd --version 2>/dev/null | head -1 | grep -qE ' 2\.(1[0-9]|2[0-7])($|[^0-9])'; then
+    log "检测到旧 glibc（<2.28），钉版安装兼容轮子"
+    "$KN/.venv/bin/pip" install --quiet --disable-pip-version-check \
+        numpy==1.26.4 pydantic==2.9.2 pydantic-settings==2.6.1 \
+        uvloop==0.19.0 httptools==0.6.1 watchfiles==0.21.0 \
+        Pillow==10.4.0 lxml==5.3.0 \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple
+    ok "兼容轮子已钉版"
+fi
 PIP_ARGS=(install --quiet --disable-pip-version-check -r "$KN/requirements.txt")
 if [[ $NO_MIRROR -eq 0 ]]; then
     # -i 必须跟在 pip 子命令之后：pip 顶层参数区没有 -i，放前面会报 no such option

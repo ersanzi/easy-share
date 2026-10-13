@@ -167,3 +167,9 @@ curl http://127.0.0.1:8090/auth/tenant/list  # 控制面（200 即活）
   提交（服务器仓库不做本地改动）；想跟稳定版，把 update.sh 里的 dev 改成 master。
 - 向量库不部署（进程内 JSON + numpy），切换 Milvus 的条件与步骤见
   [`../../docs/company-rollout-guide.md`](../../docs/company-rollout-guide.md) §四「向量库演进」。
+- **192.168.1.239 生产机实况（2026-10-13 首次部署）**：CentOS 7（EOL）——git/python3.11 由
+  Miniforge 提供（`/opt/miniforge3`，软链进 PATH），旧 glibc 的 pip 钉版已内置于 deploy.sh；
+  Docker Hub 不通，镜像走开发机 `docker save | ssh docker load`；**控制面宿主端口 8091**
+  （8090 被他人业务 blade-api.jar 占用），compose 映射 / 知识服务 CONTROL_PLANE_URL /
+  ship 脚本 `-ControlPort` / 安装包烧录四处都走 8091。细节与复盘见
+  [`../../docs/troubleshooting.md`](../../docs/troubleshooting.md) §16。
