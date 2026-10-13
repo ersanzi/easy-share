@@ -14,6 +14,7 @@ param(
     [Parameter(Mandatory = $true)][string]$SshTarget,   # user@host
     [string]$ServerDir = "/opt/easyshare",
     [string]$JavaHome = "D:\Develop\java21",            # RuoYi 6.0 需要 JDK 21
+    [int]$ControlPort = 8090,                           # 宿主机暴露端口（容器内固定 8090；服务器 8090 被占时用 8091）
     [switch]$SkipBuild
 )
 
@@ -102,20 +103,20 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "重启失败（看日志：ssh $SshTarget
 Write-Ok "容器已重启（旧包备份在 ruoyi-admin.jar.bak）"
 
 # ── 5) 探活 ──
-Write-Step "探活 8090（Spring Boot 启动约 30-60 秒）"
+Write-Step "探活 ${ControlPort}（Spring Boot 启动约 30-60 秒）"
 $healthy = $false
 for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep -Seconds 2
-    $code = ssh $SshTarget "curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8090/auth/tenant/list 2>/dev/null || echo 000"
+    $code = ssh $SshTarget "curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:$ControlPort/auth/tenant/list 2>/dev/null || echo 000"
     if ($code -eq "200") { $healthy = $true; break }
-    if ($code -eq "404") { Write-Warning "8090 已应答但 /auth/tenant/list 404（可能路由不同），改按端口判断"; $healthy = $true; break }
+    if ($code -eq "404") { Write-Warning "${ControlPort} 已应答但 /auth/tenant/list 404（可能路由不同），改按端口判断"; $healthy = $true; break }
 }
 if (-not $healthy) {
     Write-Fail "8090 未在 90 秒内就绪，最近日志："
     ssh $SshTarget "docker logs easyshare-ruoyi --tail 30"
     exit 1
 }
-Write-Ok "控制面已上线：http://<服务器IP>:8090"
+Write-Ok "控制面已上线：http://<服务器IP>:$ControlPort"
 Write-Host ""
 Write-Host "==== 投递完成 ====" -ForegroundColor Green
 Write-Host " 回滚：ssh $SshTarget 然后 cp $cpRemote/ruoyi-admin.jar.bak $cpRemote/ruoyi-admin.jar && cd $ServerDir && docker compose up -d --no-deps ruoyi"

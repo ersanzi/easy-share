@@ -40,7 +40,8 @@ fi
 
 log "同步 Python 依赖（有变化才需要，幂等很快）"
 PIP_ARGS=(install --quiet --disable-pip-version-check -r "$KN/requirements.txt")
-if [[ $NO_MIRROR -eq 0 ]]; then PIP_ARGS=(-i https://pypi.tuna.tsinghua.edu.cn/simple "${PIP_ARGS[@]}"); fi
+# -i 必须跟在 pip 子命令之后（同 deploy.sh 的修法）
+if [[ $NO_MIRROR -eq 0 ]]; then PIP_ARGS=("${PIP_ARGS[@]}" -i https://pypi.tuna.tsinghua.edu.cn/simple); fi
 "$KN/.venv/bin/pip" "${PIP_ARGS[@]}"
 
 restart_and_check() {

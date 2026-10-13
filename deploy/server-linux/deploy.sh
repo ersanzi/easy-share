@@ -161,7 +161,8 @@ else
 fi
 PIP_ARGS=(install --quiet --disable-pip-version-check -r "$KN/requirements.txt")
 if [[ $NO_MIRROR -eq 0 ]]; then
-    PIP_ARGS=(-i https://pypi.tuna.tsinghua.edu.cn/simple "${PIP_ARGS[@]}")
+    # -i 必须跟在 pip 子命令之后：pip 顶层参数区没有 -i，放前面会报 no such option
+    PIP_ARGS=("${PIP_ARGS[@]}" -i https://pypi.tuna.tsinghua.edu.cn/simple)
     echo "    走清华镜像（--no-mirror 关闭）"
 fi
 "$KN/.venv/bin/pip" "${PIP_ARGS[@]}"
