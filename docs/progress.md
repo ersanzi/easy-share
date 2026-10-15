@@ -2,13 +2,13 @@
 
 > 本文是**进度与路线的唯一真相源**：两条产品主线的阶段/里程碑状态、已完成清单、迭代记录表和待开始优先级都以此为准。
 > 根 README 只保留概览；`product-vision.md` 与 `knowledge-platform.md` 负责方向"为什么"，本文负责"到哪了、接下来做什么"。
-> 每次迭代开始和结束时更新。最后更新：2026-10-13（公司部署落地：192.168.1.239 全链路上线，进入两周观察期）
+> 每次迭代开始和结束时更新。最后更新：2026-10-13（WPS 云盘网盘对标：纯调研，REA 不可用改走本机元数据取证，P1 排期收敛为回收站→重命名→错误诊断→批量）
 
 ## 路线总览
 
 EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对象存储（RustFS）衔接——桌面端是采集触手，服务端是知识大脑（见 [`knowledge-platform.md`](knowledge-platform.md) 第 4 节）：
 
-**主线一：桌面文件产品**（消费级，Wails + Go；方向依据 [`product-vision.md`](product-vision.md)、[`cloudreve-benchmark.md`](cloudreve-benchmark.md)）
+**主线一：桌面文件产品**（消费级，Wails + Go；方向依据 [`product-vision.md`](product-vision.md)、[`cloudreve-benchmark.md`](cloudreve-benchmark.md)（服务端架构）、[`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md)（桌面端产品形态））
 
 | 阶段 | 主题 | 状态 |
 | --- | --- | --- |
@@ -133,6 +133,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-10-15 | **GUI 体验统一优化** — 无边框窗口补最大化/还原（按钮 + 双击拖拽区）；统一 ConfirmDialog 替换全部 window.confirm 并接入云盘删除确认；`:root` 补齐幽灵变量（--text/--faint 等）、55 处过小字号抬升（最小 11px）、网盘列表 flex 填满大屏、860px 断点不再连带隐藏徽章、合并重复 CSS、删 HelloWorld 死代码；DevicePicker/海报弹窗 ESC+焦点管理、抽屉焦点还原、可点行键盘可达、aria 属性补齐 | 已完成（vue-tsc 0 错误 + vitest 45 全绿 + 前端构建过；Go 零改动；详见 [`iterations/2026-10-15-gui-maximize-and-usability.md`](iterations/2026-10-15-gui-maximize-and-usability.md)） |
+| 2026-10-13 | **WPS 云盘对标（网盘产品形态）** — REA 路线不可用（本机未装 WPS 云盘客户端，且其为 Qt 原生非 Electron），改走**本机 SQLite 元数据取证**：`WPS Cloud Files/.10709431/` 21 张表 + 3 XML，还原其信息架构（截图左栏八项逐项对上表）。核心发现：①`fileId` 与路径解耦——**与 2026-07 Cloudreve 对标结论一致，es_file 已做对，无需改动**；②回收站是「软删 + 原路径快照」（`to_delete_files` 存 filePath/parentId）而非前缀隐藏——**当前最大缺口**，与 Cloudreve P1 首项重合，两份独立对标同指一处；③标签是一等多对多实体（`docTag`），星标是文件上的单值位（`colorMark`），两者不可混；④三种上传通路各一张表，但**当前收敛是对的，不应拆开**（归阶段 5 输入）。P1 建议顺序：回收站+版本（es_file 加列）→ 重命名/移动 → 错误三件套 → 多选批量；观察期内不动代码 | 已完成（纯调研，无代码变更；详见 [`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md)） |
 | 2026-10-13 | **公司部署落地** — 192.168.1.239（CentOS 7）全链路上线：知识服务 8000 + 控制面 **8091**（8090 被他人 blade-api 占用）+ RustFS 9000/9001，四容器全绿，同事网段三端点 200；CentOS 7 适配（Miniforge 供 git/py3.11、glibc<2.28 钉版入 deploy.sh、镜像 save\|load 直传）；公司版安装包烧录 8091 产出；部署经验入 troubleshooting §16 | 已完成（deploy.sh+ship 端到端真机跑通；待办归观察期：RuoYi 改密→同事账号→发包陪装→两周周报） |
 | 2026-10-12 | 桌面端选型重评估 — Wails 保持 + Tauri 不切换（15.6k 行 Go 核心不可平移 vs 6.4k 行壳层，两条切换路径均小利润大损失）+ Wails v3 beta 评估（2026-08-02 官宣）定为后续必做，触发条件与 spike 四件套入 plans | 已完成（纯调研，无代码变更；详见 [`plans/2026-10-12-wails-v3-migration.md`](plans/2026-10-12-wails-v3-migration.md)） |
 | 2026-10-11 | 插件中心四连修 — 侧边栏插件条目错位（计数徽章 CSS 误伤）+ 待办周报弹窗 hidden 被作者样式覆盖（空弹窗常驻关不掉）+ 商城本地更新仍可重装（降级保护）+ 更新报错 null newPermissions（Go nil slice）；剪切板 2.1.0/待办 1.0.3 重新上架收敛版本 | 已完成（computer-use 真机复验全过；插件三方版本收敛；README 增工作台截图） |
@@ -226,6 +228,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 ## 进行中
 
+**网盘回收站 + 版本（2026-10-14 开工，用户直配轮「云盘太糙了，学习完善下」）**——双对标（Cloudreve §5-P1 × WPS §4.2）共同指向的 P1 首片落地：es_file 加 `state/deleted_at/origin_path/origin_parent_id/version_id` 列，`uk_es_file_path` 改部分唯一索引（仅 active），删除改软删 + 回收站列表/还原（原路径复位，被占则报冲突）/彻底删除（连对象），同名覆盖上传 version_id 单调递增；Go Core 封装 + 前端回收站视图。**口径变更：用户明确解除 2026-10-13 起的数据面观察期**；验收含真实服务器（192.168.1.239）端到端联调。不做：重命名/移动、错误三件套、批量、版本历史 UI。详见 [`iterations/2026-10-14-drive-recycle-bin.md`](iterations/2026-10-14-drive-recycle-bin.md)。
+
 **听记对标钉钉二期·第三片B：声纹自动认领（2026-10-13，用户拍板轻口径）**——不做单独采集向导：**在听记里把「说话人 N」改成真名即沉淀声纹**，之后的会议自动认领同一真人，不必每场重改。模型复用已在用的 cam++（`speech_campplus_sv_zh-cn_16k-common`，输出 192 维 `spk_embedding`，本机已缓存，零新增依赖）。**阈值是量出来的**：用 3 条真实会议录音跑跨场两两余弦，同一真人 **0.863–0.907**、同场不同人（最具对抗性）**≤0.482**、跨场不同人 0.227–0.387 → 取中值 `MATCH_THRESHOLD=0.67`，两侧各留 ~0.19 余量；另设某说话人累计 <3s 不抽、单次最多取 20s。落地：`app/meetings/voiceprint.py`（按 owner 隔离、向量 base64 存、**列表只回元数据不外泄向量**、删除即彻底收回能力）+ `service.rename_speaker`（改名即沉淀，沉淀失败不影响改名）+ `apply_voiceprints`（**只填仍是默认名的簇，不覆盖人工改名**）+ `initial_speaker_names`（顺带修掉「重新转写会把用户改过的名字冲回默认值」）+ Core/绑定/前端全链；折叠区加「我的声纹 N」列表与删除按钮并写明属个人生物特征可删。**实测 13 项全过**：改名后声纹表自动出现 `张三/35.1s` → 同批音频新场次自动 `{'0':'张三','2':'说话人 3'}`（**负对照：不像的没被乱认**）→ 删声纹后第三场不再出现张三；测试数据全部清理，原有 3 条记录未被改动。pytest **178**（听记 22 例）+ go test + vue-tsc/vite/wails build 全绿；UI 未真机点验。**另一处实测结论**：单场全管线 3–4 分钟，瓶颈是导图 harness 的多段 LLM 调用而非 ASR（RTF 0.08）。未做：钉钉的合并发言人/清除声纹/处理规则文案与「已在 N 篇识别」计数（轻口径刻意不做）。至此**用户拍板的三片全部交付**。详见 [`iterations/2026-10-13-听记对标二期三B.md`](iterations/2026-10-13-听记对标二期三B.md)。
 
 **听记对标钉钉二期·第三片A：个性化热词 + 重新转写（2026-10-13）**——意外收获：`paraformer-zh` 在 FunASR 注册表里**本身就是 seaco_paraformer**（本机已缓存），热词无需换引擎、无需新模型，只多传一个 `hotword` 参数；**实测坑**：FunASR 1.4.16 的 seaco 分支只吃**空格分隔字符串**，传 list 会在 `os.path.isfile` 处 TypeError。落地：`app/meetings/hotwords.py`（按用户隔离的 JSON 词表 + 校验器，口径照抄钉钉文案——仅中英日数字空格、含中日文 ≤10 字、纯英文 ≤5 词、每人 ≤100 条）、转写时注入本人词表、`retranscribe` 重跑整场全管线（区块复位+异步受理+无原始音频即拒）、Core/绑定/前端全链级联，录音卡内「识别热词 N/max」折叠区 + 详情页「重新转写」按钮。**A/B 对照实测（真实会议音频，走产品链路）**：基线「会议**评记**功能」评记 1/听记 0 → 加热词新建对照记录 评记 **0**/听记 **2** → 清空词表重跑同一条，评记**又回来**（负对照证明差异确由热词造成）；15 项全过含 3 项校验拒绝，测试数据已还原（听记仍 3 条）。pytest 175（听记 19 例）+ go test + vue-tsc/wails build 全绿；UI 未真机点验。**第三片只剩声纹**：涉生物特征个人信息（需声纹模型下载 + 注册/清除流程 + 授权与处理规则文案），开工前确认合规口径。详见 [`iterations/2026-10-13-听记对标二期三A.md`](iterations/2026-10-13-听记对标二期三A.md)。
@@ -285,7 +289,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 5. **插件批次 3 余项**（待排期）：AI 周报接知识服务（开机自启记录已随 2026-09-05 切片完成，见 [`iterations/2026-09-05-clipboard-autostart-toggle.md`](iterations/2026-09-05-clipboard-autostart-toggle.md)；darwin 剪切板与插件独立小窗已随 2026-09-01 剪切板旗舰切片完成）
 6. **1.8 批量压测**（后置）：与其他测试统一做
 7. **知识平台里程碑 2 全量**（暂缓）：Java 控制面按需拆分（薄切片路径替代，见定位文档；登录权限迁 Java 已定长期方向；2b/2c 权限感知已由 2026-09-01 切片在 Python 侧落地，迁移时平移语义）
-8. **网盘增强**（P0 已收官，参考 [`cloudreve-benchmark.md`](cloudreve-benchmark.md)）：目录导航 + es_file 目录层 fileId + Upload Session 断点续传三片合龙（均 2026-09-06）；P1 候选=回收站/版本（es_file 加列）、缩略图缓存、分享记录管理，按优先级排期；设备配对 / 传输加密继续暂缓
+8. **网盘增强**（P0 已收官，参考 [`cloudreve-benchmark.md`](cloudreve-benchmark.md)）：目录导航 + es_file 目录层 fileId + Upload Session 断点续传三片合龙（均 2026-09-06）；**P1 排期已由 [`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md)（2026-10-13，本机元数据取证）收敛为四步：回收站+版本（es_file 加 state/deleted_at/origin_path/version_id，回收站与版本同批，软删+原路径快照）→ 重命名/移动（file_path 改写 + 唯一键冲突检查）→ 错误三件套（errorCode+errorMsg+winErrorCode，独立小片）→ 多选批量（逐项结果、允许部分失败）**；星标/标签/最近访问归 P2（标签必须在回收站与重命名之后）。两份对标在回收站/版本/标签/批量四项上结论一致，且证据来源完全独立（Cloudreve 源码 vs WPS 本地表结构）。**观察期（2026-10-13 起两周）内不动网盘数据面**；设备配对 / 传输加密继续暂缓；WPS 三种上传通路的建模差异记入阶段 5 输入，暂不拆分
 9. **Core 知识网关泛化 + SSO 免登**（2026-10-11 拍板，部署观察期后）：`/kapi/*` 令牌注入反代取代逐端点代理（消 Wails 五处级联）+ Core 透传控制面令牌使知识页免密——技术栈盘点结论「当前唯一结构性优化点」，与 SSO 片 2 同片；依据 [`iterations/2026-10-11-知识服务sso.md`](iterations/2026-10-11-知识服务sso.md) 边界
 10. **知识服务向量库切 Milvus**（待触发，不主动执行）：观察期用进程内 JSON + numpy 余弦即可；触发条件（chunk 逼近 10 万 / 检索 P95 > 500ms / 多 worker 扩展，满足任一）与十分钟切换步骤见 [`company-rollout-guide.md`](company-rollout-guide.md) §四「向量库演进」
 11. **桌面端 Wails v2→v3 迁移**（待触发，不主动执行；2026-10-12 用户拍板「后续肯定要做」）：触发条件=v3 RC/GA 或公司部署里程碑后空窗期（满足其一；Wails v2 停止维护则提前）；动手前先做四件 spike（壳层最小移植 / macOS CI 托盘验证 / server build 对比 cmd/core / 绑定重生成 vue-tsc 全绿）；完整评估（特性映射/成本/Tauri 不切换结论）见 [`plans/2026-10-12-wails-v3-migration.md`](plans/2026-10-12-wails-v3-migration.md)

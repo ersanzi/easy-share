@@ -26,7 +26,8 @@
 | [`product-vision.md`](product-vision.md) | 主线一：桌面文件产品 → 网络云盘与内网协同 | 产品边界或路线变化时 |
 | [`product-positioning.md`](product-positioning.md) | 知识平台定位与破局：市场判断、目标客群、发芽路线 | 定位假设变化或种子验证有新事实时 |
 | [`knowledge-platform.md`](knowledge-platform.md) | 主线二：企业知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
-| [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计 | 对标基线或优先级变化时 |
+| [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计（服务端架构视角） | 对标基线或优先级变化时 |
+| [`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md) | WPS 云盘对标、信息架构取证与桌面端产品形态差距 | 网盘产品形态或 P1 排期变化时 |
 | [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线与阶段门禁 | 技术路线或首选方案变化时 |
 | [`technology-evaluation.md`](technology-evaluation.md) | "成熟但先进"评估门禁、产品雷达和对象存储候选 | 依赖状态变化或生产选型复审时 |
 | [`adr/`](adr/README.md) | 跨版本架构决策、备选方案和验证要求 | 重要决策提出、接受或被取代时 |
