@@ -28,6 +28,7 @@
 | [`knowledge-platform.md`](knowledge-platform.md) | 主线二：企业知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
 | [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计（服务端架构视角） | 对标基线或优先级变化时 |
 | [`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md) | WPS 云盘对标、信息架构取证与桌面端产品形态差距 | 网盘产品形态或 P1 排期变化时 |
+| [`toolchain-rea.md`](toolchain-rea.md) | REA 逆向工具链：本机可用配置、耗时基线、常见错误正解 | REA 升级或分析环境变化时 |
 | [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线与阶段门禁 | 技术路线或首选方案变化时 |
 | [`technology-evaluation.md`](technology-evaluation.md) | "成熟但先进"评估门禁、产品雷达和对象存储候选 | 依赖状态变化或生产选型复审时 |
 | [`adr/`](adr/README.md) | 跨版本架构决策、备选方案和验证要求 | 重要决策提出、接受或被取代时 |
