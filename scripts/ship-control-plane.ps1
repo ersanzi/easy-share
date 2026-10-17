@@ -64,7 +64,9 @@ foreach ($f in @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry
 # 新服务器建表，存量服务器随 ship 自动补新表（es_file/上传会话/部门授权等），无需手工灌增量
 $easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-visibility.sql",
     "easyshare-space-member-type.sql", "easyshare-upload-session.sql",
-    "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql")
+    "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql",
+    "easyshare-content-hash.sql", "easyshare-incremental-list.sql",
+    "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql")
 foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }
@@ -98,11 +100,24 @@ foreach ($f in $easyshareSql) {
 
 # ── 4) 换包重启 ──
 Write-Step "替换 jar 并重启控制面容器"
-ssh $SshTarget "cd $ServerDir && if [ -f $cpRemote/ruoyi-admin.jar ]; then cp $cpRemote/ruoyi-admin.jar $cpRemote/ruoyi-admin.jar.bak; fi && mv $cpRemote/ruoyi-admin.jar.new $cpRemote/ruoyi-admin.jar && docker compose up -d --no-deps ruoyi"
+# 结尾必须补一次 docker restart，不能只靠 compose up：
+#   1) 单文件 bind mount 在 `mv` 之后 inode 已变，容器句柄仍指着旧 inode；
+#   2) compose 在「配置未变」时不会重建容器，up -d 是空操作。
+# 两者叠加的结果是：新包传上去了、探活也通了，但进程跑的还是旧代码。
+ssh $SshTarget "cd $ServerDir && if [ -f $cpRemote/ruoyi-admin.jar ]; then cp $cpRemote/ruoyi-admin.jar $cpRemote/ruoyi-admin.jar.bak; fi && mv $cpRemote/ruoyi-admin.jar.new $cpRemote/ruoyi-admin.jar && docker compose up -d --no-deps ruoyi && docker restart easyshare-ruoyi"
 if ($LASTEXITCODE -ne 0) { Write-Fail "重启失败（看日志：ssh $SshTarget docker logs easyshare-ruoyi --tail 50）"; exit 1 }
 Write-Ok "容器已重启（旧包备份在 ruoyi-admin.jar.bak）"
 
 # ── 5) 探活 ──
+# 先确认「容器真的重启过」：旧进程同样会把 /auth/tenant/list 返回 200，
+# 单看探活结果会把「新包上传成功、但跑的还是旧代码」误判成上线成功。
+$upStatus = ssh $SshTarget "docker ps --filter name=easyshare-ruoyi --format '{{.Status}}'"
+if ($upStatus -match "hour|day|week|month") {
+    Write-Fail "容器未重启（当前状态：$upStatus），新包不会生效"
+    exit 1
+}
+Write-Ok "容器已重启：$upStatus"
+
 Write-Step "探活 ${ControlPort}（Spring Boot 启动约 30-60 秒）"
 $healthy = $false
 for ($i = 0; $i -lt 45; $i++) {
