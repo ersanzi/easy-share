@@ -82,7 +82,7 @@ class DriveUploadServiceTest {
         when(storage.createUpload("users/1/", "big/backup.iso")).thenReturn("u1");
 
         EsUploadSession created = service.create(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
-            "big/backup.iso", 100L, 3L);
+            "big/backup.iso", 100L, 3L, null);
 
         assertEquals(3L, created.getExpectedVersion());
         // 只寄存，所以不该在 create 阶段对文件层做任何校验

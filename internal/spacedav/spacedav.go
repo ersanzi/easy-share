@@ -222,10 +222,15 @@ func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
 		f.mu.Unlock()
 
 		var sincePtr *int64
-		// 只要磁盘上有版本就可以尝试增量，即使 base 为空——
-		// 变更流本身足够重建当前视图（created 会补出缺失项）。
-		// base == nil 只说明进程刚重启、内存缓存丢了，不代表服务端没有差异。
-		if since > 0 {
+		// 只有**手里有底（base 非空）**时才能走增量：增量流只描述差异，
+		// 没有底就拼不出完整视图。
+		//
+		// ⚠️ 这条判据是被真机打出来的：原先写成「磁盘上有版本就走增量」，
+		// 于是缓存失效（write 后 invalidate）但 versions.json 里有 lastVersion 时，
+		// base=nil、变更集里只有本次写入的那一条，**其余对象全部从视图里消失**。
+		// 症状极其误导——不是报错，而是「删不掉 / 列表变空」：
+		// RemoveAll 拿着空 targets 直接 return nil，看起来删成功了。
+		if since > 0 && base != nil {
 			sincePtr = &since
 		}
 		result, err := cc.Changes(ctx, token, f.space, sincePtr)

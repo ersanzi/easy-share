@@ -1983,3 +1983,75 @@ KI-25（同一次清点中发现；那条是测试侧清理，这条是产品侧
 **关联**　[`known-issues.md`](known-issues.md) KI-25（同族：清理在失败路径不执行）；
 `internal/spacedav/live_test.go`（`registerLiveCleanup`）、
 `internal/drive/live_cas_test.go`（`cleanupPath`）。
+## KI-28：「缓存失效却走增量」把列表视图**塌成只剩一条**，症状是「删不掉」
+
+**级别**：高（用户可见的数据视图错误，且**不报错**）
+**发现**：2026-10-17 本地活栈跑 `TestLiveSpacedavRoundTrip`
+
+### 症状
+
+资源管理器里删掉一个文件，刷新后它**还在**；再刷新一次才消失。
+测试里的断言是「删除后列表里仍有该文件」，但数据库里两条记录（active / recycled）都对。
+
+### 根因
+
+`internal/spacedav` 的增量列举判据写成了「磁盘上有 lastVersion 就走增量」：
+
+```go
+if since > 0 { sincePtr = &since }   // ❌
+```
+
+而**增量流只描述差异**。当内存缓存 `base` 为空（写过文件后 `invalidate()`、
+或进程刚重启）时：
+
+```go
+merged := make([]drive.Object, len(base))   // 空
+copy(merged, base)
+for _, change := range result.Changes { merged = applyChange(merged, change) }
+```
+
+于是 `merged` 只含变更集里的那几条，**其余对象全部从视图里消失**。
+
+诊断打印（临时开关）证实了这一点：
+
+```
+RemoveAll key= .../renamed-1792213394316873400.txt  cacheSize= 0  targets= 0
+```
+
+### 为什么症状是「删不掉」而不是报错
+
+`RemoveAll` 从空视图算出 `targets` 为空 → 命中「只是个空目录，无对象可删」分支 →
+**`return nil`**。调用方以为删成功了，实际一个字节都没删。
+
+同一坑的另一张脸：任何「写后 invalidate + 立刻列举」都会看到空/残缺列表。
+
+### 修复
+
+```go
+if since > 0 && base != nil { sincePtr = &since }   // ✅ 有底才走增量
+```
+
+**没有底就退回全量**——这是「增量只描述差异」的直接推论。
+`spacedav.objects` 里原先那句「base 可能为空；applyChange 会从 created 事件补出对象」
+只在整个变更集覆盖全部对象时成立，真实服务端不会那样返回。
+
+### 回归测试：先验证「它能失败」
+
+`version_store_test.go` 的 `TestFSUsesDiskVersionAcrossRestart` 原先断言的正是
+「重启后用增量拼出完整列表」——**这个断言本身是错的**，它靠假客户端伪造一个
+包含全部对象的变更集才「通过」，等于把缺陷掩盖了。
+
+改成断言**请求形态**（`lastSince == nil` 即走全量），并实测：
+
+| | 结果 |
+| --- | --- |
+| 修复后 | ✅ PASS |
+| 把判据改回 `since > 0` | ❌ FAIL：「应发全量请求，实发 10」 |
+
+**方法论**　这条与 KI-10（读侧漏了跟随写侧）、KI-9（`Seek` 漏 `(0, SeekStart)`）同族：
+**多个必须一起成立的条件，被拆成了可单独忘记的判据**。
+增量列举的三件套是「有底 + 有版本 + 服务端支持」，少一样就必须退全量。
+
+**关联**　`internal/spacedav/spacedav.go`（`objects` / `RemoveAll`）、
+`internal/spacedav/version_store_test.go`、
+[`iterations/2026-10-17-本地活栈验证.md`](iterations/2026-10-17-本地活栈验证.md)。

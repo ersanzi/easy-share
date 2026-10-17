@@ -15,9 +15,14 @@ import (
 type diskClient struct {
 	*fakeClient
 	responses []drive.Changes
+	// lastSince 记录最近一次请求带的 sinceVersion（nil = 全量重建）。
+	// 用它才能断言「重启后走的是全量而不是增量」——只断言列表内容不够，
+	// 因为假客户端的增量响应是伪造的，看不出真实路径。
+	lastSince *int64
 }
 
-func (c *diskClient) Changes(_ context.Context, _, _ string, _ *int64) (*drive.Changes, error) {
+func (c *diskClient) Changes(_ context.Context, _, _ string, since *int64) (*drive.Changes, error) {
+	c.lastSince = since
 	if len(c.responses) == 0 {
 		return &drive.Changes{}, nil
 	}
@@ -100,17 +105,41 @@ func TestFSUsesDiskVersionAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restarted.lastVersion != 11 {
-		t.Fatalf("restarted.lastVersion = %d, want 11", restarted.lastVersion)
+	// ⚠️ 语义更正（2026-10-17 真机暴露）：
+	//
+	// 这条用例原先断言「重启后从增量拼出完整列表」——**那是错的**。
+	// 增量流只描述差异，重启后内存缓存（base）为空，只有底在手里才拼得出来。
+	// 原写法之所以「通过」，是因为假客户端伪造了一个包含 b.txt 的变更集，
+	// 而真实服务端的变更集只含本次变更 —— 于是视图塌成一条，其余对象全部消失
+	// （症状是「删不掉 / 列表变空」，见 spacedav.objects 的注释）。
+	//
+	// 正确语义：**重启后 base 为空 → 走全量**，listVersion 由全量响应给出。
+	//
+	// 断言的**核心是请求形态**而非列表内容：`lastSince == nil` 才证明真的走了全量。
+	// 只比对列表的话，假客户端的伪造增量同样能「看起来对」——正是这个漏洞
+	// 让「视图塌掉」的缺陷在上一版用例里躲了整整两轮。
+	if restartedClient.lastSince != nil {
+		t.Fatalf("重启后 base 为空，应发全量请求（sinceVersion=nil），实发 %d —— "+
+			"这正是「缓存失效却走增量」的缺陷，会把列表塌成只有变更里的那几条",
+			*restartedClient.lastSince)
 	}
-	var haveB bool
+	if restarted.lastVersion != 11 {
+		t.Fatalf("restarted.lastVersion = %d, want 11（全量响应带回的版本）", restarted.lastVersion)
+	}
+	// 走全量时拿到的应当是 fake 的完整清单，而不是那条增量
+	var haveA, haveB bool
 	for _, obj := range list {
-		if obj.Path == "b.txt" {
+		switch obj.Path {
+		case "a.txt":
+			haveA = true
+		case "b.txt":
 			haveB = true
 		}
 	}
-	if !haveB {
-		t.Fatalf("重启后应能从增量里看到 b.txt，实得 %+v", list)
+	if haveB && !haveA {
+		t.Fatalf("重启后只拿到增量里的 b.txt、丢了 a.txt —— 正是「视图塌掉」的缺陷：%+v", list)
 	}
+	_ = haveA
+	_ = haveB
 	_ = os.ReadFile
 }
