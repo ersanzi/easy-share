@@ -55,6 +55,14 @@ type Object struct {
 	// ContentMd5 是该文件的内容 MD5（切片 3 冲突判定 + 切片 6 秒传）。
 	// 未上报（存量行/旧客户端上传）为空串。
 	ContentMd5 string `json:"contentMd5"`
+	// CreatedAt 是首次登记时间（es_file.create_time）。
+	//
+	// 用指针而非 time.Time：控制面对「存量未登记对象」返回 null，
+	// 值类型接 null 会解析失败；指针能区分「没有这个信息」与「零值时间」。
+	CreatedAt *time.Time `json:"createdAt"`
+	// UploadByName 是上传者显示名（控制面批量 join sys_user，nickName 优先）。
+	// 未登记行或用户已删为空串，界面按「没有就不显示」处理。
+	UploadByName string `json:"uploadByName"`
 }
 
 // FlexInt64 是能同时接受 **JSON 数字与 JSON 字符串**的 int64。

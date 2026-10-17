@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import type { RecycleEntry } from '../types/core'
+import { RECYCLE_RETENTION_DAYS } from '../types/core'
 import { core } from '../services/core'
 import ConfirmDialog from './ConfirmDialog.vue'
 
@@ -40,6 +41,33 @@ const formatDate = (value?: string) => {
   if (!value) return ''
   const d = new Date(value)
   return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+/**
+ * 距离被彻底清除还剩几天。
+ *
+ * 控制面按 RECYCLE_RETENTION_DAYS 做清理，这里用同一个常量倒数——
+ * 用户需要看到「我还有多久可以反悔」，而不是只知道「保留 30 天」这条规则。
+ * 返回 null 表示没有删除时间（老数据），此时不显示倒计时而不是编一个天数。
+ */
+const remainDays = (deletedAt?: string) => {
+  if (!deletedAt) return null
+  const deleted = new Date(deletedAt).getTime()
+  if (Number.isNaN(deleted)) return null
+  const passed = Math.floor((Date.now() - deleted) / 86_400_000)
+  return Math.max(0, RECYCLE_RETENTION_DAYS - passed)
+}
+
+// 一行的副标题：原路径 · 大小 · 删除时间 · 倒计时。
+// 倒计时集中在函数里拼，模板只管展示，避免同一函数在标签里被调用三次。
+const rowMeta = (entry: RecycleEntry) => {
+  const parts = [entry.originPath, formatSize(entry.size), `删除于 ${formatDate(entry.deletedAt)}`]
+  const days = remainDays(entry.deletedAt)
+  if (days !== null) {
+    // 最后三天换个说法：这时候「还能反悔」已经是个紧迫信息了
+    parts.push(days <= 3 ? `仅剩 ${days} 天` : `还剩 ${days} 天`)
+  }
+  return parts.filter(Boolean).join(' · ')
 }
 
 const restore = async (entry: RecycleEntry) => {
@@ -94,7 +122,7 @@ onMounted(load)
         <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg>
       </span>
       <strong>回收站为空</strong>
-      <p>删除的文件会保留在这里，可随时还原。</p>
+      <p>删除的文件会保留 {{ RECYCLE_RETENTION_DAYS }} 天，期间可随时还原。</p>
     </div>
 
     <div v-else class="cloud-list">
@@ -104,7 +132,7 @@ onMounted(load)
         </div>
         <div class="cloud-info">
           <strong>{{ fileName(entry.originPath || entry.path) }}</strong>
-          <span>{{ entry.originPath }} · {{ formatSize(entry.size) }} · 删除于 {{ formatDate(entry.deletedAt) }}</span>
+          <span>{{ rowMeta(entry) }}</span>
         </div>
         <div class="cloud-actions">
           <button class="secondary-button compact" type="button" title="还原到原位置" @click="restore(entry)">还原</button>

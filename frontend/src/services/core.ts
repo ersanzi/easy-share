@@ -24,6 +24,8 @@ import {
   CfapiMountPath,
   ClearHistory,  CloudDelete,
   CloudDownload,
+  CloudRename,
+  CloudMove,
   CloudList,
   CloudPreview,
   CloudRecycleList,
@@ -172,6 +174,10 @@ export const core = {
   cloudUploadPaths: CloudUploadPaths,
   cloudDownload: CloudDownload,
   cloudDelete: CloudDelete,
+  // 改名只动同目录末段（Go 侧 CloudRename 走控制面 /move，拒绝路径分隔符）
+  cloudRename: CloudRename,
+  // 移动只换目录、名字不变（同样走 /move，但拒绝 .. 逃逸）
+  cloudMove: CloudMove,
   cloudShare: CloudShare,
   // 回收站（P1）：列表/还原/彻底删除；还原冲突时控制面返回可读错误
   cloudRecycleList: () => CloudRecycleList() as Promise<RecycleEntry[]>,

@@ -62,6 +62,8 @@ export function CheckUpdate():Promise<main.UpdateCheckResult>;
 export function ClearHistory():Promise<void>;
 
 export function CloudDelete(arg1:string):Promise<void>;
+export function CloudRename(arg1:string,arg2:string):Promise<void>;
+export function CloudMove(arg1:string,arg2:string):Promise<void>;
 
 export function CloudDownload(arg1:string):Promise<void>;
 

@@ -106,6 +106,14 @@ export function CloudDelete(arg1) {
   return window['go']['main']['App']['CloudDelete'](arg1);
 }
 
+export function CloudRename(arg1, arg2) {
+  return window['go']['main']['App']['CloudRename'](arg1, arg2);
+}
+
+export function CloudMove(arg1, arg2) {
+  return window['go']['main']['App']['CloudMove'](arg1, arg2);
+}
+
 export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }

@@ -15,6 +15,7 @@ import PluginMarket from './components/PluginMarket.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import TransferList from './components/TransferList.vue'
+import { RECYCLE_RETENTION_DAYS } from './types/core'
 import { useEasyShare } from './composables/useEasyShare'
 import { useConfirm } from './composables/useConfirm'
 import { usePlugins } from './composables/usePlugins'
@@ -105,7 +106,7 @@ const handleCloudDelete = async (key: string) => {
   const name = key.split('/').filter(Boolean).pop() ?? key
   const confirmed = await confirm({
     title: '删除云端文件',
-    message: `确定删除「${name}」？删除后将无法从云端恢复。`,
+    message: `确定删除「${name}」？删除后可在回收站还原，回收站保留 ${RECYCLE_RETENTION_DAYS} 天。`,
     confirmText: '删除',
     danger: true,
   })

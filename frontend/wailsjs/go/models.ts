@@ -191,6 +191,10 @@ export namespace cloud {
 	    lastModified: any;
 	    previewKind: string;
 	    fileId: number;
+	    // Go type: time
+	    createdAt?: any;
+	    uploadByName?: string;
+	    versionId?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new File(source);
@@ -205,6 +209,9 @@ export namespace cloud {
 	        this.lastModified = this.convertValues(source["lastModified"], null);
 	        this.previewKind = source["previewKind"];
 	        this.fileId = source["fileId"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.uploadByName = source["uploadByName"];
+	        this.versionId = source["versionId"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

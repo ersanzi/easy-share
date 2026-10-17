@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1062,6 +1064,9 @@ func driveObjectToFile(object drive.Object) cloud.File {
 		LastModified: object.LastModified,
 		PreviewKind:  cloud.DetectPreviewKind(contentType, object.Path),
 		FileId:       object.FileId.Int64(),
+		CreatedAt:    object.CreatedAt,
+		UploadByName: object.UploadByName,
+		VersionId:    object.VersionId.Int64(),
 	}
 }
 
@@ -1553,6 +1558,65 @@ func (a *App) CloudDelete(key string) error {
 	// 软删（P1 回收站）：控制面置 state='recycled'，对象保留，可经回收站还原
 	err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
 	a.reportError("cloud delete", err)
+	return err
+}
+
+// CloudRename 重命名文件（只改同目录下的末段名），底层复用控制面 /move。
+//
+// 刻意只做「改名」不做「移动」：跨目录移动是另一个语义（会改变路径层级、
+// 可能与目标目录同名冲突），混在一个方法里会让调用方分不清自己触发了什么。
+//
+// key 是空间内相对路径（cloud.File.Key），不是 S3 物理键。
+func (a *App) CloudRename(key, newName string) error {
+	name := strings.TrimSpace(newName)
+	if name == "" {
+		return errors.New("文件名不能为空")
+	}
+	// 拒绝路径分隔符：改名不该顺手把文件搬到别的目录去
+	if strings.ContainsAny(name, `/\`) {
+		return errors.New("文件名不能包含路径分隔符")
+	}
+	if name == path.Base(key) {
+		return nil
+	}
+	target := path.Join(path.Dir(key), name)
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.Move(a.ctx, token, drive.SpacePersonal, key, target)
+	a.reportError("cloud rename", err)
+	return err
+}
+
+// CloudMove 把文件移到另一个目录（文件名保持不变）。
+//
+// 与 CloudRename 的分工：rename 动末段名、位置不变；move 动目录、名字不变。
+// 底层同为控制面 /move（服务端复制+删源，**fileId 不变**，分享链接与任务引用不失效），
+// 拆成两个导出方法只是为了「调用点能表达出用户到底想干什么」，避免一个方法混两种语义。
+//
+// targetDir 是空间内相对目录（'' 或 '/' 表示根）。
+func (a *App) CloudMove(key, targetDir string) error {
+	name := path.Base(key)
+	dir := strings.Trim(strings.TrimSpace(targetDir), "/")
+	// 拒绝向上逃逸：路径是相对空间的，出现 .. 说明调用方拼错了
+	if dir == ".." || strings.HasPrefix(dir, "../") || strings.Contains(dir, "/../") {
+		return errors.New("目标目录不合法")
+	}
+	target := name
+	if dir != "" {
+		target = path.Join(dir, name)
+	}
+	if target == key {
+		// 原地不动：不必惊动服务端（也避免一次无意义的复制+删源）
+		return nil
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.Move(a.ctx, token, drive.SpacePersonal, key, target)
+	a.reportError("cloud move", err)
 	return err
 }
 

@@ -13,6 +13,7 @@ import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.easyshare.drive.domain.EsFile;
 import org.dromara.easyshare.drive.domain.EsUploadSession;
 import org.dromara.easyshare.drive.domain.EsSpace;
+import org.dromara.easyshare.drive.domain.SysUserDept;
 import org.dromara.easyshare.drive.service.DriveFileService;
 import org.dromara.easyshare.drive.service.DriveMoveService;
 import org.dromara.easyshare.drive.service.DriveUploadService;
@@ -23,7 +24,12 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * EasyShare 云盘存储授权接口（ADR-0007 决策 3）。
@@ -65,6 +71,11 @@ public class DriveController {
     private final DriveUploadService uploadService;
     private final DriveMoveService moveService;
     private final org.dromara.easyshare.drive.service.DriveChangeLogService changeLogService;
+    /**
+     * 系统用户只读投影，仅用于把 es_file.upload_by 还原成可读名字。
+     * 与 SpaceService 共用同一个 Mapper（同一张 sys_user 投影），不再单独建 DAO。
+     */
+    private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -90,23 +101,73 @@ public class DriveController {
             objects = fileService.filterSharedVisible(objects,
                 listing.activeByPath(), spaceService.deptIdOf(userId), userId);
         }
+        // 上传者昵称一次 IN 查询批量取（不在流里逐行查库）。
+        // 行不存在（未登记的存量对象）时 createdAt / uploadByName 均为 null，
+        // 客户端按「没有就不显示」处理，不用占位符充数。
+        Map<String, EsFile> activeRows = listing.activeByPath();
+        Map<Long, String> uploaderNames = uploaderNamesOf(activeRows);
         return R.ok(objects.stream()
-            .map(object -> new FileVo(
-                object.path(), object.size(), object.lastModified(),
-                listing.fileIds().get(object.path()),
-                listing.versions().get(object.path()),
-                md5Of(listing, object.path())))
+            .map(object -> toFileVo(object, listing, activeRows, uploaderNames))
             .toList());
     }
 
     /**
-     * 从目录层行取该路径的内容 MD5（未上报为 null）。
+     * 列表项的唯一装配点：列举（/objects）与增量全量重建（/changes）两条路径都走这里。
      *
-     * <p>行不存在（未登记的存量对象）时返回 null——与「登记了但未上报哈希」同语义。
+     * <p>收成一个方法的原因是**这两条路径必须产出同构的 FileVo**：上一轮给
+     * {@code FileVo} 加字段时只改了 /objects，/changes 那条当场编译失败——
+     * 两处各写一遍构造器，就等于给「改一半」留了固定的口子。
+     *
+     * <p>行不存在（未登记的存量对象）时 md5 / createdAt / uploadByName 均为 null，
+     * 与「登记了但未上报」同语义，客户端一律按「没有就不显示」处理。
      */
-    private static String md5Of(DriveFileService.Listing listing, String path) {
-        EsFile row = listing.activeByPath().get(path);
-        return row == null ? null : row.getContentMd5();
+    private static FileVo toFileVo(DriveObject object, DriveFileService.Listing listing,
+                                   Map<String, EsFile> activeRows, Map<Long, String> uploaderNames) {
+        EsFile row = activeRows.get(object.path());
+        return new FileVo(
+            object.path(), object.size(), object.lastModified(),
+            listing.fileIds().get(object.path()),
+            listing.versions().get(object.path()),
+            row == null ? null : row.getContentMd5(),
+            row == null ? null : toInstant(row.getCreateTime()),
+            row == null ? null : uploaderNames.get(row.getUploadBy()));
+    }
+
+    /**
+     * 批量取上传者显示名。
+     *
+     * <p>一次 {@code IN} 查询解决整页，避免在流里逐行查库（N+1）。
+     * 优先 {@code nickName}，为空退回 {@code userName}；两者都空则该 ID 不进结果集，
+     * 调用方拿到 null，客户端按「没有就不显示」处理。
+     */
+    private Map<Long, String> uploaderNamesOf(Map<String, EsFile> activeRows) {
+        Set<Long> ids = activeRows.values().stream()
+            .map(EsFile::getUploadBy)
+            .filter(id -> id != null && id > 0)
+            .collect(Collectors.toSet());
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, String> names = new java.util.HashMap<>();
+        for (SysUserDept user : sysUserDeptMapper.selectByIds(ids)) {
+            if (user.getUserId() == null) {
+                continue;
+            }
+            String name = user.getNickName() != null && !user.getNickName().isBlank()
+                ? user.getNickName() : user.getUserName();
+            if (name != null && !name.isBlank()) {
+                names.put(user.getUserId(), name);
+            }
+        }
+        return names;
+    }
+
+    /**
+     * es_file 的时间列是服务器本地时区的 {@link LocalDateTime}，
+     * 对外统一成 {@link Instant}（与 lastModified 同类型），客户端解析无歧义。
+     */
+    private static Instant toInstant(LocalDateTime time) {
+        return time == null ? null : time.atZone(ZoneId.systemDefault()).toInstant();
     }
 
     /**
@@ -135,12 +196,10 @@ public class DriveController {
                 objects = fileService.filterSharedVisible(objects,
                     listing.activeByPath(), spaceService.deptIdOf(userId), userId);
             }
+            Map<String, EsFile> activeRows = listing.activeByPath();
+            Map<Long, String> uploaderNames = uploaderNamesOf(activeRows);
             List<FileVo> full = objects.stream()
-                .map(object -> new FileVo(
-                    object.path(), object.size(), object.lastModified(),
-                    listing.fileIds().get(object.path()),
-                    listing.versions().get(object.path()),
-                    md5Of(listing, object.path())))
+                .map(object -> toFileVo(object, listing, activeRows, uploaderNames))
                 .toList();
             // 全量重建意味着客户端即将拿到完整列表：老日志从此无人需要，顺手裁剪
             // （切片 2 的日志回收；失败不影响列举）
@@ -532,9 +591,11 @@ public class DriveController {
      * @param fileId       目录层稳定文件 ID（存量对象惰性补账后亦有）
      * @param versionId    该文件的当前版本号；客户端下次写同一路径时应带回做 CAS
      * @param contentMd5   内容 MD5（切片 3 冲突判定 + 切片 6 秒传；未上报为 null）
+     * @param createdAt    首次登记时间（es_file.create_time）；存量未登记对象为 null
+     * @param uploadByName 上传者显示名（nickName 优先，退回 userName）；未知为 null
      */
     public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId,
-                         String contentMd5) {
+                         String contentMd5, Instant createdAt, String uploadByName) {
     }
 
     /**

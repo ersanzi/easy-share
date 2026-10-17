@@ -26,6 +26,14 @@ type File struct {
 	// FileId 控制面目录层的稳定文件 ID（2026-09-06 起），客户端仅透传展示与后续
 	// 按 fileId 操作使用；旧控制面无此字段时为 0，行为与之前一致。
 	FileId       int64       `json:"fileId"`
+	// CreatedAt 是首次登记时间（es_file.create_time）。
+	// 控制面对存量未登记对象返回 null，故用指针；nil 时前端整行不渲染。
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	// UploadByName 是上传者显示名（控制面批量 join sys_user）。
+	// 未登记行或用户已删时为空串，同样按「没有就不显示」处理。
+	UploadByName string `json:"uploadByName,omitempty"`
+	// VersionId 是当前版本号（覆盖上传递增），0 表示首次登记。
+	VersionId int64 `json:"versionId,omitempty"`
 }
 
 // PreviewKind 描述前端可采用的预览器类型，而不是暴露存储实现细节。

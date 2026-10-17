@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>EasyShare 云盘 · WPS KD 体系重构演示</title>
+<style>
+:root{
+  /* ── 品牌：降饱和到 76%，色相 217° ── */
+  --brand:#1F69E0; --brand-hover:#458BFA; --brand-active:#1E5FC7; --brand-light:#EDF4FF;
+  /* ── 中性：注入 220° 蓝相，越浅越去饱和 ── */
+  --text-1:#0C0F17; --text-2:#262E3E; --text-3:#444E63; --text-4:#727E96; --text-5:#8B95A8;
+  --line-1:#F3F4F5; --line-2:#E4E6EB; --line-3:#D7D9DE;
+  --bg:#FFFFFF; --bg-panel:#F5F7F9; --bg-rail:#E9EBEE; --bg-hover:#F3F5F8;
+  /* ── 语义色（取各色系第 6/7 阶） ── */
+  --green:#109968; --green-l:#E9F6E3; --red:#DD3332; --red-l:#FEF1F1;
+  --orange:#E2651A; --orange-l:#FEF1EA; --navy:#6C5AFB; --navy-l:#F4F3FD;
+  --azure:#009BB0; --violet:#C343E0;
+  /* ── 几何 ── */
+  --r-sm:4px; --r-md:6px; --r-lg:8px; --r-xl:12px;
+  /* ── 阴影：越大约淡 ── */
+  --sh-sm:0 1px 4px rgba(13,13,13,.10);
+  --sh-md:0 1px 4px rgba(13,13,13,.14);
+  --sh-lg:0 12px 32px rgba(13,13,13,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"Segoe UI","PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
+  font-size:14px;line-height:22px;color:var(--text-2);
+  background:#DDE1E6;display:grid;place-items:center;padding:24px;
+  -webkit-font-smoothing:antialiased;
+}
+svg{display:block}
+
+/* ─── 窗口外壳 ─── */
+.win{
+  width:100%;max-width:1440px;height:calc(100vh - 48px);min-height:600px;
+  background:var(--bg);border-radius:var(--r-xl);overflow:hidden;
+  box-shadow:0 24px 64px rgba(13,13,13,.18),0 2px 8px rgba(13,13,13,.06);
+  display:flex;flex-direction:column;
+}
+.titlebar{
+  height:38px;flex:0 0 auto;display:flex;align-items:center;gap:8px;
+  padding:0 0 0 14px;background:var(--bg-panel);border-bottom:1px solid var(--line-2);
+  font-size:12px;color:var(--text-4);user-select:none;
+}
+.titlebar .dot{width:12px;height:12px;border-radius:50%}
+.titlebar .brandmark{
+  width:18px;height:18px;border-radius:var(--r-sm);background:linear-gradient(145deg,#458BFA,#1F69E0);
+  display:grid;place-items:center;color:#fff;font-size:10px;font-weight:700;
+}
+.titlebar .t{color:var(--text-3);font-weight:600;font-size:12px}
+.win-ctl{margin-left:auto;display:flex;height:100%}
+.win-ctl i{
+  width:44px;height:100%;display:grid;place-items:center;cursor:default;
+  transition:background .12s;font-style:normal;
+}
+.win-ctl i:hover{background:rgba(13,13,13,.06)}
+.win-ctl i.close:hover{background:var(--red);color:#fff}
+
+/* ─── 主体三段 ─── */
+.body{flex:1;display:grid;grid-template-columns:48px 236px minmax(0,1fr) 268px;min-height:0}
+
+/* ─── 1. 图标 rail ─── */
+.rail{
+  background:var(--bg-rail);border-right:1px solid var(--line-3);
+  display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:2px;
+}
+.rail button{
+  width:36px;height:36px;display:grid;place-items:center;border:0;background:none;
+  color:var(--text-4);border-radius:var(--r-md);cursor:pointer;position:relative;
+  transition:background .12s,color .12s;
+}
+.rail button:hover{background:rgba(13,13,13,.06);color:var(--text-2)}
+.rail button.on{color:var(--brand);background:var(--brand-light)}
+.rail button.on::before{
+  content:"";position:absolute;left:-6px;top:9px;width:2px;height:18px;
+  background:var(--brand);border-radius:0 2px 2px 0;
+}
+.rail .sep{width:20px;height:1px;background:var(--line-3);margin:8px 0}
+.rail .spacer{flex:1}
+.rail svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* ─── 2. 功能面板 ─── */
+.panel{background:var(--bg-panel);border-right:1px solid var(--line-2);display:flex;flex-direction:column;min-height:0}
+.panel-head{padding:14px 14px 10px}
+.org{display:flex;align-items:center;gap:8px;padding:0 2px 12px;font-size:12px;color:var(--text-4)}
+.org .avatar{
+  width:22px;height:22px;border-radius:var(--r-sm);background:var(--brand);
+  color:#fff;font-size:11px;font-weight:600;display:grid;place-items:center;flex:0 0 auto;
+}
+.org .nm{color:var(--text-2);font-weight:600;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.btn-new{
+  width:100%;height:34px;display:flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--brand);color:#fff;border:0;border-radius:var(--r-md);
+  font-size:13px;font-weight:600;cursor:pointer;transition:background .12s;box-shadow:var(--sh-sm);
+}
+.btn-new:hover{background:var(--brand-hover)}
+.btn-new:active{background:var(--brand-active)}
+.btn-new svg{width:15px;height:15px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round}
+.btn-open{
+  width:100%;height:30px;margin-top:6px;display:flex;align-items:center;justify-content:center;gap:6px;
+  background:#fff;color:var(--text-3);border:1px solid var(--line-3);border-radius:var(--r-md);
+  font-size:12.5px;cursor:pointer;transition:.12s;
+}
+.btn-open:hover{background:var(--bg-hover);border-color:#B9BDC6}
+
+.nav{flex:1;overflow-y:auto;padding:6px 8px 12px}
+.group{font-size:11px;font-weight:600;color:var(--text-5);letter-spacing:.04em;padding:12px 8px 5px}
+.item{
+  display:flex;align-items:center;gap:9px;height:32px;padding:0 8px;border-radius:var(--r-md);
+  color:var(--text-3);font-size:13px;cursor:pointer;transition:background .12s,color .12s;
+}
+.item:hover{background:rgba(13,13,13,.05);color:var(--text-2)}
+.item.on{background:var(--brand-light);color:var(--brand);font-weight:600}
+.item svg{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.item .cnt{margin-left:auto;font-size:11px;color:var(--text-5);font-variant-numeric:tabular-nums}
+.item.on .cnt{color:var(--brand)}
+
+.quota{
+  margin:0 8px 10px;padding:10px 11px;background:#fff;border:1px solid var(--line-2);
+  border-radius:var(--r-lg);box-shadow:var(--sh-sm);
+}
+.quota .row{display:flex;justify-content:space-between;font-size:11.5px;color:var(--text-4);margin-bottom:7px}
+.quota .row b{color:var(--text-2);font-weight:600;font-variant-numeric:tabular-nums}
+.bar{height:5px;background:var(--line-2);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:37%;background:linear-gradient(90deg,var(--brand-hover),var(--brand));border-radius:3px}
+.quota a{display:block;margin-top:7px;font-size:11.5px;color:var(--brand);text-decoration:none}
+
+/* ─── 3. 内容区 ─── */
+.main{display:flex;flex-direction:column;background:var(--bg);min-width:0}
+.head{
+  height:56px;flex:0 0 auto;display:flex;align-items:center;gap:10px;
+  padding:0 20px;border-bottom:1px solid var(--line-1);
+}
+.crumbs{display:flex;align-items:center;gap:6px;font-size:14px;min-width:0}
+.crumbs .c{color:var(--text-4);cursor:pointer;white-space:nowrap}
+.crumbs .c:hover{color:var(--brand)}
+.crumbs .c.cur{color:var(--text-1);font-weight:600}
+.crumbs .s{color:var(--line-3);font-size:12px}
+.head .acts{margin-left:auto;display:flex;align-items:center;gap:6px}
+.tbtn{
+  height:30px;padding:0 11px;display:inline-flex;align-items:center;gap:5px;
+  background:#fff;border:1px solid var(--line-2);border-radius:var(--r-md);
+  font-size:12.5px;color:var(--text-3);cursor:pointer;transition:.12s;white-space:nowrap;
+}
+.tbtn:hover{background:var(--bg-hover);border-color:#C9CDD6;color:var(--text-2)}
+.tbtn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tbtn.primary{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+.tbtn.primary:hover{background:var(--brand-hover);border-color:var(--brand-hover)}
+
+/* 列表 */
+.thead{
+  height:38px;flex:0 0 auto;display:grid;grid-template-columns:minmax(0,1fr) 168px 96px 40px;
+  align-items:center;padding:0 20px;gap:12px;
+  font-size:12px;color:var(--text-5);border-bottom:1px solid var(--line-2);
+}
+.thead .sort{display:flex;align-items:center;gap:3px;cursor:pointer;user-select:none}
+.thead .sort:hover{color:var(--text-3)}
+.thead .sort.on{color:var(--brand);font-weight:600}
+.thead .sort svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.thead .r{text-align:right}
+
+.list{flex:1;overflow-y:auto;padding:0 8px 16px}
+.row{
+  display:grid;grid-template-columns:minmax(0,1fr) 168px 96px 40px;align-items:center;gap:12px;
+  height:64px;padding:0 12px;border-radius:var(--r-lg);cursor:pointer;
+  transition:background .1s;position:relative;
+}
+.row:hover{background:var(--bg-hover)}
+.row.on{background:var(--brand-light)}
+.row.on::before{
+  content:"";position:absolute;left:0;top:16px;width:3px;height:32px;
+  background:var(--brand);border-radius:0 3px 3px 0;
+}
+.name{display:flex;align-items:center;gap:11px;min-width:0}
+.name .ico{width:26px;height:26px;flex:0 0 auto}
+.name .txt{min-width:0}
+.name .txt b{
+  display:block;font-weight:500;font-size:14px;color:var(--text-2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.name .txt small{display:block;font-size:11.5px;color:var(--text-5);margin-top:1px}
+.meta{font-size:12.5px;color:var(--text-4);font-variant-numeric:tabular-nums}
+.meta.r{text-align:right;color:var(--text-4)}
+.more{
+  width:28px;height:28px;border:0;background:none;border-radius:var(--r-sm);color:var(--text-4);
+  cursor:pointer;opacity:0;transition:.12s;display:grid;place-items:center;
+}
+.row:hover .more,.row.on .more{opacity:1}
+.more:hover{background:rgba(13,13,13,.08);color:var(--text-2)}
+.more svg{width:16px;height:16px;fill:currentColor}
+
+/* ─── 4. 详情面板 ─── */
+.detail{
+  background:var(--bg-panel);border-left:1px solid var(--line-2);
+  display:flex;flex-direction:column;min-height:0;
+}
+.d-head{
+  height:52px;flex:0 0 auto;display:flex;align-items:center;padding:0 14px 0 18px;
+  border-bottom:1px solid var(--line-2);
+}
+.d-head b{font-size:13.5px;font-weight:600;color:var(--text-1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-head button{margin-left:auto;border:0;background:none;color:var(--text-4);cursor:pointer;width:26px;height:26px;border-radius:var(--r-sm);display:grid;place-items:center}
+.d-head button:hover{background:rgba(13,13,13,.06);color:var(--text-2)}
+.d-body{flex:1;overflow-y:auto;padding:14px}
+.thumb{
+  height:132px;background:#fff;border:1px solid var(--line-2);border-radius:var(--r-lg);
+  display:grid;place-items:center;box-shadow:var(--sh-sm);margin-bottom:10px;
+}
+.thumb svg{width:56px;height:56px}
+.d-acts{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px}
+.d-acts button{
+  height:30px;display:flex;align-items:center;justify-content:center;gap:5px;
+  background:#fff;border:1px solid var(--line-2);border-radius:var(--r-md);
+  font-size:12.5px;color:var(--text-3);cursor:pointer;transition:.12s;
+}
+.d-acts button:hover{background:var(--bg-hover);border-color:#C9CDD6}
+.d-acts svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+.dl{display:grid;gap:0}
+.dl .kv{
+  display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;align-items:center;
+  padding:8px 0;font-size:12.5px;border-bottom:1px solid var(--line-1);
+}
+.dl .kv:last-child{border:0}
+.dl .k{color:var(--text-5)}
+.dl .v{color:var(--text-2);text-align:right;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.people{display:flex;align-items:center;justify-content:flex-end}
+.people .pv{
+  width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;
+  font-size:10px;font-weight:600;display:grid;place-items:center;border:2px solid #fff;margin-left:-6px;
+}
+.people .pv:nth-child(2){background:var(--green)}
+.people .pv:nth-child(3){background:var(--navy)}
+.people .pv.add{background:var(--line-2);color:var(--text-4)}
+.link{color:var(--brand);cursor:pointer;text-decoration:none}
+
+/* 滚动条 */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#C9CDD6;border-radius:5px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#AFB3BD;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="win">
+
+  <!-- 标题栏 -->
+  <div class="titlebar">
+    <span class="brandmark">E</span>
+    <span class="t">EasyShare</span>
+    <span style="color:var(--line-3)">|</span>
+    <span>云盘</span>
+    <div class="win-ctl"><i>─</i><i>□</i><i class="close">✕</i></div>
+  </div>
+
+  <div class="body">
+
+    <!-- ① 图标 rail -->
+    <div class="rail">
+      <button class="on" title="云盘">
+        <svg viewBox="0 0 24 24"><path d="M7 18h10a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8 9.5 3.75 3.75 0 0 0 7 18Z"/></svg>
+      </button>
+      <button title="传输">
+        <svg viewBox="0 0 24 24"><path d="M8 17V7m0 0L5 10m3-3 3 3"/><path d="M16 7v10m0 0 3-3m-3 3-3-3"/></svg>
+      </button>
+      <button title="设备">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 17v3"/></svg>
+      </button>
+      <button title="知识库">
+        <svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10a2 2 0 0 1 2 2v14a1.6 1.6 0 0 0-1.6-1.6H4Z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H14a2 2 0 0 0-2 2v14a1.6 1.6 0 0 1 1.6-1.6H20Z"/></svg>
+      </button>
+      <div class="sep"></div>
+      <button title="搜索">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+      </button>
+      <div class="spacer"></div>
+      <button title="设置">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg>
+      </button>
+    </div>
+
+    <!-- ② 功能面板 -->
+    <div class="panel">
+      <div class="panel-head">
+        <div class="org">
+          <span class="avatar">蓝</span>
+          <span class="nm">蓝鸟智能制造</span>
+        </div>
+        <button class="btn-new">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>新建
+        </button>
+        <button class="btn-open">
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8"><path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>打开
+        </button>
+      </div>
+
+      <div class="nav">
+        <div class="item">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/></svg>最近
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.8Z"/></svg>星标
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 19a5.5 5.5 0 0 0-2-4.3"/></svg>共享
+          <span class="cnt">3</span>
+        </div>
+
+        <div class="group">云文档</div>
+        <div class="item on">
+          <svg viewBox="0 0 24 24"><path d="M7 18h10a3.5 3.5 0 0 0 .4-6.98A5 5 0 0 0 8 9.5 3.75 3.75 0 0 0 7 18Z"/></svg>我的云文档
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5Z"/><path d="M4 8.5 12 13l8-4.5M12 13v7"/></svg>团队文档
+          <span class="cnt">12</span>
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M5 4.5h9L19 9v10.5H5Z"/><path d="M14 4.5V9h5"/></svg>知识库
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M3.5 12h6l1.5-3 2 6 1.5-3h6"/></svg>我的设备
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M4 11.5V6a2 2 0 0 1 2-2h5.5a2 2 0 0 1 1.4.6l6.5 6.5a2 2 0 0 1 0 2.8l-4.5 4.5a2 2 0 0 1-2.8 0L4.6 12.9a2 2 0 0 1-.6-1.4Z"/><circle cx="8.5" cy="8.5" r="1.2"/></svg>标签
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M5 7h14M9.5 7V5h5v2M7 7l.8 12h8.4L17 7"/><path d="M10 11v5M14 11v5"/></svg>回收站
+        </div>
+
+        <div class="group">本地</div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="11" rx="1.5"/><path d="M8 19h8"/></svg>桌面
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M4 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>文档
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>下载
+        </div>
+        <div class="item">
+          <svg viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h7l2 2h5a2 2 0 0 1 2 2v1H4Z"/><path d="M4 11h16v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg>微信文件
+        </div>
+      </div>
+
+      <div class="quota">
+        <div class="row"><span>企业空间</span><b>1.42 TB / 3.85 TB</b></div>
+        <div class="bar"><i></i></div>
+        <a href="#">了解更多容量方案 ›</a>
+      </div>
+    </div>
+
+    <!-- ③ 内容区 -->
+    <div class="main">
+      <div class="head">
+        <div class="crumbs">
+          <span class="c">我的云文档</span>
+          <span class="s">/</span>
+          <span class="c cur">研发资料</span>
+        </div>
+        <div class="acts">
+          <button class="tbtn"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>下载</button>
+          <button class="tbtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.5"/><path d="M12 4v3M12 17v3M4 12h3M17 12h3"/></svg>筛选</button>
+          <button class="tbtn primary"><svg viewBox="0 0 24 24"><path d="M12 16V5m0 0L7.5 9.5M12 5l4.5 4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>上传</button>
+        </div>
+      </div>
+
+      <div class="thead">
+        <div class="sort on">名称<svg viewBox="0 0 24 24"><path d="M12 5v14m0 0 5-5m-5 5-5-5"/></svg></div>
+        <div class="sort">修改时间<svg viewBox="0 0 24 24" style="opacity:.35"><path d="M12 5v14m0 0 5-5m-5 5-5-5"/></svg></div>
+        <div class="sort r">大小</div>
+        <div></div>
+      </div>
+
+      <div class="list">
+        <!-- 文件夹 -->
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M2.5 7.2a1.8 1.8 0 0 1 1.8-1.8h4.2l2 2.2h7.4a1.8 1.8 0 0 1 1.8 1.8v2.1H2.5Z" fill="#74A9FD"/>
+              <path d="M2.5 9.6h19.2l-1.5 8.3a1.8 1.8 0 0 1-1.8 1.5H5.8a1.8 1.8 0 0 1-1.8-1.5Z" fill="#458BFA"/>
+            </svg>
+            <div class="txt"><b>城市试点项目部署</b><small>8 个文件 · 2.1 GB</small></div>
+          </div>
+          <div class="meta">昨天 20:34</div>
+          <div class="meta r">2.1 GB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M2.5 7.2a1.8 1.8 0 0 1 1.8-1.8h4.2l2 2.2h7.4a1.8 1.8 0 0 1 1.8 1.8v2.1H2.5Z" fill="#74A9FD"/>
+              <path d="M2.5 9.6h19.2l-1.5 8.3a1.8 1.8 0 0 1-1.8 1.5H5.8a1.8 1.8 0 0 1-1.8-1.5Z" fill="#458BFA"/>
+            </svg>
+            <div class="txt"><b>接口与协议</b><small>5 个文件 · 486 MB</small></div>
+          </div>
+          <div class="meta">周三 14:39</div>
+          <div class="meta r">486 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <!-- 选中行 -->
+        <div class="row on">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M6 2.5h7.5L20 9v11.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-17A1.5 1.5 0 0 1 6 2.5Z" fill="#1F69E0"/>
+              <path d="M13.5 2.5 20 9h-5a1.5 1.5 0 0 1-1.5-1.5Z" fill="#74A9FD"/>
+              <path d="M8 13h8M8 16.5h5" stroke="#fff" stroke-width="1.4" stroke-linecap="round" fill="none"/>
+            </svg>
+            <div class="txt"><b>EasyShare 架构说明 v1.4.docx</b><small>我 · 今天 10:12</small></div>
+          </div>
+          <div class="meta">今天 10:12</div>
+          <div class="meta r">2.4 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M6 2.5h7.5L20 9v11.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-17A1.5 1.5 0 0 1 6 2.5Z" fill="#109968"/>
+              <path d="M13.5 2.5 20 9h-5a1.5 1.5 0 0 1-1.5-1.5Z" fill="#5FD0A5"/>
+              <path d="M7.5 12.5h9M7.5 16h9M11 11v7M16 11v7" stroke="#fff" stroke-width="1.1" fill="none"/>
+            </svg>
+            <div class="txt"><b>云盘成本测算表.xlsx</b><small>李明 · 周一 15:59</small></div>
+          </div>
+          <div class="meta">周一 15:59</div>
+          <div class="meta r">1.8 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M6 2.5h7.5L20 9v11.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-17A1.5 1.5 0 0 1 6 2.5Z" fill="#DD3332"/>
+              <path d="M13.5 2.5 20 9h-5a1.5 1.5 0 0 1-1.5-1.5Z" fill="#F58F8F"/>
+              <text x="12" y="18" font-size="6.4" font-weight="700" fill="#fff" text-anchor="middle" font-family="Segoe UI">PDF</text>
+            </svg>
+            <div class="txt"><b>EasyShare 接口文档 v2.pdf</b><small>张子豪 · 周三 10:24</small></div>
+          </div>
+          <div class="meta">周三 10:24</div>
+          <div class="meta r">6.2 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <path d="M6 2.5h7.5L20 9v11.5a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5v-17A1.5 1.5 0 0 1 6 2.5Z" fill="#E2651A"/>
+              <path d="M13.5 2.5 20 9h-5a1.5 1.5 0 0 1-1.5-1.5Z" fill="#FBA471"/>
+              <path d="M9 11.5v2.2M9 15.6v.3M16 11.5v2.2M16 15.6v.3" stroke="#fff" stroke-width="1.3" stroke-linecap="round" fill="none"/>
+              <path d="M9 13.7h7" stroke="#fff" stroke-width="1.1" fill="none"/>
+            </svg>
+            <div class="txt"><b>发布包 easyshare-1.4.2.zip</b><small>我 · 9月24日 20:59</small></div>
+          </div>
+          <div class="meta">9月24日 20:59</div>
+          <div class="meta r">68.4 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+
+        <div class="row">
+          <div class="name">
+            <svg class="ico" viewBox="0 0 24 24">
+              <rect x="3" y="4.5" width="18" height="15" rx="1.8" fill="#6C5AFB"/>
+              <circle cx="8.6" cy="9.4" r="1.7" fill="#C5BFF3"/>
+              <path d="M3 16.3l4.6-4 3.4 2.9 3.6-3.4 6.4 5.2v.6a1.8 1.8 0 0 1-1.8 1.8H4.8A1.8 1.8 0 0 1 3 17.6Z" fill="#A59CEC"/>
+            </svg>
+            <div class="txt"><b>首页效果图.png</b><small>王雪 · 9月10日 09:20</small></div>
+          </div>
+          <div class="meta">9月10日 09:20</div>
+          <div class="meta r">1.2 MB</div>
+          <button class="more"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ④ 详情面板 -->
+    <div class="detail">
+      <div class="d-head">
+        <b>研发资料</b>
+        <button><svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <div class="d-body">
+        <div class="thumb">
+          <svg viewBox="0 0 24 24">
+            <path d="M2.5 7.2a1.8 1.8 0 0 1 1.8-1.8h4.2l2 2.2h7.4a1.8 1.8 0 0 1 1.8 1.8v2.1H2.5Z" fill="#74A9FD"/>
+            <path d="M2.5 9.6h19.2l-1.5 8.3a1.8 1.8 0 0 1-1.8 1.5H5.8a1.8 1.8 0 0 1-1.8-1.5Z" fill="#458BFA"/>
+          </svg>
+        </div>
+        <div class="d-acts">
+          <button><svg viewBox="0 0 24 24"><circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="m8.2 10.8 7.6-4M8.2 13.2l7.6 4"/></svg>分享</button>
+          <button><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>下载</button>
+        </div>
+
+        <div class="dl">
+          <div class="kv"><span class="k">所有者</span><span class="v">来风</span></div>
+          <div class="kv"><span class="k">协作者</span>
+            <span class="v"><span class="people"><span class="pv">李</span><span class="pv">张</span><span class="pv">王</span></span></span>
+          </div>
+          <div class="kv"><span class="k">占用空间</span><span class="v">2.1 GB</span></div>
+          <div class="kv"><span class="k">包含文件</span><span class="v">8 个</span></div>
+          <div class="kv"><span class="k">创建时间</span><span class="v">09-10 09:13</span></div>
+          <div class="kv"><span class="k">更新时间</span><span class="v">昨天 20:34</span></div>
+          <div class="kv"><span class="k">权限</span><span class="v"><a class="link">仅团队可见</a></span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>

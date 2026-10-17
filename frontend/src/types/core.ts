@@ -60,6 +60,14 @@ export interface TransferTask {
 
 export type PreviewKind = 'unsupported' | 'image' | 'pdf' | 'text'
 
+/**
+ * 回收站保留天数。
+ *
+ * ⚠️ 必须与控制面 `RecycleJanitor.RETENTION_DAYS` 保持一致——那边按这个天数
+ * 做彻底删除，这边按同一天数告诉用户「还能放多久」。改一处就得改另一处。
+ */
+export const RECYCLE_RETENTION_DAYS = 30
+
 export interface CloudFile {
   key: string
   name: string
@@ -76,6 +84,15 @@ export interface CloudFile {
    * ——参见 RecycleEntry.fileId 与本文件 known-issues KI-21。
    */
   fileId: number
+  /**
+   * 创建时间（控制面 `es_file.create_time`，ISO 串）。
+   * 旧控制面未返回该字段时为 undefined —— 详情面板按「没有就不显示」处理，不编造。
+   */
+  createdAt?: string
+  /** 上传者显示名（控制面 join sys_user.nick_name）；旧控制面缺失 */
+  uploadByName?: string
+  /** 覆盖上传递增的版本号；0 或缺失表示首次登记 */
+  versionId?: number
 }
 
 // 回收站条目（P1：软删后的 es_file recycled 行；deletedAt 为 ISO 时间串）
