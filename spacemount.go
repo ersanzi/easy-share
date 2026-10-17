@@ -107,6 +107,11 @@ func (a *App) refreshSpaceMounts() {
 	// 不再退回全量。文件与 upload-sessions 同放数据根。
 	versionStore := spacedav.NewDiskVersionStore(
 		filepath.Join(filepath.Dir(a.configPath), "space-versions.json"))
+	// 空目录持久化（切片 4 第 3 项）：资源管理器里新建的空文件夹重启后仍在。
+	// 注意这是客户端侧持久化——跨机器不可见，服务端目录对象模型是后续切片。
+	// 个人/共享**共用一个实例**：表内按 space 分桶，两个实例各持一份内存副本
+	// 会用对方的旧数据互相覆盖（各自 save 写全文件）。
+	dirStore := spacedav.NewDirStore(filepath.Join(filepath.Dir(a.configPath), "dirs.json"))
 	userID := session.User.UserID
 	// 昵称优先、退回账号名：条目名要让人一眼认出是谁的盘
 	displayName := session.User.NickName
@@ -132,6 +137,7 @@ func (a *App) refreshSpaceMounts() {
 				Label:    displayName + " 的网盘",
 				SpoolDir: spoolDir,
 				Versions: versionStore,
+				DirStore: dirStore,
 			})
 			if err := a.mounts.personal.Start(port, fs); err != nil {
 				a.logger.Printf("space mount: personal webdav on %d failed: %v", port, err)
@@ -158,6 +164,7 @@ func (a *App) refreshSpaceMounts() {
 				Label:    "EasyShare 共享",
 				SpoolDir: spoolDir,
 				Versions: versionStore,
+				DirStore: dirStore,
 			})
 			if err := a.mounts.shared.Start(port, fs); err != nil {
 				a.logger.Printf("space mount: shared webdav on %d failed: %v", port, err)
@@ -199,6 +206,13 @@ func (a *App) refreshSpaceMounts() {
 		a.stopUnkeptServices(keep)
 	}
 	a.logger.Printf("space mount: %d 个空间已挂载", len(mounts))
+
+	// CfApi 按需占位符同步根（切片 5）：个人空间挂上时同步挂，
+	// 未登录/配额收回路径走 unmountAllSpaces 里的卸载。
+	// 异步：CfApi 是增强形态，不应拖住「此电脑」条目的刷新。
+	if keep[namespace.PersonalCLSID()] {
+		go a.mountCfapiSpaces()
+	}
 }
 
 // stopUnkeptServices 停掉本次不再挂载的空间的 WebDAV 端点。
@@ -224,6 +238,9 @@ func (a *App) unmountAllSpaces() {
 	defer cancel()
 	_ = a.mounts.personal.Stop(ctx)
 	_ = a.mounts.shared.Stop(ctx)
+
+	// CfApi 同步根跟着卸：令牌已清空，挂着的占位符读不了任何数据
+	a.unmountCfapiSpaces()
 
 	if had {
 		stale := []namespace.Entry{

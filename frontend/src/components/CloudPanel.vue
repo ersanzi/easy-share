@@ -21,6 +21,22 @@ const previewError = ref('')
 const previewData = ref<CloudPreviewData | null>(null)
 // 回收站视图开关（P1）：打开时以覆盖层展示回收站面板
 const recycleOpen = ref(false)
+// CfApi 占位符目录（切片 5）：登录且系统支持时非空；入口按它隐藏
+const cfapiPath = ref('')
+
+const loadCfapiPath = async () => {
+  try {
+    cfapiPath.value = await core.cfapiMountPath()
+  } catch {
+    cfapiPath.value = ''
+  }
+}
+
+const openCfapiFolder = () => {
+  if (cfapiPath.value) {
+    core.openCfapiFolder()
+  }
+}
 
 // 目录导航状态：currentPath 为相对根的目录（'' = 根）；搜索跨当前目录全部后代
 const currentPath = ref('')
@@ -119,7 +135,10 @@ const enterFolder = (path: string) => {
   searchQuery.value = ''
 }
 
-onMounted(loadFiles)
+onMounted(() => {
+  loadFiles()
+  loadCfapiPath()
+})
 defineExpose({ refresh: loadFiles })
 </script>
 
@@ -131,6 +150,7 @@ defineExpose({ refresh: loadFiles })
         <h2>网盘</h2>
       </div>
       <div class="header-actions">
+        <button v-if="enabled && cfapiPath" class="text-button" type="button" title="在资源管理器中打开按需占位符目录（文件不占磁盘，打开时才下载）" @click="openCfapiFolder">本地挂载</button>
         <button v-if="enabled" class="text-button" type="button" @click="recycleOpen = true">回收站</button>
         <button class="text-button" type="button" @click="loadFiles">刷新</button>
         <span class="count-badge">{{ view.folderCount }} 个文件夹 · {{ view.fileCount }} 个文件</span>

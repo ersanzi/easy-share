@@ -5,6 +5,7 @@ import { core } from '../services/core'
 import {
   compareTasks,
   formatBytes,
+  formatErrorDetail,
   formatTaskDuration,
   taskActionLabel,
   taskAmountLabel,
@@ -184,7 +185,7 @@ const canConfirmReceive = (task: TransferTask) =>
                   <span>{{ taskProgress(item) }}%</span>
                   <span v-if="item.speed > 0 && item.status === 'running'" class="speed-active">{{ formatBytes(item.speed) }}/s</span>
                   <span v-if="formatTaskDuration(item)" class="duration-text">用时 {{ formatTaskDuration(item) }}</span>
-                  <span v-if="item.error" class="inline-error">{{ item.error }}</span>
+                  <span v-if="item.error" class="inline-error" :title="formatErrorDetail(item)">{{ item.error }}</span>
                   <div v-if="canConfirmReceive(item)" class="row-actions">
                     <button class="secondary-button compact" type="button" @click="$emit('reject', item.id)">拒绝</button>
                     <button class="secondary-button compact" type="button" @click="$emit('acceptAs', item.id)">另存</button>

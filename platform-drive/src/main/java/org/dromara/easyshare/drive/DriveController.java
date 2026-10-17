@@ -94,8 +94,19 @@ public class DriveController {
             .map(object -> new FileVo(
                 object.path(), object.size(), object.lastModified(),
                 listing.fileIds().get(object.path()),
-                listing.versions().get(object.path())))
+                listing.versions().get(object.path()),
+                md5Of(listing, object.path())))
             .toList());
+    }
+
+    /**
+     * 从目录层行取该路径的内容 MD5（未上报为 null）。
+     *
+     * <p>行不存在（未登记的存量对象）时返回 null——与「登记了但未上报哈希」同语义。
+     */
+    private static String md5Of(DriveFileService.Listing listing, String path) {
+        EsFile row = listing.activeByPath().get(path);
+        return row == null ? null : row.getContentMd5();
     }
 
     /**
@@ -128,7 +139,8 @@ public class DriveController {
                 .map(object -> new FileVo(
                     object.path(), object.size(), object.lastModified(),
                     listing.fileIds().get(object.path()),
-                    listing.versions().get(object.path())))
+                    listing.versions().get(object.path()),
+                    md5Of(listing, object.path())))
                 .toList();
             // 全量重建意味着客户端即将拿到完整列表：老日志从此无人需要，顺手裁剪
             // （切片 2 的日志回收；失败不影响列举）
@@ -519,8 +531,10 @@ public class DriveController {
      * @param lastModified 最后修改时间
      * @param fileId       目录层稳定文件 ID（存量对象惰性补账后亦有）
      * @param versionId    该文件的当前版本号；客户端下次写同一路径时应带回做 CAS
+     * @param contentMd5   内容 MD5（切片 3 冲突判定 + 切片 6 秒传；未上报为 null）
      */
-    public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId) {
+    public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId,
+                         String contentMd5) {
     }
 
     /**

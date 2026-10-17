@@ -10,9 +10,9 @@ import (
 type Kind string
 
 const (
-	KindLANSend      Kind = "lan_send"
-	KindLANReceive   Kind = "lan_receive"
-	KindCloudUpload  Kind = "cloud_upload"
+	KindLANSend       Kind = "lan_send"
+	KindLANReceive    Kind = "lan_receive"
+	KindCloudUpload   Kind = "cloud_upload"
 	KindCloudDownload Kind = "cloud_download"
 	// 预留：后续里程碑扩展
 	KindSync  Kind = "sync"
@@ -23,12 +23,12 @@ type Status string
 
 const (
 	// 原有状态（局域网传输使用）
-	StatusPending   Status = "pending"     // 等待用户确认（接收方）
-	StatusAccepted  Status = "accepted"    // 已接受，准备传输
-	StatusRunning   Status = "running"     // 传输中
-	StatusCompleted Status = "completed"   // 完成
-	StatusRejected  Status = "rejected"    // 用户拒绝
-	StatusFailed    Status = "failed"      // 失败
+	StatusPending   Status = "pending"   // 等待用户确认（接收方）
+	StatusAccepted  Status = "accepted"  // 已接受，准备传输
+	StatusRunning   Status = "running"   // 传输中
+	StatusCompleted Status = "completed" // 完成
+	StatusRejected  Status = "rejected"  // 用户拒绝
+	StatusFailed    Status = "failed"    // 失败
 
 	// 扩展状态（统一任务模型）
 	StatusQueued         Status = "queued"          // 排队等待
@@ -66,8 +66,16 @@ type Task struct {
 	Speed            float64   `json:"speed"`
 	Status           Status    `json:"status"`
 	Error            string    `json:"error,omitempty"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	// 错误三件套（路线图切片 7，对标钉盘 TEC_* 与 WPS 的
+	// errorCode + errorMsg + winErrorCode）：失败时同时给出
+	//   ErrorCode    业务码（稳定、可检索、供支持与埋点用，如 CLOUD_QUOTA_EXCEEDED）
+	//   Error        人读文本（上面那个字段，直接展示给用户）
+	//   SystemCode   系统码（HTTP 状态 / OS 错误号；无则空）
+	// 三者缺一，用户看到的就只是「失败」两个字。
+	ErrorCode  string    `json:"errorCode,omitempty"`
+	SystemCode string    `json:"systemCode,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 func validTransition(current, next Status) bool {

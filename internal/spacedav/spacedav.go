@@ -85,12 +85,14 @@ type FS struct {
 	lastVersion int64
 	// versions 是跨进程持久化的版本存储；nil 时退回进程内。
 	versions VersionStore
-	// pendingDirs 保存本次会话里新建的空目录。
+	// pendingDirs 保存**当前仍为空**的目录。
 	//
 	// 对象存储没有真目录，控制面的接口又拒绝以 / 结尾的键，所以空目录无处存放。
-	// 不记住它，用户在资源管理器里「新建文件夹」后刷新就会消失。这里只在内存里维持到
-	// 目录内有了第一个文件为止。
+	// 不记住它，用户在资源管理器里「新建文件夹」后刷新就会消失。
+	// 有 DirStore 时这张表跨进程持久化（见 dir_store.go）；没有时退回进程内存。
 	pendingDirs map[string]time.Time
+	// dirStore 是空目录的持久化表；nil 表示只做进程内（测试/旧装配）。
+	dirStore *dirStore
 }
 
 // Options 构造 FS 所需的参数。
@@ -109,6 +111,12 @@ type Options struct {
 	// 生产传 NewVersionStore(dir)。有了它，桌面端重启后不会退回全量——
 	// 只需带 last_version 再拉差异。旧控制面/单测不传也能工作。
 	Versions VersionStore
+	// DirStore 持久化「仍为空的目录」；nil 表示只做进程内存。
+	//
+	// 生产传 NewDirStore(dataRoot/dirs.json)：资源管理器里新建的空文件夹
+	// 在桌面端重启后仍在（验收口径：新建空目录重启后仍在）。
+	// 注意这是**客户端侧**持久化，不是服务端目录对象模型——跨机器不可见。
+	DirStore *dirStore
 }
 
 // VersionStore 持久化某个空间的 last_version。
@@ -150,6 +158,13 @@ func New(opts Options) *FS {
 	if opts.Versions == nil {
 		opts.Versions = NewMemoryVersionStore()
 	}
+	// 空目录：有持久化表就从盘上恢复（重启后新建的空文件夹仍在）
+	pending := map[string]time.Time{}
+	if opts.DirStore != nil {
+		for dir, created := range opts.DirStore.Load(opts.Space) {
+			pending[dir] = created
+		}
+	}
 	return &FS{
 		client:      opts.Client,
 		space:       opts.Space,
@@ -159,7 +174,8 @@ func New(opts Options) *FS {
 		spoolDir:    opts.SpoolDir,
 		versions:    opts.Versions,
 		lastVersion: opts.Versions.Load(opts.Space),
-		pendingDirs: map[string]time.Time{},
+		pendingDirs: pending,
+		dirStore:    opts.DirStore,
 	}
 }
 
@@ -340,13 +356,19 @@ func (f *FS) invalidate() {
 }
 
 // clearPendingDir 清掉某个空目录记录（其下已经有真实对象了）。
+//
+// 连同祖先一起清：文件落到 a/b/c.txt 时，a 与 a/b 都已不再是空目录。
 func (f *FS) clearPendingDir(dir string) {
 	if dir == "" || dir == "." {
 		return
 	}
 	f.mu.Lock()
 	delete(f.pendingDirs, dir)
+	store := f.dirStore
 	f.mu.Unlock()
+	if store != nil {
+		_ = store.RemoveWithParents(f.space, dir)
+	}
 }
 
 // uploadContext 给上传用的 context，调用方必须 defer cancel。
@@ -362,7 +384,7 @@ const uploadTimeout = 30 * time.Minute
 
 // --- webdav.FileSystem ---
 
-// Mkdir 记住一个空目录。对象存储无真目录，故只在内存里维持。
+// Mkdir 记住一个空目录。对象存储无真目录，故只在本地维护（有 DirStore 时落盘）。
 func (f *FS) Mkdir(_ context.Context, name string, _ os.FileMode) error {
 	if f.readOnly {
 		return errReadOnly
@@ -371,9 +393,16 @@ func (f *FS) Mkdir(_ context.Context, name string, _ os.FileMode) error {
 	if key == "" {
 		return os.ErrExist
 	}
+	created := time.Now()
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.pendingDirs[key] = time.Now()
+	f.pendingDirs[key] = created
+	store := f.dirStore
+	f.mu.Unlock()
+	if store != nil {
+		// 落盘失败不拦创建：本进程内仍然可见，只是重启后丢——
+		// 这点取舍与 pendingDirs 的历史行为一致，不该因为写盘失败就报错
+		_ = store.Add(f.space, key, created)
+	}
 	return nil
 }
 
@@ -460,20 +489,53 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 			delete(f.pendingDirs, dir)
 		}
 	}
+	store := f.dirStore
 	f.mu.Unlock()
+	// 持久化表同步清理：删掉的目录不该在重启后复活
+	if store != nil {
+		_ = store.RemoveWithParents(f.space, key)
+		// RemoveWithParents 只清祖先链；子目录要按前缀另清
+		for dir := range store.Load(f.space) {
+			if strings.HasPrefix(dir, prefix) {
+				_ = store.Remove(f.space, dir)
+			}
+		}
+	}
 
 	if len(targets) == 0 {
 		// 只是个空目录：内存记录已清，无对象可删
 		return nil
 	}
+	// 删除优先走 fileId（切片 1：写路径按身份而非路径）。
+	// 路径在「列出 → 删除」之间可能已被别人改名占用；按身份删不会误伤。
+	// fileId 从本次列举结果里取；取不到（目录层未登记/脏数据）退回按路径删。
+	fileIDs := make(map[string]int64, len(list))
+	for _, obj := range list {
+		fileIDs[obj.Path] = obj.FileId.Int64()
+	}
 	for _, target := range targets {
-		if err := f.client.Delete(ctx, token, f.space, target); err != nil {
+		if err := f.deleteObject(ctx, token, target, fileIDs[target]); err != nil {
 			f.invalidate()
 			return err
 		}
 	}
 	f.invalidate()
 	return nil
+}
+
+// deleteObject 删一个对象：有 fileId 且客户端支持时按身份删，否则按路径删。
+func (f *FS) deleteObject(ctx context.Context, token, path string, fileID int64) error {
+	if byID, ok := f.client.(fileIDDeleter); ok && fileID > 0 {
+		return byID.DeleteByFileID(ctx, token, f.space, fileID, path)
+	}
+	return f.client.Delete(ctx, token, f.space, path)
+}
+
+// fileIDDeleter 是可选能力：能按稳定 fileId 删除的客户端（*drive.Client 满足）。
+//
+// 与 mover 同一模式：可选接口而非加进 Client，假实现与旧控制面不必跟着改。
+type fileIDDeleter interface {
+	DeleteByFileID(ctx context.Context, token, space string, fileID int64, path string) error
 }
 
 // mover 是可选能力：控制面支持服务端改名/移动的客户端。

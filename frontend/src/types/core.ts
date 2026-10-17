@@ -50,6 +50,10 @@ export interface TransferTask {
   speed: number
   status: TaskStatus
   error?: string
+  // 错误三件套（路线图切片 7）：业务码（稳定，工单/埋点用）+ 系统码（HTTP/OS）。
+  // error 是人读文本（上面那个字段）；三者都展示才有诊断价值。
+  errorCode?: string
+  systemCode?: string
   createdAt?: string
   updatedAt?: string
 }

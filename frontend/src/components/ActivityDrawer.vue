@@ -4,6 +4,7 @@ import type { TransferTask } from '../types/core'
 import {
   compareTasks,
   formatBytes,
+  formatErrorDetail,
   formatTaskDuration,
   taskActionLabel,
   taskAmountLabel,
@@ -146,7 +147,7 @@ onBeforeUnmount(() => {
                 <span>{{ taskProgress(item) }}%</span>
                 <span v-if="item.speed > 0 && item.status === 'running'" class="speed-active">{{ formatBytes(item.speed) }}/s</span>
                 <span v-if="formatTaskDuration(item)">用时 {{ formatTaskDuration(item) }}</span>
-                <span v-if="item.error" class="activity-error" :title="item.error">{{ item.error }}</span>
+                <span v-if="item.error" class="activity-error" :title="formatErrorDetail(item)">{{ item.error }}</span>
               </div>
             </div>
           </article>

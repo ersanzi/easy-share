@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,6 +25,7 @@ import (
 	"easyshare/internal/config"
 	"easyshare/internal/desktop"
 	"easyshare/internal/drive"
+	"easyshare/internal/driveerr"
 	"easyshare/internal/fsutil"
 	"easyshare/internal/knowledge"
 	"easyshare/internal/logging"
@@ -61,6 +64,9 @@ type App struct {
 	trayUserCh chan AuthUser
 	// mounts 管「此电脑」里两个云端空间的 WebDAV 端点与条目，见 spacemount.go。
 	mounts *spaceMounts
+	// cfapi 管 CfApi 按需占位符同步根（切片 5 生产接入，见 cfmount_app_windows.go；
+	// 非 Windows 平台该结构为空壳，不参与任何流程）。
+	cfapi cfapiMounts
 	// dropSpace 是悬浮窗切换器选中的目标空间（拖入的文件进哪个空间）。
 	// 空串表示未选择，按个人空间处理。由浮窗线程写、上传路径读，故加锁。
 	dropSpaceMu sync.Mutex
@@ -1207,6 +1213,86 @@ func conflictObjectKey(versions map[string]int64, key string) string {
 	}
 }
 
+// 冲突策略（路线图切片 3）的固定规则，写死、不弹窗问用户：
+//
+//	情形 1  远端新建 vs 本地已有、内容相同   → 认作同一文件（哈希去重），不算冲突
+//	情形 2  远端新建 vs 本地已有、内容不同   → 保双方，本地加标记改名（冲突副本）
+//	情形 3  本地改 + 远端改                  → 冲突副本，两份都留
+//	情形 4  移动目标已存在                   → 冲突副本，不覆盖
+//
+// 情形 3/4 已由 CAS 与 spacedav.Rename 各自落地；本文件负责情形 1/2 的判定。
+//
+// 为什么情形 1 必须单独判：没有它时，用户把**同一份内容**重新上传到同一路径，
+// 若中间别人动过这个路径，CAS 会拒绝、随后落一个「冲突副本」——
+// 于是云盘里出现两份**逐字节相同**的文件，用户还要自己判断删哪个。
+// 判据是内容哈希（md5_reliable='client' 的整文件读算，见切片 6），
+// 哈希不可用（旧客户端上传/存量行）时退回「按冲突处理」——宁多一份副本，不误合。
+
+// sameContentOnRemote 判断远端该路径的现有内容是否与本地文件相同。
+//
+// 只在**我们即将因版本冲突去建副本**时调用：那一刻远端内容已被别人改过，
+// 若改出来恰好和我们这次要写的字节一致，就没必要再留一份副本。
+//
+// 返回 true 表示「同一内容，忽略这次冲突」。
+// 任何存疑情形（远端无哈希、本地读文件失败）都返回 false —— 走冲突副本，
+// 代价只是一份多余副本，而误判为「相同」会**丢掉用户这次上传的内容**。
+func sameContentOnRemote(objects []drive.Object, objectKey, localPath string) bool {
+	var remoteHash string
+	for _, obj := range objects {
+		if obj.Path == objectKey {
+			remoteHash = obj.ContentMd5
+			break
+		}
+	}
+	if remoteHash == "" {
+		return false // 远端未记录哈希（存量/旧客户端上传）：无从比对，按冲突处理
+	}
+	localHash, err := fileContentMD5(localPath)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(localHash, remoteHash)
+}
+
+// failTask 把一个任务标记为失败，并写入错误三件套（路线图切片 7）。
+//
+// 三个字段缺一个，用户看到的就只是「失败」：
+//   - error       人读文本（中文，直接展示）
+//   - errorCode   业务码（稳定字符串，工单/埋点/日志检索用）
+//   - systemCode  系统码（HTTP 状态 / OS 错误号；没有就空）
+//
+// 分类走 internal/driveerr.Classify（只从已有信息推断，不改变行为）。
+func (a *App) failTask(core *desktop.Client, taskID string, err error) {
+	triple := driveerr.Classify(err)
+	message, code, system := triple.Format()
+	patch := map[string]any{
+		"status": "failed",
+		"error":  message,
+	}
+	if code != "" {
+		patch["errorCode"] = code
+	}
+	if system != "" {
+		patch["systemCode"] = system
+	}
+	_ = core.PatchTask(a.ctx, taskID, patch)
+	a.logger.Printf("task %s failed: %s", taskID, triple.Error())
+}
+
+// fileContentMD5 整文件读算十六进制 MD5（与 internal/drive 上传路径同口径）。
+func fileContentMD5(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := md5.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 // CloudUpload 选择单个文件上传到网盘（targetDir 非空时落到该目录下）。
 func (a *App) CloudUpload(targetDir string) (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
@@ -1286,9 +1372,7 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 	objects, listErr := driveClient.Objects(a.ctx, token, space)
 	if listErr != nil {
 		a.reportError("cloud upload list", listErr)
-		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-			"status": "failed", "error": listErr.Error(),
-		})
+		a.failTask(core, created.ID, listErr)
 		return
 	}
 	versions := objectVersionMap(objects)
@@ -1318,11 +1402,19 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 		fresh, freshErr := driveClient.Objects(a.ctx, token, space)
 		if freshErr != nil {
 			a.reportError("cloud upload refresh", freshErr)
+			a.failTask(core, created.ID, uploadErr)
+			return
+		}
+		// 情形 1（哈希去重）：远端那份与我这次要写的内容逐字节相同 →
+		// 认作同一文件，直接算成功，不再留一份多余副本。
+		if sameContentOnRemote(fresh, objectKey, filePath) {
+			a.logger.Printf("cloud upload conflict resolved by content hash: %s（内容相同，视为同一文件）", objectKey)
 			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-				"status": "failed", "error": uploadErr.Error(),
+				"transferredBytes": fileSize, "speed": 0, "status": "completed",
 			})
 			return
 		}
+		// 情形 2（内容不同）：保双方，本地落到冲突副本
 		versions = objectVersionMap(fresh)
 		conflictKey := conflictObjectKey(versions, objectKey)
 		zero := int64(0) // 冲突副本是新建，不允许覆盖任何人
@@ -1332,9 +1424,7 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 
 	if uploadErr != nil {
 		a.reportError("cloud upload", uploadErr)
-		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-			"status": "failed", "error": uploadErr.Error(),
-		})
+		a.failTask(core, created.ID, uploadErr)
 		return
 	}
 	_ = core.PatchTask(a.ctx, created.ID, map[string]any{
@@ -1369,9 +1459,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 	objects, listErr := driveClient.Objects(a.ctx, token, space)
 	if listErr != nil {
 		a.reportError("cloud folder upload list", listErr)
-		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-			"status": "failed", "error": listErr.Error(),
-		})
+		a.failTask(core, created.ID, listErr)
 		return
 	}
 	versions := objectVersionMap(objects)
@@ -1390,11 +1478,19 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 			fresh, freshErr := driveClient.Objects(a.ctx, token, space)
 			if freshErr != nil {
 				a.reportError("cloud folder upload refresh", freshErr)
-				_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-					"status": "failed", "error": uploadErr.Error(),
-				})
+				a.failTask(core, created.ID, uploadErr)
 				return
 			}
+			// 情形 1（哈希去重）：内容相同 → 视为同一文件，跳过
+			if sameContentOnRemote(fresh, objectKey, filePath) {
+				a.logger.Printf("cloud folder upload conflict resolved by content hash: %s", objectKey)
+				versions = objectVersionMap(fresh)
+				_ = core.PatchTask(a.ctx, created.ID, map[string]any{
+					"transferredBytes": int64(i + 1), "status": "running",
+				})
+				continue
+			}
+			// 情形 2（内容不同）：保双方
 			versions = objectVersionMap(fresh)
 			conflictKey := conflictObjectKey(versions, objectKey)
 			zero := int64(0)
@@ -1404,9 +1500,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 
 		if uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
-			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
-				"status": "failed", "error": uploadErr.Error(),
-			})
+			a.failTask(core, created.ID, uploadErr)
 			return
 		}
 		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
@@ -1692,6 +1786,10 @@ func (a *App) beginQuit() {
 		}
 		cancel()
 	}
+
+	// CfApi 同步根要在退出前注销：不注销会在 HKLM\SyncRootManager 留下
+	// 指向已退出进程的注册表残留，下次注册同根会报 ERROR_ALREADY_EXISTS
+	a.unmountCfapiSpaces()
 }
 
 // quitAll 优雅退出：停 Core 后关闭窗口（托盘退出与升级应用共用一条链路）。

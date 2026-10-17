@@ -52,6 +52,9 @@ type Object struct {
 	// 服务端比对不上就拒绝签发，从而避免「两个客户端先后写同一路径，
 	// 后者静默覆盖前者」——2026-10-16 实测确认过那个行为。
 	VersionId FlexInt64 `json:"versionId"`
+	// ContentMd5 是该文件的内容 MD5（切片 3 冲突判定 + 切片 6 秒传）。
+	// 未上报（存量行/旧客户端上传）为空串。
+	ContentMd5 string `json:"contentMd5"`
 }
 
 // FlexInt64 是能同时接受 **JSON 数字与 JSON 字符串**的 int64。
@@ -294,9 +297,32 @@ func (c *Client) PresignGet(ctx context.Context, token, space, path string) (str
 	return c.presign(ctx, token, "/easyshare/drive/presign-get", space, path)
 }
 
-// Delete 删除指定空间内的对象。
+// Delete 删除指定空间内的对象（按路径，过渡期兼容）。
 func (c *Client) Delete(ctx context.Context, token, space, path string) error {
 	body, err := json.Marshal(map[string]string{"path": path, "space": normalizeSpace(space)})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodDelete, "/easyshare/drive/object", token, body, nil)
+}
+
+// DeleteByFileID 按稳定 fileId 删除（切片 1：写路径改走身份，不再以路径为主键）。
+//
+// 为什么优先用 fileId：路径只是属性，改名/移动后它变了而身份不变。
+// 按路径删会遇到「删之前别人把另一个文件改名到这个路径」——删掉的是别人的文件。
+// 服务端 resolveDeletePath 对 fileId 做归属校验（必须属于当前空间与 owner），
+// 因此这个键也不可用于越权删除。
+//
+// fileID 为 0（目录层未登记/脏数据）时退回按路径删。
+func (c *Client) DeleteByFileID(ctx context.Context, token, space string, fileID int64, path string) error {
+	payload := map[string]any{"space": normalizeSpace(space)}
+	if fileID > 0 {
+		payload["fileId"] = fileID
+	}
+	if path != "" {
+		payload["path"] = path
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}

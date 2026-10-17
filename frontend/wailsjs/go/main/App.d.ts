@@ -55,6 +55,8 @@ export function ApplyUpdate():Promise<void>;
 
 export function AssetHandler():Promise<http.Handler>;
 
+export function CfapiMountPath():Promise<string>;
+
 export function CheckUpdate():Promise<main.UpdateCheckResult>;
 
 export function ClearHistory():Promise<void>;
@@ -164,6 +166,8 @@ export function MeetingsList(arg1:number):Promise<Array<knowledge.Meeting>>;
 export function MySpaces():Promise<Array<account.Space>>;
 
 export function OpenAdminConsole():Promise<void>;
+
+export function OpenCfapiFolder():Promise<void>;
 
 export function OpenCurrentSpace():Promise<void>;
 

@@ -79,6 +79,18 @@ export const taskProgress = (task: TransferTask) => {
   return Math.max(0, Math.min(100, Math.round(transferred / task.totalBytes * 100)))
 }
 
+// 错误三件套（路线图切片 7）：把业务码与系统码拼成悬停详情。
+//
+// 展示面上用户只看到人读文本（够用）；支持人员需要另外两个码来定位，
+// 所以放进 title。
+export const formatErrorDetail = (task: TransferTask) => {
+  const parts: string[] = []
+  if (task.error) parts.push(task.error)
+  if (task.errorCode) parts.push(`业务码 ${task.errorCode}`)
+  if (task.systemCode) parts.push(`系统码 ${task.systemCode}`)
+  return parts.join('\n')
+}
+
 export const formatBytes = (value: number) => {
   const bytes = Number.isFinite(value) ? Math.max(0, value) : 0
   if (bytes < 1024) return `${bytes} B`

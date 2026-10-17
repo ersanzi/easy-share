@@ -2,6 +2,8 @@ package spacedav
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -271,6 +273,12 @@ func (w *writeFile) uploadConflictCopy(ctx context.Context, token string, u file
 	if err != nil {
 		return fmt.Errorf("上传冲突副本前刷新列表失败：%w", err)
 	}
+	// 情形 1（哈希去重，切片 3）：远端那份与我这次写的内容逐字节相同 →
+	// 认作同一文件，不再留一份多余副本。资源管理器里「复制同一个文件回来」
+	// 会走到这里，安静的忽略比多出一个副本更符合预期。
+	if sameContentOnRemote(objects, w.key, w.spoolPath) {
+		return nil
+	}
 	key := w.key
 	ext := path.Ext(key)
 	base := strings.TrimSuffix(key, ext)
@@ -291,6 +299,42 @@ func (w *writeFile) uploadConflictCopy(ctx context.Context, token string, u file
 	}
 	w.key = key
 	return nil
+}
+
+// sameContentOnRemote 判断远端该路径的现有内容是否与本地暂存文件相同（切片 3 情形 1）。
+//
+// 只在「已因版本冲突准备建副本」时调用。任何存疑情形都返回 false（走副本）：
+// 误判为「相同」会吞掉用户这次写入的内容，而误判为「不同」只多一份副本。
+func sameContentOnRemote(objects []drive.Object, key, localPath string) bool {
+	var remoteHash string
+	for _, obj := range objects {
+		if obj.Path == key {
+			remoteHash = obj.ContentMd5
+			break
+		}
+	}
+	if remoteHash == "" {
+		return false // 远端未记录哈希：无从比对，按冲突处理
+	}
+	localHash, err := fileContentMD5(localPath)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(localHash, remoteHash)
+}
+
+// fileContentMD5 整文件读算十六进制 MD5（与 internal/drive 上传路径同口径）。
+func fileContentMD5(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hash := md5.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func existsPath(objects []drive.Object, key string) bool {

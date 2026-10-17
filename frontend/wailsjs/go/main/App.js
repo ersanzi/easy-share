@@ -90,6 +90,10 @@ export function AssetHandler() {
   return window['go']['main']['App']['AssetHandler']();
 }
 
+export function CfapiMountPath() {
+  return window['go']['main']['App']['CfapiMountPath']();
+}
+
 export function CheckUpdate() {
   return window['go']['main']['App']['CheckUpdate']();
 }
@@ -308,6 +312,10 @@ export function MySpaces() {
 
 export function OpenAdminConsole() {
   return window['go']['main']['App']['OpenAdminConsole']();
+}
+
+export function OpenCfapiFolder() {
+  return window['go']['main']['App']['OpenCfapiFolder']();
 }
 
 export function OpenCurrentSpace() {
