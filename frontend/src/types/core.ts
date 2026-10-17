@@ -117,6 +117,16 @@ export interface ShareLink {
   createdAt?: string
 }
 
+/** 一个历史版本（覆盖上传时留档的快照） */
+export interface VersionEntry {
+  /** 版本号；回滚时用 */
+  versionId: number
+  fileSize: number
+  contentMd5?: string
+  createdAt?: string
+  createdBy?: number
+}
+
 // 回收站条目（P1：软删后的 es_file recycled 行；deletedAt 为 ISO 时间串）
 export interface RecycleEntry {
   /**

@@ -1779,6 +1779,31 @@ func (a *App) CloudRevokeShare(shareID string) (bool, error) {
 	return ok, err
 }
 
+// CloudVersions 某个文件的历史版本（版本号倒序）。
+//
+// 只有被覆盖过的文件才有历史：留档发生在 presign-put 那一刻，
+// 首次上传没有旧内容可留，返回空数组是正常结果。
+func (a *App) CloudVersions(key string) ([]drive.VersionEntry, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.Versions(a.ctx, token, drive.SpacePersonal, key)
+}
+
+// CloudRestoreVersion 回滚到指定版本。
+//
+// 控制面会先把当前内容留档再覆盖，所以这个动作本身也可撤销。
+func (a *App) CloudRestoreVersion(key string, versionID int64) error {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.RestoreVersion(a.ctx, token, drive.SpacePersonal, key, versionID)
+	a.reportError("cloud restore version", err)
+	return err
+}
+
 // --- 知识问答（Core 作网关，令牌不进前端） ---
 
 // KnowledgeStatus 获取知识登录态（是否配置/登录、服务器地址、用户名）。

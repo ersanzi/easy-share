@@ -876,6 +876,13 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .detail-star.on { color: var(--amber); }
 .detail-star.on svg { fill: currentColor; }
 
+/* 详情里的行内文字按钮：给「历史」这类轻操作用，不占按钮位 */
+.link-button {
+  margin-left: 6px; padding: 0; border: 0; background: none;
+  color: var(--blue); font-size: 12px; cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; }
+
 /* ─── 批量操作条：与工具栏同高，切换时列表不跳动 ─── */
 .cloud-batch-bar {
   display: flex; align-items: center; gap: 10px;

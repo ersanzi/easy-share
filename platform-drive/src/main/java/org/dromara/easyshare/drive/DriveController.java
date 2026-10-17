@@ -81,6 +81,8 @@ public class DriveController {
     private final org.dromara.easyshare.drive.service.FileMarkService markService;
     /** 文件分享 */
     private final org.dromara.easyshare.drive.service.ShareService shareService;
+    /** 版本历史 */
+    private final org.dromara.easyshare.drive.service.FileVersionService versionService;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -97,8 +99,12 @@ public class DriveController {
         Long ownerId = ownerIdOf(space, userId);
         // 查库 → 藏掉软删 → 回填 fileId（KI-10）。三步的配套关系是正确性的一部分，
         // 故收在 DriveFileService.list 里一次做完，控制器不再自己串。
-        DriveFileService.Listing listing = fileService.list(
-            space, ownerId, userId, storage.listAt(prefix));
+        // 版本快照（.versions/）必须先剔掉：它是实现细节，不是用户文件。
+        List<DriveObject> raw = storage.listAt(prefix).stream()
+            .filter(object -> !object.path()
+                .startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
+            .toList();
+        DriveFileService.Listing listing = fileService.list(space, ownerId, userId, raw);
         List<DriveObject> objects = listing.objects();
         // 文档级可见性（片 2 数据面）：共享列表按用户部门过滤（上传者本人恒可见）；
         // 过滤在唯一列举出口做，网盘页/挂载盘/快搜文件路全部自动生效
@@ -195,7 +201,10 @@ public class DriveController {
         long newest = changeLogService.currentVersion(space, ownerId);
         if (sinceVersion == null) {
             DriveFileService.Listing listing = fileService.list(
-                space, ownerId, userId, storage.listAt(prefix));
+                space, ownerId, userId, storage.listAt(prefix).stream()
+                    .filter(object -> !object.path()
+                        .startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
+                    .toList());
             List<DriveObject> objects = listing.objects();
             if (EsSpace.TYPE_SHARED.equals(space)) {
                 objects = fileService.filterSharedVisible(objects,
@@ -254,6 +263,10 @@ public class DriveController {
             : spaceService.checkPersonalWritable(userId, size);
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
+        // 覆盖前留档：客户端直传会在「拿 URL」与「登记」之间覆盖对象，
+        // 控制面只有这一刻能抢救旧内容（服务端 copyObject，不耗客户端带宽）
+        versionService.snapshot(userId, space, ownerId, prefix,
+            DriveKeys.normalizeRelative(body.path()));
         // 秒传判定先于登记：命中时字节路径整段跳过，哈希随登记一并落行
         if (body.contentMd5() != null && !body.contentMd5().isBlank()) {
             EsFile source = fileService.findByContentHash(space, ownerId, body.contentMd5());
@@ -606,6 +619,41 @@ public class DriveController {
         return R.ok(shareService.revoke(LoginHelper.getUserId(), body.shareId()));
     }
 
+    /**
+     * 某文件的历史版本（版本号倒序）。
+     *
+     * @param path  空间内相对路径
+     * @param space personal / shared，空则按个人空间
+     * @return 历史版本列表；没有覆盖过的文件返回空数组
+     */
+    @GetMapping("/versions")
+    public R<List<VersionVo>> versions(
+        @RequestParam String path,
+        @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        Long userId = LoginHelper.getUserId();
+        return R.ok(versionService.list(space, ownerIdOf(space, userId),
+                DriveKeys.normalizeRelative(path)).stream()
+            .map(VersionVo::of)
+            .toList());
+    }
+
+    /**
+     * 回滚到指定版本。
+     *
+     * <p>回滚前会先给当前内容留档，所以「恢复到旧版」本身也是一次可撤销的操作。
+     *
+     * @param body 相对路径 + 目标版本号
+     */
+    @PostMapping("/version/restore")
+    public R<Void> restoreVersion(@Validated @RequestBody VersionRestoreBo body) {
+        Long userId = LoginHelper.getUserId();
+        String space = body.space() == null || body.space().isBlank()
+            ? EsSpace.TYPE_PERSONAL : body.space();
+        versionService.restore(userId, space, ownerIdOf(space, userId), readablePrefix(space),
+            DriveKeys.normalizeRelative(body.path()), body.versionId());
+        return R.ok();
+    }
+
     /** 分享记录 → 对外 VO；链接由 token 现拼，不落库（换域名不必改数据） */
     private static ShareVo toShareVo(org.dromara.easyshare.drive.domain.EsShare share,
                                      HttpServletRequest request) {
@@ -683,6 +731,40 @@ public class DriveController {
      */
     public record ShareVo(Long shareId, String token, String url, String fileName, long fileSize,
                           Instant expiresAt, boolean revoked, int visitCount, Instant createdAt) {
+    }
+
+    /**
+     * 回滚版本请求。
+     *
+     * @param path      空间内相对路径
+     * @param versionId 目标版本号
+     * @param space     personal / shared，空则按个人空间
+     */
+    public record VersionRestoreBo(
+        @NotBlank String path,
+        @NotNull Long versionId,
+        String space) {
+    }
+
+    /**
+     * 历史版本对外视图。
+     *
+     * @param versionId  版本号（回滚时用）
+     * @param fileSize   该版本字节数
+     * @param contentMd5 该版本哈希；老数据可能为空
+     * @param createdAt  留档时间
+     * @param createdBy  触发覆盖的用户
+     */
+    public record VersionVo(Long versionId, long fileSize, String contentMd5,
+                            Instant createdAt, Long createdBy) {
+        static VersionVo of(org.dromara.easyshare.drive.domain.EsFileVersion version) {
+            return new VersionVo(
+                version.getVersionId(),
+                version.getFileSize() == null ? 0L : version.getFileSize(),
+                version.getContentMd5(),
+                toInstant(version.getCreatedAt()),
+                version.getCreatedBy());
+        }
     }
 
     /**

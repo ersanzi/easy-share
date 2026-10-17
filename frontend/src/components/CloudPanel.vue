@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink } from '../types/core'
+import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink, VersionEntry } from '../types/core'
 import CloudPreviewView from './CloudPreview.vue'
 import RecyclePanel from './RecyclePanel.vue'
 import { buildDriveView, relativeDir } from '../utils/driveFolder'
@@ -630,6 +630,41 @@ const copyShareUrl = async (url: string) => {
     showNotice('复制失败，请手动选择链接')
   }
 }
+
+// ─── 版本历史 ───
+// 留档发生在 presign-put：只有被覆盖过的文件才有历史，首次上传返回空数组。
+const versionsOpen = ref(false)
+const versions = ref<VersionEntry[]>([])
+const versionsLoading = ref(false)
+
+const openVersions = async () => {
+  const file = selectedFile.value
+  if (!file) return
+  versionsOpen.value = true
+  versionsLoading.value = true
+  try {
+    versions.value = await core.cloudVersions(file.key)
+  } catch {
+    versions.value = []
+    showNotice('版本历史加载失败')
+  } finally {
+    versionsLoading.value = false
+  }
+}
+
+const restoreVersion = async (version: VersionEntry) => {
+  const file = selectedFile.value
+  if (!file) return
+  try {
+    await core.cloudRestoreVersion(file.key, version.versionId)
+    versionsOpen.value = false
+    await loadFiles()
+    showNotice(`已恢复到 v${version.versionId}`)
+  } catch (e) {
+    // 控制面的说明更具体（并发冲突 / 版本不存在），直接透出
+    showNotice(e instanceof Error ? e.message : '恢复失败')
+  }
+}
 // 分享条上的有效期：只显示到日，不必精确到分钟
 const shareExpiryLabel = computed(() => {
   if (!shareExpires.value) return '有效'
@@ -981,7 +1016,7 @@ defineExpose({ refresh: loadFiles })
           <div><dt>修改时间</dt><dd>{{ formatDateTime(detail.lastModified) }}</dd></div>
           <div v-if="detail.createdAt"><dt>创建时间</dt><dd>{{ formatDateTime(detail.createdAt) }}</dd></div>
           <div v-if="detail.uploadByName"><dt>上传者</dt><dd>{{ detail.uploadByName }}</dd></div>
-          <div v-if="detail.versionId"><dt>版本</dt><dd>v{{ detail.versionId }}</dd></div>
+          <div v-if="detail.versionId"><dt>版本</dt><dd>v{{ detail.versionId }}<button class="link-button" type="button" @click="openVersions">历史</button></dd></div>
         </dl>
 
         <button class="detail-danger" type="button" @click="$emit('delete', detail.key)">删除此文件</button>
@@ -1006,6 +1041,33 @@ defineExpose({ refresh: loadFiles })
     <button class="ctx-item" type="button" @click="ctxMove">移动到…</button>
     <div class="ctx-sep"></div>
     <button class="ctx-item danger" type="button" @click="ctxDelete">删除</button>
+  </div>
+
+  <!-- 版本历史：留档发生在 presign-put，只有被覆盖过的文件才有记录 -->
+  <div v-if="versionsOpen" class="move-overlay" @click.self="versionsOpen = false">
+    <div class="share-dialog" role="dialog" aria-label="历史版本">
+      <header class="move-head">
+        <b>历史版本</b>
+        <button type="button" title="关闭" @click="versionsOpen = false">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="share-body">
+        <p v-if="versionsLoading" class="share-empty">加载中…</p>
+        <p v-else-if="!versions.length" class="share-empty">
+          这个文件还没有历史版本。每次覆盖上传前会保留一份旧内容，届时这里会出现记录。
+        </p>
+        <template v-else>
+          <article v-for="item in versions" :key="item.versionId" class="share-item">
+            <div class="share-item-main">
+              <b>v{{ item.versionId }}</b>
+              <span>{{ formatDateTime(item.createdAt) }} 留档 · {{ formatSize(item.fileSize) }}</span>
+            </div>
+            <button class="text-button" type="button" @click="restoreVersion(item)">恢复此版本</button>
+          </article>
+        </template>
+      </div>
+    </div>
   </div>
 
   <!-- 我的分享：保留已撤销与已过期的记录，否则「我明明分享过」会变成悬案 -->

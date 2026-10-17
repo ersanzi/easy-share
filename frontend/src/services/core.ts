@@ -39,6 +39,8 @@ import {
   CloudShareLink,
   CloudShares,
   CloudRevokeShare,
+  CloudVersions,
+  CloudRestoreVersion,
   CloudUpload,
   CloudUploadFolder,
   CloudUploadPaths,
@@ -136,6 +138,7 @@ import type {
   PluginInfo,
   RecycleEntry,
   ShareLink,
+  VersionEntry,
   PluginInvokeResult,
   PluginPreview,
   Space,
@@ -187,6 +190,9 @@ export const core = {
     CloudShareLink(key, expiresHours) as Promise<ShareLink>,
   cloudShares: () => CloudShares() as Promise<ShareLink[]>,
   cloudRevokeShare: CloudRevokeShare,
+  // 版本历史：只有被覆盖过的文件才有历史，空数组是正常结果
+  cloudVersions: (key: string) => CloudVersions(key) as Promise<VersionEntry[]>,
+  cloudRestoreVersion: CloudRestoreVersion,
   // 改名只动同目录末段（Go 侧 CloudRename 走控制面 /move，拒绝路径分隔符）
   cloudRename: CloudRename,
   // 移动只换目录、名字不变（同样走 /move，但拒绝 .. 逃逸）

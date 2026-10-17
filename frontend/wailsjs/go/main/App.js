@@ -170,6 +170,14 @@ export function CloudRevokeShare(arg1) {
   return window['go']['main']['App']['CloudRevokeShare'](arg1);
 }
 
+export function CloudVersions(arg1) {
+  return window['go']['main']['App']['CloudVersions'](arg1);
+}
+
+export function CloudRestoreVersion(arg1, arg2) {
+  return window['go']['main']['App']['CloudRestoreVersion'](arg1, arg2);
+}
+
 export function CloudUpload(arg1) {
   return window['go']['main']['App']['CloudUpload'](arg1);
 }

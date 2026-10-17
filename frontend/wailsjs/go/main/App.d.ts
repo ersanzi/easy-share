@@ -86,6 +86,8 @@ export function CloudShare(arg1:string,arg2:number):Promise<string>;
 export function CloudShareLink(arg1:string,arg2:number):Promise<drive.ShareLink>;
 export function CloudShares():Promise<Array<drive.ShareLink>>;
 export function CloudRevokeShare(arg1:string):Promise<boolean>;
+export function CloudVersions(arg1:string):Promise<Array<drive.VersionEntry>>;
+export function CloudRestoreVersion(arg1:string,arg2:number):Promise<void>;
 
 export function CloudUpload(arg1:string):Promise<string>;
 
