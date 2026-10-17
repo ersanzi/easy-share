@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CloudFile, CloudPreview as CloudPreviewData } from '../types/core'
+import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink } from '../types/core'
 import CloudPreviewView from './CloudPreview.vue'
 import RecyclePanel from './RecyclePanel.vue'
 import { buildDriveView, relativeDir } from '../utils/driveFolder'
@@ -143,7 +143,7 @@ const FILE_KIND_LABEL: Record<string, string> = {
 const fileTypeLabel = (name: string) => FILE_KIND_LABEL[fileKind(name)] ?? '文件'
 
 /** 详情面板用的完整时间（列表里为了紧凑只显示 M/D HH:mm） */
-const formatDateTime = (value: string) => {
+const formatDateTime = (value?: string) => {
   if (!value) return ''
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return ''
@@ -575,6 +575,61 @@ const revokeShare = async () => {
     showNotice('撤销失败，请稍后重试')
   }
 }
+
+// ─── 我的分享（列表 / 撤销 / 复制）───
+// 列表里保留已撤销与已过期的记录：用户需要看到「我分享过什么、哪些已经失效」，
+// 直接隐藏会让「我明明分享过」变成悬案。
+const sharesOpen = ref(false)
+const shares = ref<ShareLink[]>([])
+const sharesLoading = ref(false)
+
+const loadShares = async () => {
+  sharesLoading.value = true
+  try {
+    shares.value = await core.cloudShares()
+  } catch {
+    shares.value = []
+    showNotice('分享列表加载失败')
+  } finally {
+    sharesLoading.value = false
+  }
+}
+
+const openShares = () => {
+  sharesOpen.value = true
+  void loadShares()
+}
+
+/** 三种状态由控制面两个字段推导：撤销优先于过期（撤过的即使没到期也不再可用） */
+const shareState = (item: ShareLink): { text: string; cls: string } => {
+  if (item.revoked) return { text: '已撤销', cls: 'revoked' }
+  const expires = item.expiresAt ? new Date(item.expiresAt).getTime() : 0
+  if (expires && expires < Date.now()) return { text: '已过期', cls: 'expired' }
+  return { text: '有效', cls: 'active' }
+}
+
+const revokeFromList = async (item: ShareLink) => {
+  try {
+    await core.cloudRevokeShare(item.shareId)
+    await loadShares()
+    // 详情面板那条如果正是这一个，一并清掉，避免界面还挂着失效链接
+    if (shareId.value === item.shareId) {
+      shareUrl.value = ''
+      shareId.value = ''
+    }
+  } catch {
+    showNotice('撤销失败，请稍后重试')
+  }
+}
+
+const copyShareUrl = async (url: string) => {
+  try {
+    await navigator.clipboard.writeText(url)
+    showNotice('链接已复制')
+  } catch {
+    showNotice('复制失败，请手动选择链接')
+  }
+}
 // 分享条上的有效期：只显示到日，不必精确到分钟
 const shareExpiryLabel = computed(() => {
   if (!shareExpires.value) return '有效'
@@ -670,6 +725,7 @@ defineExpose({ refresh: loadFiles })
       </div>
       <div class="header-actions">
         <button v-if="enabled && cfapiPath" class="text-button" type="button" title="在资源管理器中打开按需占位符目录（文件不占磁盘，打开时才下载）" @click="openCfapiFolder">本地挂载</button>
+        <button v-if="enabled" class="text-button" type="button" @click="openShares">我的分享</button>
         <button v-if="enabled" class="text-button" type="button" @click="recycleOpen = true">回收站</button>
         <button class="text-button" type="button" @click="loadFiles">刷新</button>
         <span class="count-badge">{{ view.folderCount }} 个文件夹 · {{ view.fileCount }} 个文件</span>
@@ -950,6 +1006,41 @@ defineExpose({ refresh: loadFiles })
     <button class="ctx-item" type="button" @click="ctxMove">移动到…</button>
     <div class="ctx-sep"></div>
     <button class="ctx-item danger" type="button" @click="ctxDelete">删除</button>
+  </div>
+
+  <!-- 我的分享：保留已撤销与已过期的记录，否则「我明明分享过」会变成悬案 -->
+  <div v-if="sharesOpen" class="move-overlay" @click.self="sharesOpen = false">
+    <div class="share-dialog" role="dialog" aria-label="我的分享">
+      <header class="move-head">
+        <b>我的分享</b>
+        <button type="button" title="关闭" @click="sharesOpen = false">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="share-body">
+        <p v-if="sharesLoading" class="share-empty">加载中…</p>
+        <p v-else-if="!shares.length" class="share-empty">还没有分享过文件。在文件上右键选「分享链接」即可创建。</p>
+        <template v-else>
+          <article v-for="item in shares" :key="item.shareId" class="share-item">
+            <div class="share-item-main">
+              <b :title="item.fileName">{{ item.fileName }}</b>
+              <span>{{ formatDateTime(item.createdAt) }} 创建 · {{ item.visitCount }} 次访问 · {{ formatSize(item.fileSize) }}</span>
+            </div>
+            <span class="share-state" :class="shareState(item).cls">{{ shareState(item).text }}</span>
+            <div class="share-item-acts">
+              <button class="text-button" type="button" @click="copyShareUrl(item.url)">复制</button>
+              <button
+                v-if="shareState(item).cls === 'active'"
+                class="text-button destructive-text"
+                type="button"
+                @click="revokeFromList(item)"
+              >撤销</button>
+            </div>
+          </article>
+        </template>
+      </div>
+    </div>
   </div>
 
   <!-- 移动到：目录选择浮层。目录清单由文件 key 前缀推导，不额外请求后端 -->
