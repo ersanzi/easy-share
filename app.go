@@ -1742,6 +1742,43 @@ func (a *App) CloudShare(key string, expiryHours int) (string, error) {
 	return url, err
 }
 
+// CloudShareLink 创建**长效且可撤销**的分享链接。
+//
+// 与 CloudShare 的区别：后者是 10 分钟就失效、也收不回的预签名地址，
+// 只适合「马上要下载一次」；发给同事/客户的链接必须是这一条——它落到
+// es_share 表，能撤销、能设有效期、能统计访问。
+//
+// expiresHours <= 0 时由控制面取默认 7 天，上限 30 天。
+func (a *App) CloudShareLink(key string, expiresHours int) (*drive.ShareLink, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	link, err := client.CreateShare(a.ctx, token, drive.SpacePersonal, key, expiresHours)
+	a.reportError("cloud share link", err)
+	return link, err
+}
+
+// CloudShares 列出我创建的分享（含已撤销与已过期）。
+func (a *App) CloudShares() ([]drive.ShareLink, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.Shares(a.ctx, token)
+}
+
+// CloudRevokeShare 撤销一条分享，立即生效。
+func (a *App) CloudRevokeShare(shareID string) (bool, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return false, err
+	}
+	ok, err := client.RevokeShare(a.ctx, token, shareID)
+	a.reportError("cloud revoke share", err)
+	return ok, err
+}
+
 // --- 知识问答（Core 作网关，令牌不进前端） ---
 
 // KnowledgeStatus 获取知识登录态（是否配置/登录、服务器地址、用户名）。

@@ -14,6 +14,8 @@ const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir
 const files = ref<CloudFile[]>([])
 const loading = ref(false)
 const shareUrl = ref('')
+const shareExpires = ref('')
+const shareId = ref('')
 const shareKey = ref('')
 const previewOpen = ref(false)
 const previewLoading = ref(false)
@@ -548,12 +550,38 @@ watch([() => currentPath.value, files], () => {
 
 const requestShare = async (key: string) => {
   try {
-    shareUrl.value = await core.cloudShare(key, 24)
+    // 走长效分享（落库、可撤销），不是 10 分钟的预签名地址——
+    // 后者发出去就收不回，只适合「马上下一份」的场景
+    const link = await core.cloudShareLink(key, 24 * 7)
+    shareUrl.value = link.url
+    shareExpires.value = link.expiresAt ?? ''
+    shareId.value = link.shareId
     shareKey.value = key
   } catch {
     shareUrl.value = ''
   }
 }
+
+// 撤销刚生成的那条链接。撤销立即生效，不等自然过期——这是分享层相对预签名
+// 唯一真正的增量能力，入口必须给出来，否则「可撤销」只是接口里的一个字段。
+const revokeShare = async () => {
+  if (!shareId.value) return
+  try {
+    await core.cloudRevokeShare(shareId.value)
+    shareUrl.value = ''
+    shareId.value = ''
+    showNotice('分享链接已撤销')
+  } catch {
+    showNotice('撤销失败，请稍后重试')
+  }
+}
+// 分享条上的有效期：只显示到日，不必精确到分钟
+const shareExpiryLabel = computed(() => {
+  if (!shareExpires.value) return '有效'
+  const d = new Date(shareExpires.value)
+  if (Number.isNaN(d.getTime())) return '有效'
+  return `至 ${d.getMonth() + 1}/${d.getDate()}`
+})
 const closePreview = () => {
   previewOpen.value = false
   previewLoading.value = false
@@ -831,9 +859,10 @@ defineExpose({ refresh: loadFiles })
       </div>
 
       <div v-if="shareUrl" class="share-bar">
-        <span class="share-label">{{ shareKey }} 分享链接（24h 有效）：</span>
+        <span class="share-label">{{ shareKey }} 分享链接（{{ shareExpiryLabel }} 有效，可撤销）：</span>
         <code class="share-url">{{ shareUrl }}</code>
         <button class="primary-button compact" type="button" @click="copyShare">复制</button>
+        <button class="text-button" type="button" @click="revokeShare">撤销</button>
       </div>
     </template>
     </div>

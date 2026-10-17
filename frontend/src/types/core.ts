@@ -95,6 +95,28 @@ export interface CloudFile {
   versionId?: number
 }
 
+/**
+ * 一条文件分享记录（长效、可撤销）。
+ *
+ * 与预签名 URL 的区别：预签名 10 分钟失效且收不回；分享是一条落库记录，
+ * 能撤销、能设有效期、能统计访问次数。
+ */
+export interface ShareLink {
+  /** 雪花 ID，**必须是字符串**：19 位超出 JS 安全整数，数字形态一旦往返就变了 */
+  shareId: string
+  /** URL 中的随机码 */
+  token: string
+  /** 完整可复制链接 */
+  url: string
+  /** 创建时的文件名快照（文件后来被删也能显示） */
+  fileName: string
+  fileSize: number
+  expiresAt?: string
+  revoked: boolean
+  visitCount: number
+  createdAt?: string
+}
+
 // 回收站条目（P1：软删后的 es_file recycled 行；deletedAt 为 ISO 时间串）
 export interface RecycleEntry {
   /**

@@ -4,6 +4,7 @@ import {account} from '../models';
 import {knowledge} from '../models';
 import {main} from '../models';
 import {http} from '../models';
+import {drive} from '../models';
 import {cloud} from '../models';
 import {drive} from '../models';
 import {desktop} from '../models';
@@ -82,6 +83,9 @@ export function CloudRecyclePurge(arg1:string):Promise<void>;
 export function CloudRecycleRestore(arg1:string):Promise<void>;
 
 export function CloudShare(arg1:string,arg2:number):Promise<string>;
+export function CloudShareLink(arg1:string,arg2:number):Promise<drive.ShareLink>;
+export function CloudShares():Promise<Array<drive.ShareLink>>;
+export function CloudRevokeShare(arg1:string):Promise<boolean>;
 
 export function CloudUpload(arg1:string):Promise<string>;
 

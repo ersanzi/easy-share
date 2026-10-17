@@ -36,6 +36,9 @@ import {
   CloudRecyclePurge,
   CloudRecycleRestore,
   CloudShare,
+  CloudShareLink,
+  CloudShares,
+  CloudRevokeShare,
   CloudUpload,
   CloudUploadFolder,
   CloudUploadPaths,
@@ -132,6 +135,7 @@ import type {
   MeetingRecord,
   PluginInfo,
   RecycleEntry,
+  ShareLink,
   PluginInvokeResult,
   PluginPreview,
   Space,
@@ -178,6 +182,11 @@ export const core = {
   cloudUploadPaths: CloudUploadPaths,
   cloudDownload: CloudDownload,
   cloudDelete: CloudDelete,
+  // 长效可撤销的分享；cloudShare 是 10 分钟预签名，只用于「马上下一份」
+  cloudShareLink: (key: string, expiresHours: number) =>
+    CloudShareLink(key, expiresHours) as Promise<ShareLink>,
+  cloudShares: () => CloudShares() as Promise<ShareLink[]>,
+  cloudRevokeShare: CloudRevokeShare,
   // 改名只动同目录末段（Go 侧 CloudRename 走控制面 /move，拒绝路径分隔符）
   cloudRename: CloudRename,
   // 移动只换目录、名字不变（同样走 /move，但拒绝 .. 逃逸）

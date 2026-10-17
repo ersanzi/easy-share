@@ -1,6 +1,7 @@
 package org.dromara.easyshare.drive;
 
 import cn.dev33.satoken.annotation.SaCheckLogin;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -78,6 +79,8 @@ public class DriveController {
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
     /** 星标 / 最近访问 */
     private final org.dromara.easyshare.drive.service.FileMarkService markService;
+    /** 文件分享 */
+    private final org.dromara.easyshare.drive.service.ShareService shareService;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -561,7 +564,73 @@ public class DriveController {
     }
 
     /**
-     * 取可读空间的前缀。个人空间无需授权（自己的），共享空间要有成员行。
+     * 创建分享链接。
+     *
+     * <p>返回的是**长效且可撤销**的外链，与 {@code /presign-get} 的一次性地址不同：
+     * 后者 10 分钟就失效、也无法收回，只适合「马上要下载一次」。
+     *
+     * @param body    相对路径 + 期望有效期（小时）
+     * @param request 用于拼出绝对 URL（企业内网场景下客户端拿到的是控制面地址）
+     * @return 分享记录（含完整链接）
+     */
+    @PostMapping("/share")
+    public R<ShareVo> share(@Validated @RequestBody ShareBo body, HttpServletRequest request) {
+        Long userId = LoginHelper.getUserId();
+        String space = body.space() == null || body.space().isBlank()
+            ? EsSpace.TYPE_PERSONAL : body.space();
+        var share = shareService.create(userId, space, body.path(), body.expiresHours());
+        return R.ok(toShareVo(share, request));
+    }
+
+    /**
+     * 我创建的分享（按时间倒序）。
+     *
+     * <p>包含已撤销/已过期的记录：用户需要看到「我分享过什么、哪些已经失效」，
+     * 直接隐藏会让「我明明分享过」变成悬案。
+     */
+    @GetMapping("/shares")
+    public R<List<ShareVo>> shares(HttpServletRequest request) {
+        return R.ok(shareService.listMine(LoginHelper.getUserId()).stream()
+            .map(share -> toShareVo(share, request))
+            .toList());
+    }
+
+    /**
+     * 撤销分享。撤销立即生效，不等自然过期。
+     *
+     * @param body 分享 ID
+     * @return 是否确实撤销了一条（false = 不存在或不属于当前用户）
+     */
+    @PostMapping("/share/revoke")
+    public R<Boolean> revokeShare(@Validated @RequestBody ShareRevokeBo body) {
+        return R.ok(shareService.revoke(LoginHelper.getUserId(), body.shareId()));
+    }
+
+    /** 分享记录 → 对外 VO；链接由 token 现拼，不落库（换域名不必改数据） */
+    private static ShareVo toShareVo(org.dromara.easyshare.drive.domain.EsShare share,
+                                     HttpServletRequest request) {
+        return new ShareVo(
+            share.getShareId(),
+            share.getToken(),
+            shareBaseUrl(request) + "/easyshare/s/" + share.getToken(),
+            share.getFileName(),
+            share.getFileSize() == null ? 0L : share.getFileSize(),
+            toInstant(share.getExpiresAt()),
+            Boolean.TRUE.equals(share.getRevoked()),
+            share.getVisitCount() == null ? 0 : share.getVisitCount(),
+            toInstant(share.getCreatedAt()));
+    }
+
+    /** 从当前请求推导绝对地址；默认端口不拼端口号 */
+    private static String shareBaseUrl(HttpServletRequest request) {
+        String scheme = request.getScheme();
+        int port = request.getServerPort();
+        boolean defaultPort = ("http".equals(scheme) && port == 80)
+            || ("https".equals(scheme) && port == 443);
+        return scheme + "://" + request.getServerName() + (defaultPort ? "" : ":" + port);
+    }
+
+    /** 取可读空间的前缀。个人空间无需授权（自己的），共享空间要有成员行。
      */
     private String readablePrefix(String space) {
         Long userId = LoginHelper.getUserId();
@@ -577,6 +646,45 @@ public class DriveController {
      * @param space personal / shared，空则按个人空间
      * @param fileId 目录层稳定文件 ID，可选；给出时优先于 path
      */
+    /**
+     * 创建分享请求。
+     *
+     * @param path         空间内相对路径
+     * @param expiresHours 期望有效期（小时）；空或非正数走默认 7 天，上限 30 天
+     * @param space        personal / shared，空则按个人空间
+     */
+    public record ShareBo(
+        @NotBlank String path,
+        Integer expiresHours,
+        String space) {
+    }
+
+    /**
+     * 撤销分享请求。
+     *
+     * @param shareId 分享记录 ID
+     */
+    public record ShareRevokeBo(
+        @NotNull Long shareId) {
+    }
+
+    /**
+     * 分享记录对外视图。
+     *
+     * @param shareId    分享 ID（撤销时用）
+     * @param token      URL 中的随机码
+     * @param url        完整可复制链接
+     * @param fileName   创建时的文件名快照
+     * @param fileSize   创建时的字节数快照
+     * @param expiresAt  到期时间
+     * @param revoked    是否已撤销
+     * @param visitCount 成功跳转次数
+     * @param createdAt  创建时间
+     */
+    public record ShareVo(Long shareId, String token, String url, String fileName, long fileSize,
+                          Instant expiresAt, boolean revoked, int visitCount, Instant createdAt) {
+    }
+
     /**
      * 星标请求。
      *

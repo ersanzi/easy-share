@@ -158,6 +158,18 @@ export function CloudShare(arg1, arg2) {
   return window['go']['main']['App']['CloudShare'](arg1, arg2);
 }
 
+export function CloudShareLink(arg1, arg2) {
+  return window['go']['main']['App']['CloudShareLink'](arg1, arg2);
+}
+
+export function CloudShares() {
+  return window['go']['main']['App']['CloudShares']();
+}
+
+export function CloudRevokeShare(arg1) {
+  return window['go']['main']['App']['CloudRevokeShare'](arg1);
+}
+
 export function CloudUpload(arg1) {
   return window['go']['main']['App']['CloudUpload'](arg1);
 }
