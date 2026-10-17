@@ -103,6 +103,17 @@ jobs:
             DMG_PATH="build/bin/EasyShare.dmg"
             APP_ZIP="build/bin/EasyShare.app.zip"
 
+            # 产物现状先落日志：断言失败时，光看「step failed」无从判断是哪一条。
+            # 每条检查都把自己看到的实际值打出来，下次不必再猜。
+            echo "::group::产物清单"
+            ls -lh build/bin || true
+            echo "--- .app 结构 ---"
+            ls -lh "$APP_PATH/Contents/MacOS/" || true
+            echo "--- lipo -archs ---"
+            lipo -archs "$APP_EXEC" 2>&1 || true
+            lipo -archs "$CORE_EXEC" 2>&1 || true
+            echo "::endgroup::"
+
             test -d "$APP_PATH"
             test -x "$APP_EXEC"
             test -x "$CORE_EXEC"
@@ -151,6 +162,9 @@ jobs:
             # 若注入只对其中一个架构生效，整文件 grep 仍可能命中（扫到了有地址的那片），
             # 于是「一半用户连不上」这种最坏情况会被判为通过。切片查把每个架构都验一遍，
             # 漏注入与半注入都会硬失败。
+            #
+            # 失败时把排查线索一并打出来：这个地址在二进制里出现了几次、
+            # 切片是否真的切出来了。裸一句「未找到」无法区分「没注入」与「查法不对」。
             verify_baked_url() {
               local binary="$1"
               local archs
@@ -161,16 +175,29 @@ jobs:
                   echo "OK: $binary 已烘焙 ${PLATFORM_URL}"
                 else
                   echo "::error::$binary 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
+                  echo "  期望字节: ${PLATFORM_URL}"
+                  echo "  实际命中次数: $(strings "$binary" | grep -cF "${PLATFORM_URL}" || true)"
+                  echo "  文件大小: $(wc -c < "$binary" | tr -d ' ')"
+                  echo "  同类地址抽样: $(strings "$binary" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
                   return 1
                 fi
                 return 0
               fi
               local arch
               for arch in $archs; do
-                local slice="$RUNNER_TEMP/slice-$arch.bin"
-                lipo "$binary" -thin "$arch" -output "$slice"
+                # 切片落盘目录兜底：RUNNER_TEMP 在 Actions 里一定有，
+                # 但整个块跑在 set -u 下，一次未定义变量就会让本步以
+                # 「unbound variable」失败——看起来像别的检查挂了，实则根本没走到断言。
+                local tmpdir="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+                local slice="$tmpdir/slice-$arch.bin"
+                if ! lipo "$binary" -thin "$arch" -output "$slice" 2>&1; then
+                  echo "::error::无法从 $binary 抽出 $arch 切片"
+                  return 1
+                fi
                 if ! strings "$slice" | grep -qF "${PLATFORM_URL}"; then
                   echo "::error::$binary ($arch) 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
+                  echo "  切片大小: $(wc -c < "$slice" | tr -d ' ')"
+                  echo "  同类地址抽样: $(strings "$slice" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
                   return 1
                 fi
                 echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
