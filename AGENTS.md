@@ -18,7 +18,7 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 
 - **架构**：Wails 桌面端 + Go Core 双进程（HTTP/WebSocket 127.0.0.1:19080）+ Python 知识服务（FastAPI，独立进程）+ RuoYi 账号控制面（Java，`platform-drive/` 模块，dev 见 `deploy/ruoyi-db/`）。进程图、端口、API 清单、生命周期 → [`docs/architecture.md`](docs/architecture.md)
 - **迭代流程**：先在 `docs/progress.md`「进行中」登记主题 → 建 `docs/iterations/YYYY-MM-DD-主题.md` → 实现与验证 → 更新 progress/README → 用户明确要求时才提交推送。模板与 DoD → [`docs/version-iteration.md`](docs/version-iteration.md)
-- **原生命令**（`.zcode/commands/`，随仓库版本化）：`/iterate <主题>` 一键完成开工登记（生成迭代文档骨架 + progress.md 挂牌）；`/verify` 跑 Go/Python/前端三层轻量回归（不含 NSIS 全量）
+- **原生命令**（`.zcode/commands/`，随仓库版本化）：`/iterate <主题>` 一键完成开工登记（生成迭代文档骨架 + progress.md 挂牌）；`/verify` 跑 Go/Python/前端/Java 四层 + **活栈（真实控制面）**轻量回归（不含 NSIS 全量；活栈需环境齐备，未起则明确标注未跑）
 - **构建/测试命令**：完整清单 → [`docs/development.md`](docs/development.md)；全量流水线 `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`；Python 侧 `knowledge/.venv/Scripts/python.exe -m pytest -m "not integration"`
 - **文档规矩**：`docs/progress.md` 是进度与路线唯一真相源；架构/端口/API 变化必须同步 `architecture.md`；排障经验写入 `troubleshooting.md` 与迭代记录（"省的下次还有问题"）
 

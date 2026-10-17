@@ -10,11 +10,13 @@ import org.dromara.easyshare.drive.service.SpaceUsageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.util.unit.DataSize;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -22,6 +24,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -70,6 +74,100 @@ class DriveUploadServiceTest {
     }
 
     @Test
+    void createStoresExpectedVersionInsteadOfJudgingIt() {
+        // create **只寄存不判定**：真正的写入（S3 聚合）发生在 complete，
+        // 那才是字节落地与 es_file 登记的时刻。在 create 就拒绝会给出虚假的安全感。
+        when(spaceService.checkPersonalWritable(1L, 100L)).thenReturn("users/1/");
+        when(mapper.selectList(any())).thenReturn(List.of());
+        when(storage.createUpload("users/1/", "big/backup.iso")).thenReturn("u1");
+
+        EsUploadSession created = service.create(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
+            "big/backup.iso", 100L, 3L);
+
+        assertEquals(3L, created.getExpectedVersion());
+        // 只寄存，所以不该在 create 阶段对文件层做任何校验
+        verify(fileService, never()).assertVersion(anyString(), anyLong(), anyString(), anyLong());
+    }
+
+    @Test
+    void createWithoutVersionStoresNullForBackwardCompatibility() {
+        // 旧调用方不传版本 → 不做校验（升级不必同时上线）
+        when(spaceService.checkPersonalWritable(1L, 100L)).thenReturn("users/1/");
+        when(mapper.selectList(any())).thenReturn(List.of());
+        when(storage.createUpload("users/1/", "big/backup.iso")).thenReturn("u1");
+
+        EsUploadSession created = service.create(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
+            "big/backup.iso", 100L);
+
+        assertNull(created.getExpectedVersion());
+        verify(fileService, never()).assertVersion(anyString(), anyLong(), anyString(), anyLong());
+    }
+
+    @Test
+    void completeAbortsSessionWhenAssertVersionRejects() {
+        // ⚠️ 这条钉的是一个**只在真机上暴露过**的缺口（KI-26）：
+        // assertVersion 原先写在 try **之外**，它抛异常时不会走 abortQuietly，
+        // 会话于是永久停在 uploading（S3 分片白占容量、库里留一条永不结束的会话）。
+        // 实测：跑一次「过期版本被拒」的分片上传，库里就多一条 uploading。
+        //
+        // 真机验证代价高（要造 ≥32 MiB 分片），所以这里用单测钉顺序：
+        // 只要 assertVersion 拒绝，就必须 abort 会话、且**不碰对象存储**。
+        EsUploadSession uploading = session(9L, EsUploadSession.STATUS_UPLOADING);
+        uploading.setExpectedVersion(3L);
+        when(mapper.selectById(9L)).thenReturn(uploading);
+        doThrow(new ServiceException("文件已被删除（你看到的版本 3），请刷新后再试"))
+            .when(fileService).assertVersion(EsUploadSession.TYPE_PERSONAL, 1L, "big/backup.iso", 3L);
+
+        assertThrows(ServiceException.class,
+            () -> service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag-a"))));
+
+        // 关键断言：会话被中止（不再是 uploading），对象存储一个字节都没写
+        verify(storage).abortUpload("users/1/", "big/backup.iso", "s3-upload-id");
+        verify(storage, never()).completeUpload(anyString(), anyString(), anyString(), any());
+        assertEquals(EsUploadSession.STATUS_ABORTED, uploading.getStatus());
+    }
+
+    @Test
+    void completeRejectsStaleVersionBeforeTouchingObjectStorage() {
+        // ⚠️ 这条钉的是**顺序**，比「是否校验」更要紧：
+        // completeUpload 会把分片聚合到目标键上（= 覆盖那份文件）。
+        // 若先聚合再校验，对方的改动已经被物理覆盖，此时报「版本冲突」只是事后通知——数据没了。
+        EsUploadSession uploading = session(9L, EsUploadSession.STATUS_UPLOADING);
+        uploading.setExpectedVersion(3L);
+        when(mapper.selectById(9L)).thenReturn(uploading);
+        // assertVersion 是 void 方法，打桩必须用 doThrow（when(...) 只适用于有返回值的方法）
+        doThrow(new ServiceException("文件已被其他人修改（你看到的版本 3，当前版本 4）"))
+            .when(fileService).assertVersion(EsUploadSession.TYPE_PERSONAL, 1L, "big/backup.iso", 3L);
+
+        ServiceException ex = assertThrows(ServiceException.class,
+            () -> service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag-a"))));
+        assertEquals("文件已被其他人修改（你看到的版本 3，当前版本 4）", ex.getMessage());
+
+        // 关键断言：对象存储**一个字节都没被写**
+        verify(storage, never()).completeUpload(anyString(), anyString(), anyString(), any());
+        // 目录层也不该被登记
+        verify(fileService, never()).registerOnPresign(anyString(), anyLong(), anyLong(),
+            anyString(), anyLong(), any());
+    }
+
+    @Test
+    void completeAbortsSessionWhenRegistrationGateRejects() {
+        // 条件 UPDATE 是真正的原子闸门（防 TOCTOU）。它拒绝时也不能写对象存储，
+        // 并把已经没有价值的 S3 分片清掉，别让它白占容量。
+        EsUploadSession uploading = session(9L, EsUploadSession.STATUS_UPLOADING);
+        uploading.setExpectedVersion(3L);
+        when(mapper.selectById(9L)).thenReturn(uploading);
+        doThrow(new ServiceException("文件在本次上传期间被其他人修改（版本 3 已过期）"))
+            .when(fileService).registerOnPresign(anyString(), anyLong(), anyLong(), anyString(), anyLong(), any());
+
+        assertThrows(ServiceException.class,
+            () -> service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag-a"))));
+
+        verify(storage, never()).completeUpload(anyString(), anyString(), anyString(), any());
+        verify(storage).abortUpload("users/1/", "big/backup.iso", "s3-upload-id");
+    }
+
+    @Test
     void createAbortsStaleSessionsThenInserts() {
         when(spaceService.checkPersonalWritable(1L, 100L)).thenReturn("users/1/");
         when(mapper.selectList(any())).thenReturn(List.of(session(9L, EsUploadSession.STATUS_UPLOADING)));
@@ -114,6 +212,7 @@ class DriveUploadServiceTest {
     @Test
     void completeSubmitsPartsAndRegistersFile() {
         EsUploadSession uploading = session(9L, EsUploadSession.STATUS_UPLOADING);
+        uploading.setExpectedVersion(5L);
         when(mapper.selectById(9L)).thenReturn(uploading);
         when(fileService.fileIdOfPath(EsUploadSession.TYPE_PERSONAL, 1L, "big/backup.iso"))
             .thenReturn(777L);
@@ -128,9 +227,29 @@ class DriveUploadServiceTest {
             eq("s3-upload-id"), captor.capture());
         assertEquals(1, captor.getValue().size());
         assertEquals(EsUploadSession.STATUS_COMPLETED, uploading.getStatus());
+        // 校验先于登记，且版本一路透传到目录层（条件 UPDATE 才是真正的原子闸门）
+        verify(fileService).assertVersion(EsUploadSession.TYPE_PERSONAL, 1L, "big/backup.iso", 5L);
         verify(fileService).registerOnPresign(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
-            "big/backup.iso", 100L * 1024 * 1024);
+            "big/backup.iso", 100L * 1024 * 1024, 5L);
         verify(usageService).invalidate("users/1/");
+    }
+
+    @Test
+    void completeWritesToObjectStorageOnlyAfterVersionGatePasses() {
+        // 顺序断言：CAS 闸门（登记）必须**先于** S3 聚合。
+        // 用 InOrder 钉住调用次序——这是「先占版本，再让字节落地」的关键，
+        // 反了就等于「先覆盖、后报冲突」，数据已经没了。
+        EsUploadSession uploading = session(9L, EsUploadSession.STATUS_UPLOADING);
+        uploading.setExpectedVersion(5L);
+        when(mapper.selectById(9L)).thenReturn(uploading);
+
+        service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag-a")));
+
+        InOrder order = inOrder(fileService, storage);
+        order.verify(fileService).assertVersion(anyString(), anyLong(), anyString(), any());
+        order.verify(fileService).registerOnPresign(anyString(), anyLong(), anyLong(),
+            anyString(), anyLong(), any());
+        order.verify(storage).completeUpload(anyString(), anyString(), anyString(), any());
     }
 
     @Test

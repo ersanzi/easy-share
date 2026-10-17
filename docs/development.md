@@ -55,12 +55,69 @@ npm --prefix frontend run dev
 go test ./...
 ```
 
+### 活栈测试（真实控制面 + PostgreSQL + RustFS）★ **发现契约类缺陷的唯一手段**
+
+`go test ./...` 默认**跳过**活栈用例（未设环境变量即 `Skip`）。它们覆盖「单测永远看不见」的那一层：
+真实雪花 ID、真实 JSON 契约、真实对象存储。**本仓 KI-18 ~ KI-26 全部只能在这里暴露**。
+
+覆盖面：`internal/drive`（CAS/分片/回收站/move/单请求重试/**跨用户权限边界**/**配额闸门**）、`internal/account`（空间与配额接口）、
+`internal/spacedav`（「此电脑」挂载盘的读写/改名/Range——该包历史上出过 KI-9/12/13 三个高危缺陷，
+此前零活栈覆盖）。**新写活栈用例时**：清理一律用 `t.Cleanup` 且要一路走到 `RecyclePurge`
+（只 `RemoveAll` 是软删，行会留在回收站——见 KI-25）。
+
+```powershell
+# 前置：PG + Redis + RustFS 起好（deploy/ruoyi-db、deploy/rustfs），控制面在 8090
+docker ps --format "{{.Names}}	{{.Status}}" | Select-String "ruoyi|rustfs"
+
+$env:EASYSHARE_LIVE_DRIVE='1'
+$env:EASYSHARE_LIVE_BASE='http://127.0.0.1:8090'
+$env:EASYSHARE_LIVE_USER_A='admin'; $env:EASYSHARE_LIVE_PASS_A='admin123'
+# 权限用例另外用到两个真实账号（本机 dev 库自带）：
+#   test / test1，密码均为 666666
+# 需要的环境装配（只在首次做一次）：
+#   admin 对共享空间 write、test 对共享空间 read、test1 **不授权**
+#   test / test1 各开 1 GiB 个人空间、共享空间配容量
+# 装配走生产同链路接口（App/account 的 SetPersonalQuota / SetSharedQuota / GrantShared）
+go test ./internal/drive/ ./internal/account/ ./internal/spacedav/ -run "TestLive" -count=1 -v
+```
+
+> **为什么必须有这一层**：单测里的 `fileId`、`sessionId` 是**自己编的小数字**，
+> 而真实控制面签发的是 19 位雪花 ID（超 JS 安全整数、被序列化成字符串）。
+> 于是「单测全绿」与「真实可用」之间曾经隔着**六个**缺陷（KI-18…KI-23），
+> 其中三个能静默丢数据。判据同样是**看输出里有没有 `--- PASS: TestLive...`**。
+
 ### 前端测试与类型构建
 
 ```powershell
 npm --prefix frontend test
 npm --prefix frontend run build
 ```
+
+### Java 控制面测试（platform-drive）
+
+```powershell
+cd platform-drive
+mvn -o clean test        # 84 个用例
+```
+
+> ⚠️ **必须带 `clean`，且必须确认输出里有 `Tests run: N`**。两个坑都踩过：
+>
+> 1. 上游 RuoYi 父 POM（`platform/pom.xml:78`）设了 `<maven.test.skip>true</maven.test.skip>`，
+>    使得 `mvn test` 打印 `Tests are skipped.` 却仍返回 **`BUILD SUCCESS`**——
+>    看起来通过，实际一个测试都没编译、没执行。模块 POM 已覆盖为 `false`（KI-8）。
+> 2. 不带 `clean` 时**增量构建会给出陈旧结果**：改了源码但结论对不上，
+>    对着旧 class 下判断。本轮因此误判过两次。
+>
+> **判据不是退出码，是 `Tests run: N`。** 任何层看不到具体用例数，都要怀疑它没真跑。
+
+### Python 知识服务测试
+
+```powershell
+cd knowledge
+.venv/Scripts/python.exe -m pytest -m "not integration"    # 180 passed, 1 skipped
+```
+
+> 集成测试依赖 RustFS（`-m "not integration"` 排除），需要真实对象存储时单独跑。
 
 ### Windows WebClient 真实映射测试
 

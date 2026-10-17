@@ -61,3 +61,7 @@ data/
 .zcode/plans/
 # platform-drive 的 Maven 构建产物（platform/ 整体已忽略，模块在仓内需单独忽略）
 platform-drive/target/
+# ─── 逆向取证脚本（scripts/reverse）───
+# 用法见 scripts/reverse/README.md 与 docs/toolchain-rea.md §8.3
+# Ghidra 持久化工程（数百 MB，可重建，不进仓）
+output/

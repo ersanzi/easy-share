@@ -60,4 +60,23 @@ public class EsUploadSession extends BaseEntity {
 
     /** 0 进行中、1 已完成、2 已放弃 */
     private String status;
+
+    /**
+     * 创建会话时调用方声明的「我看到的是哪一版」（路线图切片 1 的 CAS）。
+     *
+     * <p>为什么**寄存在会话上**而不是 create 时立即校验：Multipart 的真实写入发生在
+     * complete（大文件可能几分钟），create 时校验只能证明「开始时版本一致」，
+     * 对「写入时是否已被别人改动」毫无保证。校验点必须与写入点重合。
+     *
+     * <p>null = 旧调用方，不做校验（向后兼容）。
+     */
+    private Long expectedVersion;
+
+    /**
+     * 客户端整文件读算的内容 MD5（切片 6 秒传判定）。
+     *
+     * <p>大文件走分片路径，字节在 complete 才聚合——秒传判定同样只能在
+     * complete 做（聚合前对象还不存在）。null = 客户端未上报，不判秒传。
+     */
+    private String contentMd5;
 }

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 
 import pytest
@@ -62,6 +63,38 @@ def _finish(service: MeetingService, meeting_id: str) -> dict:
     """同步跑一次 worker 逻辑（绕开线程池，断言确定性）。"""
     service._process(meeting_id)  # noqa: SLF001 - 单测直调管线
     return service.store.get(meeting_id)
+
+
+def _wait_completed(service: MeetingService, meeting_id: str, timeout: float = 30.0) -> dict:
+    """等后台 worker 把这条记录跑完，超时给**可诊断**的失败。
+
+    为什么不用固定次数的轮询：原先这里写的是
+    `for _ in range(200): ... time.sleep(0.02)` —— **固定 4 秒预算**，
+    与机器实际负载无关。跑四层回归时 CPU 被占满，后台转写线程排不到时间片，
+    4 秒不够，断言就在 `record["keywords"]` 处炸掉，
+    报出来像是「逻辑错了」，实际是「机器忙」。
+    本仓 KI-15 记录了它三次偶发（2026-10-16，其中一次全量跑到 148 秒）。
+
+    两处改进：
+      1. 超时放宽到 30 秒（正常只需几十毫秒），且用单调时钟计时；
+      2. 超时时抛带上下文的 AssertionError —— 明确说「worker 未在 N 秒内完成，
+         可能是机器负载」，而不是让后续断言报一个看起来像逻辑错误的差异。
+
+    刻意**保留真实异步**（不改成直调 `_process`）：这条用例的价值之一
+    就是覆盖「排队任务」这条真实路径，改成同步会丢掉那层覆盖。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        record = service.store.get(meeting_id)
+        if record["status"] == "completed":
+            return record
+        time.sleep(0.02)
+    record = service.store.get(meeting_id)
+    raise AssertionError(
+        f"worker 未在 {timeout:.0f} 秒内完成（当前 status={record['status']!r}）；"
+        "正常只需几十毫秒，超时通常意味着机器负载过高（并行跑多层回归时常见），"
+        "不一定是逻辑错误。本仓 KI-15 记录了这个假阴性。"
+    )
 
 
 def test_new_record_carries_blocks_keywords_and_todos(tmp_path) -> None:
@@ -397,12 +430,8 @@ def test_retranscribe_resets_blocks_and_requeues(tmp_path, monkeypatch) -> None:
         assert updated["status"] == "processing"
         assert set(updated["blocks"].values()) == {"pending"}
 
-        # 排队任务跑完后关键词被重算
-        for _ in range(200):
-            if service.store.get(meta["id"])["status"] == "completed":
-                break
-            time.sleep(0.02)
-        record = service.store.get(meta["id"])
+        # 排队任务跑完后关键词被重算（条件等待，超时给可诊断的失败——见 helper 注释）
+        record = _wait_completed(service, meta["id"])
         assert record["keywords"] == ["听记"]
         assert record["blocks"]["keywords"] == "ready"
 
@@ -421,6 +450,102 @@ def test_retranscribe_refuses_when_audio_missing(tmp_path) -> None:
             service.retranscribe(meta["id"])
     finally:
         service.shutdown()
+
+# ─── 并发与异常安全（2026-10-16：由一次"假 flake"查出的两个真缺陷）────────
+#
+# 背景：test_retranscribe_resets_blocks_and_requeues 长期偶发失败，
+# 起初被登记为「机器负载导致的 flake」（KI-15）。用线程转储查下去才发现
+# **不是 flake**：worker 线程空闲、status 卡在 processing，
+# 而 concurrent.futures 把真正的异常吞进了 Future。
+# 根因是 `MeetingStore._write_meta` 在 Windows 上会撞文件占用（PermissionError），
+# 而 `_process` 只在 transcript 阶段有 try——后续区块抛错时，
+# `status='completed'` 那行**永远执行不到**，记录永久停在 processing。
+
+
+def test_write_meta_survives_concurrent_readers(tmp_path) -> None:
+    """并发读 metadata 时 `_write_meta` 必须不抛错。
+
+    Windows 与 POSIX 的关键差异：文件被打开读时**不允许替换**。
+    `_write_meta` 先用 `write_text` 写临时文件、再 `Path.replace` 覆盖正式文件；
+    只要恰好有另一个线程正在 `read_text` 那个正式文件，
+    `replace` 就会抛 `PermissionError: [Errno 13]`——
+    在 Windows 上这是**必现的竞态**，不是偶发。
+
+    本用例并发跑「读」与「写」，只要出现一次 PermissionError 即失败。
+    确定性：循环足够多次，线程交替必然撞上。
+    """
+    store = MeetingStore(tmp_path / "meetings")
+    meta = store.create(title="周会", owner=None)
+    mid = meta["id"]
+
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                store.get(mid)
+            except KeyError:
+                pass  # 写入瞬间文件不存在属可接受，不算错误
+            except BaseException as exc:  # noqa: BLE001 - 要抓的就是 PermissionError
+                errors.append(exc)
+                return
+
+    threads = [threading.Thread(target=reader, daemon=True) for _ in range(4)]
+    for t in threads:
+        t.start()
+    try:
+        for i in range(300):
+            try:
+                store.update(mid, keywords=[f"k{i}"])
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+                break
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(timeout=2)
+
+    assert not errors, (
+        f"并发读写下 _write_meta 抛错 {len(errors)} 次，首个：{errors[0]!r}。"
+        "Windows 上「文件被读时不可替换」是硬约束，写入必须带重试或改用加锁的单文件写。"
+    )
+
+
+def test_process_marks_failed_instead_of_stuck_processing(tmp_path, monkeypatch) -> None:
+    """后台管线抛异常时，记录必须落到 `failed`，**不能永久停在 processing**。
+
+    原实现的问题：`_process` 只在 transcript 区块有 try，
+    之后的 `_run_summary_block` / `_run_keywords_block` / `_run_mindmap_block`
+    任一抛出（例如 `_write_meta` 撞上 Windows 文件占用），异常会穿过 `_process`，
+    被 `ThreadPoolExecutor` 吞进 Future——
+    于是 `status='completed'` 那行永远执行不到，记录**永久卡在 processing**，
+    用户看到「正在处理」永不结束，只能重开。
+
+    本用例用 monkeypatch 强制某区块抛错，断言记录最终为 `failed` 且带可读原因。
+    """
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "纪要"}, keywords=["听记"]))
+    try:
+        meta = service.store.create(title="周会", owner=None)
+        service.store.audio_path(meta["id"]).write_bytes(b"RIFFfake-wav")
+
+        # 让关键词区块炸掉（模拟 `_write_meta` 撞文件占用这类真实异常）
+        def boom(*_args, **_kwargs):
+            raise PermissionError("[Errno 13] Permission denied: 模拟文件被占用")
+
+        monkeypatch.setattr(service, "_run_keywords_block", boom)
+
+        service._process(meta["id"])
+
+        record = service.store.get(meta["id"])
+        assert record["status"] == "failed", (
+            f"区块抛错后 status={record['status']!r}，应为 'failed'——"
+            "停在 processing 会让用户看到永不结束的「正在处理」"
+        )
+        assert record.get("error"), "失败时必须带上可读原因，否则用户无从判断"
+    finally:
+        service.shutdown()
+
 
 
 # ─── 声纹（轻口径：标注过的发言人下次自动认）───

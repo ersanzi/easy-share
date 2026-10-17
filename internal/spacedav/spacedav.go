@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,14 @@ type Client interface {
 	Delete(ctx context.Context, token, space, path string) error
 }
 
+// changeClient 是可选能力：支持增量列举的客户端。
+//
+// 生产 *drive.Client 已实现；fake/旧实现没有时自动退回全量 Objects——
+// 这是刻意的向后兼容：单测不需要为了编译补一堆空方法。
+type changeClient interface {
+	Changes(ctx context.Context, token, space string, sinceVersion *int64) (*drive.Changes, error)
+}
+
 // listTTL 是对象清单的缓存时长。
 //
 // 资源管理器打开一个目录会连发多次 PROPFIND/Stat，逐次回控制面既慢又吵。缓存很短，
@@ -58,10 +67,24 @@ type FS struct {
 	readOnly bool
 	// label 是根目录显示名。
 	label string
+	// spoolDir 是上传暂存目录。WebDAV 的 PUT 是「流式写入、写完才 Close」，
+	// 而配额判定需要**确切字节数**（签发时就要），所以内容必须先落到某处。
+	// 落内存会让「拖一个 5 GB 文件」变成 5 GB 分配——桌面端与用户其他程序共享内存，
+	// 这不只是慢，是会 OOM 崩掉且给不出可读错误。故落这里。
+	// 空表示用系统临时目录（测试与未显式配置时的兜底）。
+	spoolDir string
 
 	mu       sync.Mutex
 	cache    []drive.Object
 	cachedAt time.Time
+	// lastVersion 是上次全量/增量列举拿到的 spaceVersion。
+	//
+	// 有了它，同一挂载进程内的第二次列举不需要重列整空间：
+	// 只拉 lastVersion 之后的变更，并把它们应用到 cache。
+	// 任何写操作仍会 invalidate（写侧需要最新版本做 CAS）。
+	lastVersion int64
+	// versions 是跨进程持久化的版本存储；nil 时退回进程内。
+	versions VersionStore
 	// pendingDirs 保存本次会话里新建的空目录。
 	//
 	// 对象存储没有真目录，控制面的接口又拒绝以 / 结尾的键，所以空目录无处存放。
@@ -77,6 +100,45 @@ type Options struct {
 	Token    TokenFunc
 	ReadOnly bool
 	Label    string
+	// SpoolDir 上传暂存目录；空则用系统临时目录。
+	// 生产装配应指向数据根（与 config.json 同级），避免占用系统盘
+	// ——拖进来的可能是几十 GB，系统盘通常最小。
+	SpoolDir string
+	// Versions 持久化上次增量版本；nil 表示只做进程内缓存。
+	//
+	// 生产传 NewVersionStore(dir)。有了它，桌面端重启后不会退回全量——
+	// 只需带 last_version 再拉差异。旧控制面/单测不传也能工作。
+	Versions VersionStore
+}
+
+// VersionStore 持久化某个空间的 last_version。
+type VersionStore interface {
+	// Load 返回上次列举拿到的空间版本；0 表示无记录（应全量重建）。
+	Load(space string) int64
+	// Save 保存空间版本。
+	Save(space string, version int64) error
+}
+
+// memoryVersionStore 是进程内实现（测试/旧控制面回退用）。
+type memoryVersionStore struct {
+	versions map[string]int64
+}
+
+func (m *memoryVersionStore) Load(space string) int64 {
+	return m.versions[space]
+}
+
+func (m *memoryVersionStore) Save(space string, version int64) error {
+	if m.versions == nil {
+		m.versions = map[string]int64{}
+	}
+	m.versions[space] = version
+	return nil
+}
+
+// NewMemoryVersionStore 创建进程内版本存储。
+func NewMemoryVersionStore() VersionStore {
+	return &memoryVersionStore{versions: map[string]int64{}}
 }
 
 // New 创建某个空间的 WebDAV 文件系统。
@@ -85,12 +147,18 @@ func New(opts Options) *FS {
 	if label == "" {
 		label = "EasyShare"
 	}
+	if opts.Versions == nil {
+		opts.Versions = NewMemoryVersionStore()
+	}
 	return &FS{
 		client:      opts.Client,
 		space:       opts.Space,
 		token:       opts.Token,
 		readOnly:    opts.ReadOnly,
 		label:       label,
+		spoolDir:    opts.SpoolDir,
+		versions:    opts.Versions,
+		lastVersion: opts.Versions.Load(opts.Space),
 		pendingDirs: map[string]time.Time{},
 	}
 }
@@ -125,6 +193,63 @@ func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
 	}
 	f.mu.Unlock()
 
+	// 优先走增量：同进程内第二次及以后的列举只拉差异，不再重列整空间。
+	//
+	// 这正是路线图切片 2 的生产落点——挂载盘是目录列表的最高频调用方
+	// （资源管理器一次浏览会连发多次 PROPFIND/Stat），它吃到增量，
+	// 增量列举才不只是“接口可用”，而是“生产在用”。
+	// 旧控制面 / 单测假客户端没有 Changes 能力时自动退回全量 Objects。
+	if cc, ok := f.client.(changeClient); ok {
+		f.mu.Lock()
+		base := f.cache
+		since := f.lastVersion
+		f.mu.Unlock()
+
+		var sincePtr *int64
+		// 只要磁盘上有版本就可以尝试增量，即使 base 为空——
+		// 变更流本身足够重建当前视图（created 会补出缺失项）。
+		// base == nil 只说明进程刚重启、内存缓存丢了，不代表服务端没有差异。
+		if since > 0 {
+			sincePtr = &since
+		}
+		result, err := cc.Changes(ctx, token, f.space, sincePtr)
+		if err != nil {
+			// 增量失败不等于全量失败：可能只是旧控制面尚未提供 /changes。
+			// 退回全量，行为与引入增量前一致；错误不掩盖网络层本身的故障。
+			list, listErr := f.client.Objects(ctx, token, f.space)
+			if listErr != nil {
+				return nil, listErr
+			}
+			f.mu.Lock()
+			f.cache, f.cachedAt = list, time.Now()
+			f.mu.Unlock()
+			return list, nil
+		}
+		if sincePtr == nil {
+			f.mu.Lock()
+			f.cache, f.cachedAt = result.Files, time.Now()
+			f.lastVersion = result.NewestSpaceVersion.Int64()
+			f.mu.Unlock()
+			_ = f.versions.Save(f.space, f.lastVersion)
+			return result.Files, nil
+		}
+
+		// 把差异应用到上次缓存。这里必须**复制后修改**，
+		// 不能直接改 base：其他 goroutine 可能正持有旧 slice 在读。
+		merged := make([]drive.Object, len(base))
+		copy(merged, base)
+		_ = merged // base 可能为空（进程重启）；applyChange 会从 created 事件补出对象
+		for _, change := range result.Changes {
+			merged = applyChange(merged, change)
+		}
+		f.mu.Lock()
+		f.cache, f.cachedAt = merged, time.Now()
+		f.lastVersion = result.NewestSpaceVersion.Int64()
+		f.mu.Unlock()
+		_ = f.versions.Save(f.space, f.lastVersion)
+		return merged, nil
+	}
+
 	list, err := f.client.Objects(ctx, token, f.space)
 	if err != nil {
 		return nil, err
@@ -133,6 +258,78 @@ func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
 	f.cache, f.cachedAt = list, time.Now()
 	f.mu.Unlock()
 	return list, nil
+}
+
+// applyChange 把一条生命周期事件应用到对象清单。
+//
+// 语义与客户端本地视图一致：created/updated/restored 保证路径存在；
+// deleted/moved/purged 从旧路径移除。事件流按版本升序到达，
+// 因此重复应用同一条流会得到相同结果。
+func applyChange(objects []drive.Object, change drive.Change) []drive.Object {
+	switch change.Event {
+	case drive.ChangeCreated, drive.ChangeUpdated, drive.ChangeRestored:
+		// 事件流只带身份不带大小/时间；这里不能用零值对象充当完整视图——
+		// 否则 Stat 会返回 0 字节（真实缺陷：用户看到文件“变小”）。
+		// 正确做法：先保留既有对象的元数据；没有元数据时**从全量视图查询**。
+		for i := range objects {
+			if objects[i].Path == change.Path {
+				return objects
+			}
+		}
+		return append(objects, drive.Object{
+			Path:         change.Path,
+			Size:         change.Size,
+			LastModified: change.LastModified(),
+			FileId:       change.FileId,
+		})
+	case drive.ChangeDeleted, drive.ChangePurged:
+		next := objects[:0]
+		for _, obj := range objects {
+			if obj.Path != change.Path {
+				next = append(next, obj)
+			}
+		}
+		return next
+	case drive.ChangeMoved:
+		next := make([]drive.Object, 0, len(objects))
+		for _, obj := range objects {
+			if obj.Path == change.OldPath {
+				continue
+			}
+			if obj.Path == change.Path {
+				continue
+			}
+			next = append(next, obj)
+		}
+		// moved 只改路径，size/lastModified 保留
+		for _, obj := range objects {
+			if obj.Path == change.OldPath {
+				moved := obj
+				moved.Path = change.Path
+				moved.FileId = change.FileId
+				next = append(next, moved)
+				break
+			}
+		}
+		return next
+	default:
+		return objects
+	}
+}
+
+// versionOf 返回上传前看到的版本号。
+//
+// 读缓存而不是再打一次控制面：OpenFile 发生在 PUT 流开始时，
+// 那一刻的清单就是“上传方看到的世界”（CAS 语义）。写成功后 invalidate 会让它失效。
+func (f *FS) versionOf(key string) (int64, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, obj := range f.cache {
+		if obj.Path == key {
+			return obj.VersionId.Int64(), true
+		}
+	}
+	return 0, false
 }
 
 // invalidate 作废清单缓存。任何写操作后调用。
@@ -196,7 +393,15 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, _ os.FileMode)
 		if _, err := f.tokenOrErr(); err != nil {
 			return nil, err
 		}
-		return newWriteFile(f, key), nil
+		// 写前刷新一次对象清单：这是 CAS 的“我看到的世界”。
+		//
+		// 不能依赖缓存“碰巧有”：资源管理器可能直接 PUT 而没有先 PROPFIND，
+		// 缓存为空时会把已有文件当成“不存在”（expectedVersion=0），
+		// 于是每次保存都落冲突副本。这里主动列一次，保证版本快照来自打开写句柄这一刻。
+		if _, err := f.objects(ctx); err != nil {
+			return nil, err
+		}
+		return newWriteFile(f, key)
 	}
 
 	if key == "" {
@@ -219,7 +424,7 @@ func (f *FS) OpenFile(ctx context.Context, name string, flag int, _ os.FileMode)
 	if err != nil {
 		return nil, translateNotFound(err)
 	}
-	return newReadFile(key, body, size), nil
+	return newReadFile(f, key, body, size), nil
 }
 
 // RemoveAll 删除文件，或递归删除某前缀下的全部对象。
@@ -271,9 +476,26 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 	return nil
 }
 
-// Rename 通过「下载 + 上传 + 删除」实现——控制面没有 rename 接口。
+// mover 是可选能力：控制面支持服务端改名/移动的客户端。
 //
-// 刻意不做目录改名：那会放大成 N 组下载上传删除，中途失败会留下半改状态。
+// *drive.Client 满足（Move 是导出方法）。有它时 Rename 走服务端复制——字节不出对象存储。
+// 没有它时退回「下载 + 上传 + 删除」（旧行为），保持假客户端与旧控制面可用。
+type mover interface {
+	Move(ctx context.Context, token, space, from, to string) error
+}
+
+// Rename 改名/移动。
+//
+// **优先走服务端 move**（{@link mover}）：控制面做 CopyObject + 删源，
+// 字节不出对象存储，且 **fileId 不变**——分享链接、任务引用、知识索引都绑 fileId，
+// 换了它就等于换了一个文件。
+//
+// 旧实现是客户端「下载 + 上传 + 删除」：一个 2 GB 文件改名要先拉回本地再传上去，
+// 等几分钟、流量翻倍，而且**中途失败会留下两份**；更糟的是上传到新键会登记出
+// **新的 fileId**，旧 fileId 的所有引用全部失效。仅在客户端不支持服务端 move
+// （假实现/旧控制面）时才退回这条路。
+//
+// 刻意不做目录改名：那会放大成 N 组复制删除，中途失败会留下半改状态。
 // 资源管理器会得到 EPERM，提示无法重命名，好过悄悄搞坏一半。
 func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 	if f.readOnly {
@@ -293,6 +515,30 @@ func (f *FS) Rename(ctx context.Context, oldName, newName string) error {
 	}
 	if isDir {
 		return fmt.Errorf("暂不支持重命名目录：%w", os.ErrPermission)
+	}
+
+	// 服务端 move：一次往返，字节不动，fileId 不变
+	if m, ok := f.client.(mover); ok {
+		err := m.Move(ctx, token, f.space, oldKey, newKey)
+		if isTargetOccupied(err) {
+			// 切片 3 的固定规则：目标已存在 → 冲突副本，不覆盖。
+			// 重新列举以避开所有现有路径；旧缓存可能不含刚被别人创建的文件。
+			list, listErr := f.objects(ctx)
+			if listErr != nil {
+				return fmt.Errorf("移动冲突前刷新列表失败：%w", listErr)
+			}
+			conflictKey := uniqueConflictKey(list, newKey)
+			if err := m.Move(ctx, token, f.space, oldKey, conflictKey); err != nil {
+				return err
+			}
+			f.invalidate()
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		f.invalidate()
+		return nil
 	}
 
 	body, size, err := f.client.Open(ctx, token, f.space, oldKey)
@@ -468,4 +714,33 @@ func translateNotFound(err error) error {
 		return os.ErrNotExist
 	}
 	return err
+}
+
+// isTargetOccupied 判断 move 是否因目标已存在被拒。
+func isTargetOccupied(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "目标位置已有同名文件")
+}
+
+// uniqueConflictKey 生成不与现有对象冲突的副本路径。
+func uniqueConflictKey(objects []drive.Object, key string) string {
+	ext := path.Ext(key)
+	base := strings.TrimSuffix(key, ext)
+	if !objectExists(objects, base+" (冲突副本)"+ext) {
+		return base + " (冲突副本)" + ext
+	}
+	for i := 2; ; i++ {
+		candidate := base + " (冲突副本" + strconv.Itoa(i) + ")" + ext
+		if !objectExists(objects, candidate) {
+			return candidate
+		}
+	}
+}
+
+func objectExists(objects []drive.Object, key string) bool {
+	for _, obj := range objects {
+		if obj.Path == key {
+			return true
+		}
+	}
+	return false
 }

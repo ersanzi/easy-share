@@ -215,6 +215,29 @@ public class DriveStorage {
     }
 
     /**
+     * 服务端复制对象（改名的第一步）：字节不出对象存储，不经过控制面，也不占客户端带宽。
+     *
+     * <p>S3 的 CopyObject 是**服务端操作**，这对「资源管理器里改个名」很关键——
+     * 旧实现走「下载 + 上传 + 删除」，一个 2 GB 文件改名要先下载再上传，
+     * 客户端等几分钟、流量翻倍，且中途失败留下两份。
+     *
+     * <p>单次 CopyObject 上限 5 GB（S3 规范）。超过需分片复制，当前不实现；
+     * 调用方按返回值判断是否成功，不做静默降级。
+     *
+     * @param prefix   空间前缀
+     * @param from     源相对路径
+     * @param to       目标相对路径
+     */
+    public void copyAt(String prefix, String from, String to) {
+        ensureReady();
+        String sourceKey = DriveKeys.keyAt(prefix, from);
+        String targetKey = DriveKeys.keyAt(prefix, to);
+        join(client.copyObject(b -> b
+            .sourceBucket(properties.getBucket()).sourceKey(sourceKey)
+            .destinationBucket(properties.getBucket()).destinationKey(targetKey)));
+    }
+
+    /**
      * 汇总某前缀下所有对象的字节数。配额校验的用量来源——真值只在这里，不在库里。
      *
      * @param prefix 空间前缀

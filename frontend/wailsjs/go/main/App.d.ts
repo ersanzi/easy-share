@@ -5,6 +5,7 @@ import {knowledge} from '../models';
 import {main} from '../models';
 import {http} from '../models';
 import {cloud} from '../models';
+import {drive} from '../models';
 import {desktop} from '../models';
 import {fsutil} from '../models';
 import {plugin} from '../models';
@@ -65,6 +66,12 @@ export function CloudDownload(arg1:string):Promise<void>;
 export function CloudList():Promise<Array<cloud.File>>;
 
 export function CloudPreview(arg1:string):Promise<cloud.Preview>;
+
+export function CloudRecycleList():Promise<Array<drive.RecycleEntryView>>;
+
+export function CloudRecyclePurge(arg1:string):Promise<void>;
+
+export function CloudRecycleRestore(arg1:string):Promise<void>;
 
 export function CloudShare(arg1:string,arg2:number):Promise<string>;
 
@@ -208,7 +215,7 @@ export function ServiceEndpoints():Promise<main.ServiceEndpoints>;
 
 export function SetDropSpace(arg1:string):Promise<void>;
 
-export function SetFileVisibility(arg1:string,arg2:string,arg3:Array<number>):Promise<void>;
+export function SetFileVisibility(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
 
 export function ShutdownAll():Promise<void>;
 

@@ -1,4 +1,4 @@
-﻿import {
+import {
   AcceptTransfer,
   AcceptTransferAs,
   AdminCreateUser,
@@ -26,6 +26,9 @@
   CloudDownload,
   CloudList,
   CloudPreview,
+  CloudRecycleList,
+  CloudRecyclePurge,
+  CloudRecycleRestore,
   CloudShare,
   CloudUpload,
   CloudUploadFolder,
@@ -121,6 +124,7 @@ import type {
   McpConnection,
   MeetingRecord,
   PluginInfo,
+  RecycleEntry,
   PluginInvokeResult,
   PluginPreview,
   Space,
@@ -165,6 +169,10 @@ export const core = {
   cloudDownload: CloudDownload,
   cloudDelete: CloudDelete,
   cloudShare: CloudShare,
+  // 回收站（P1）：列表/还原/彻底删除；还原冲突时控制面返回可读错误
+  cloudRecycleList: () => CloudRecycleList() as Promise<RecycleEntry[]>,
+  cloudRecycleRestore: CloudRecycleRestore,
+  cloudRecyclePurge: CloudRecyclePurge,
   knowledgeStatus: () => KnowledgeStatus() as Promise<KnowledgeStatusData>,
   knowledgeLogin: (serverUrl: string, username: string, password: string) =>
     KnowledgeLogin(serverUrl, username, password) as Promise<KnowledgeStatusData>,

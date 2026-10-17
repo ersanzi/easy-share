@@ -75,7 +75,10 @@ func TestLiveDriveRoundTripAndIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("上传到活栈失败：%v", err)
 	}
-	t.Cleanup(func() { _ = client.Delete(ctx, tokenA, drive.SpacePersonal, relPath) })
+	// 统一用 cleanupPath：它先软删、再把回收站里的行**彻底删除**。
+	// 只调 Delete 是不够的——软删只改 state，行仍留在库里，
+	// 于是每跑一次（含 skip）就多一条回收站残留（KI-25 实测踩到）。
+	cleanupPath(t, client, ctx, tokenA, relPath)
 	if lastSent != int64(len(content)) || lastTotal != int64(len(content)) {
 		t.Errorf("进度末值错误：sent=%d total=%d want=%d", lastSent, lastTotal, len(content))
 	}

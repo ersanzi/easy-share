@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS es_upload_session
     part_size     BIGINT       NOT NULL,
     declared_size BIGINT       NOT NULL DEFAULT 0,
     status        CHAR(1)      NOT NULL DEFAULT '0',
+    -- CAS：create 时寄存「调用方看到的版本」，complete 时校验。
+    -- 可空 = 旧调用方不做校验（向后兼容）。
+    expected_version BIGINT,
     tenant_id     VARCHAR(20)  DEFAULT '000000',
     create_dept   BIGINT,
     create_by     BIGINT,
@@ -38,6 +41,13 @@ COMMENT ON COLUMN es_upload_session.upload_id IS 'S3 MultipartUpload 的 uploadI
 COMMENT ON COLUMN es_upload_session.part_size IS '分片大小（服务端定，客户端不选）';
 COMMENT ON COLUMN es_upload_session.declared_size IS '申报总字节数（create 时配额判定依据）';
 COMMENT ON COLUMN es_upload_session.status IS '状态：0 进行中、1 已完成、2 已放弃';
+-- 存量库加列（幂等：整脚本可重复执行）
+ALTER TABLE es_upload_session ADD COLUMN IF NOT EXISTS expected_version BIGINT;
+-- 内容哈希（切片 6）：complete 时若命中秒传，把哈希落到 es_file 行上
+ALTER TABLE es_upload_session ADD COLUMN IF NOT EXISTS content_md5 VARCHAR(32);
+
+COMMENT ON COLUMN es_upload_session.expected_version IS 'CAS：调用方看到的版本；null=不校验（旧调用方）';
+COMMENT ON COLUMN es_upload_session.content_md5 IS '客户端整文件读算的内容 MD5（切片 6 秒传判定）';
 
 -- 按路径清理遗留会话与按会话查详情
 CREATE INDEX IF NOT EXISTS idx_es_upload_session_path

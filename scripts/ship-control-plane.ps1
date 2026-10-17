@@ -64,7 +64,7 @@ foreach ($f in @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry
 # 新服务器建表，存量服务器随 ship 自动补新表（es_file/上传会话/部门授权等），无需手工灌增量
 $easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-visibility.sql",
     "easyshare-space-member-type.sql", "easyshare-upload-session.sql",
-    "easyshare-app-release.sql", "easyshare-plugin.sql")
+    "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql")
 foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }

@@ -809,6 +809,22 @@ const closePoster = () => {
   if (!posterBusy.value) posterOpen.value = false
 }
 
+// 海报弹窗可访问性：ESC 关闭 + 打开时聚焦弹窗内首个按钮
+const posterModalRef = ref<HTMLElement | null>(null)
+const onPosterKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') closePoster()
+}
+watch(posterOpen, async (open) => {
+  if (open) {
+    window.addEventListener('keydown', onPosterKeydown)
+    await nextTick()
+    posterModalRef.value?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
+  } else {
+    window.removeEventListener('keydown', onPosterKeydown)
+  }
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onPosterKeydown))
+
 // 截图统一走离屏全尺寸实例（弹窗里的预览实例经 zoom 缩放，不能直接当截图根）
 const capturePosterBlob = async (): Promise<Blob> => {
   const { default: html2canvas } = await import('html2canvas')
@@ -999,6 +1015,7 @@ onBeforeUnmount(() => {
               type="button"
               :class="['meeting-template-chip', { on: templateId === t.id }]"
               :title="t.desc"
+              :aria-pressed="templateId === t.id"
               :disabled="uploading"
               @click="templateId = t.id"
             >
@@ -1011,6 +1028,7 @@ onBeforeUnmount(() => {
               <button
                 :class="['meeting-source-chip', { on: audioSource === 'mic' }]"
                 type="button"
+                :aria-pressed="audioSource === 'mic'"
                 :disabled="uploading"
                 @click="audioSource = 'mic'"
               >麦克风</button>
@@ -1018,6 +1036,7 @@ onBeforeUnmount(() => {
                 v-if="!isMac"
                 :class="['meeting-source-chip', { on: audioSource === 'system' }]"
                 type="button"
+                :aria-pressed="audioSource === 'system'"
                 :disabled="uploading"
                 @click="audioSource = 'system'"
               >系统声音+麦克风</button>
@@ -1365,7 +1384,10 @@ onBeforeUnmount(() => {
               :key="index"
               :class="['meeting-segment', { on: index === activeSegmentIndex }]"
               :title="'点击跳转播放'"
+              role="button"
+              tabindex="0"
               @click="seekTo(segment.start)"
+              @keydown.enter="seekTo(segment.start)"
             >
               <template v-if="renamingSpeaker === segment.speaker">
                 <div class="meeting-segment-edit" @click.stop>
@@ -1426,7 +1448,7 @@ onBeforeUnmount(() => {
 
       <!-- 图文海报弹窗：主题选择 + zoom 缩放预览 + 导出动作 -->
       <div v-if="posterOpen && selected" class="meeting-poster-overlay" @click.self="closePoster">
-        <div class="meeting-poster-modal">
+        <div ref="posterModalRef" class="meeting-poster-modal" role="dialog" aria-modal="true" aria-label="图文海报">
           <div class="meeting-poster-modal-head">
             <h3>图文海报</h3>
             <button class="text-button" type="button" :disabled="posterBusy" @click="closePoster">关闭</button>
@@ -1464,11 +1486,11 @@ onBeforeUnmount(() => {
       <div class="card meeting-list-card">
         <div class="card-header">
           <h2>听记记录</h2>
-          <input v-model="meetingQuery" class="setting-input meeting-search" type="text" placeholder="搜索标题或摘要…" />
+          <input v-model="meetingQuery" class="setting-input meeting-search" type="text" placeholder="搜索标题或摘要…" aria-label="搜索听记记录" />
         </div>
         <p v-if="!meetings.length" class="meeting-hint">还没有记录，点上方「开始录音」创建第一条听记。</p>
         <p v-else-if="!filteredMeetings.length" class="meeting-hint">没有匹配「{{ meetingQuery }}」的记录。</p>
-        <div v-for="meeting in filteredMeetings" :key="meeting.id" class="meeting-item" @click="openDetail(meeting.id)">
+        <div v-for="meeting in filteredMeetings" :key="meeting.id" class="meeting-item" role="button" tabindex="0" @click="openDetail(meeting.id)" @keydown.enter="openDetail(meeting.id)">
           <span class="meeting-thumb" :style="{ background: thumbColor(meeting.title) }" aria-hidden="true">{{ meeting.title.slice(0, 1) }}</span>
           <div class="meeting-item-main">
             <strong>{{ meeting.title }}</strong>

@@ -7,12 +7,14 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.core.domain.R;
 import org.dromara.common.satoken.utils.LoginHelper;
 import org.dromara.easyshare.drive.domain.EsFile;
 import org.dromara.easyshare.drive.domain.EsUploadSession;
 import org.dromara.easyshare.drive.domain.EsSpace;
 import org.dromara.easyshare.drive.service.DriveFileService;
+import org.dromara.easyshare.drive.service.DriveMoveService;
 import org.dromara.easyshare.drive.service.DriveUploadService;
 import org.dromara.easyshare.drive.service.SpaceService;
 import org.dromara.easyshare.drive.service.SpaceUsageService;
@@ -43,14 +45,26 @@ import java.util.List;
 @SaCheckLogin
 @RestController
 @RequiredArgsConstructor
+@Slf4j
 @RequestMapping("/easyshare/drive")
 public class DriveController {
+
+    /**
+     * 变更日志保留条数（切片 2 的裁剪策略）。
+     *
+     * <p>日志是给客户端做增量的缓存而非真相源：客户端离线太久、日志覆盖不了
+     * 它的差距时走全量重建（不带 sinceVersion 再调一次）。因此只需保留
+     * 「最近足够多条」——超过即裁。10000 条按每空间每天几百次变更估算约一个月。
+     */
+    private static final int changeLogTrimKeep = 10_000;
 
     private final DriveStorage storage;
     private final SpaceService spaceService;
     private final SpaceUsageService usageService;
     private final DriveFileService fileService;
     private final DriveUploadService uploadService;
+    private final DriveMoveService moveService;
+    private final org.dromara.easyshare.drive.service.DriveChangeLogService changeLogService;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -65,19 +79,76 @@ public class DriveController {
         Long userId = LoginHelper.getUserId();
         String prefix = readablePrefix(space);
         Long ownerId = ownerIdOf(space, userId);
-        List<DriveObject> objects = storage.listAt(prefix);
-        var fileIds = fileService.reconcileAndMap(space, ownerId, userId, objects);
+        // 查库 → 藏掉软删 → 回填 fileId（KI-10）。三步的配套关系是正确性的一部分，
+        // 故收在 DriveFileService.list 里一次做完，控制器不再自己串。
+        DriveFileService.Listing listing = fileService.list(
+            space, ownerId, userId, storage.listAt(prefix));
+        List<DriveObject> objects = listing.objects();
         // 文档级可见性（片 2 数据面）：共享列表按用户部门过滤（上传者本人恒可见）；
         // 过滤在唯一列举出口做，网盘页/挂载盘/快搜文件路全部自动生效
         if (EsSpace.TYPE_SHARED.equals(space)) {
             objects = fileService.filterSharedVisible(objects,
-                fileService.rowsByPath(space, ownerId), spaceService.deptIdOf(userId), userId);
+                listing.activeByPath(), spaceService.deptIdOf(userId), userId);
         }
         return R.ok(objects.stream()
             .map(object -> new FileVo(
                 object.path(), object.size(), object.lastModified(),
-                fileIds.get(object.path())))
+                listing.fileIds().get(object.path()),
+                listing.versions().get(object.path())))
             .toList());
+    }
+
+    /**
+     * 增量列举（路线图切片 2）：拉取 sinceVersion 之后的文件变更。
+     *
+     * <p>不带 {@code sinceVersion} 表示**全量重建**：返回当前完整列表 +
+     * {@code newestSpaceVersion}，客户端从此版本继续增量。
+     * 带 {@code sinceVersion} 则只返回变更日志（不再附带全量对象）。
+     *
+     * <p>变更日志是差异流而非真相源；日志被裁剪或客户端离线太久时，
+     * 客户端应退全量重建（即不带 sinceVersion 再调一次）。
+     */
+    @GetMapping("/changes")
+    public R<ChangesVo> changes(
+        @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space,
+        @RequestParam(required = false) Long sinceVersion) {
+        Long userId = LoginHelper.getUserId();
+        String prefix = readablePrefix(space);
+        Long ownerId = ownerIdOf(space, userId);
+        long newest = changeLogService.currentVersion(space, ownerId);
+        if (sinceVersion == null) {
+            DriveFileService.Listing listing = fileService.list(
+                space, ownerId, userId, storage.listAt(prefix));
+            List<DriveObject> objects = listing.objects();
+            if (EsSpace.TYPE_SHARED.equals(space)) {
+                objects = fileService.filterSharedVisible(objects,
+                    listing.activeByPath(), spaceService.deptIdOf(userId), userId);
+            }
+            List<FileVo> full = objects.stream()
+                .map(object -> new FileVo(
+                    object.path(), object.size(), object.lastModified(),
+                    listing.fileIds().get(object.path()),
+                    listing.versions().get(object.path())))
+                .toList();
+            // 全量重建意味着客户端即将拿到完整列表：老日志从此无人需要，顺手裁剪
+            // （切片 2 的日志回收；失败不影响列举）
+            changeLogService.trim(changeLogTrimKeep);
+            return R.ok(new ChangesVo(newest, null, full, null));
+        }
+        List<ChangeVo> changes = changeLogService.changesAfter(space, ownerId, sinceVersion)
+            .stream()
+            .map(log -> {
+                // 变更日志只记身份；给客户端补上 size/lastModified，
+                // 否则挂载盘增量合并时只能得到 0 字节的占位对象。
+                var file = fileService.selectActiveById(space, ownerId, log.getFileId());
+                return new ChangeVo(
+                    log.getSpaceVersion(), log.getEventType(), log.getFileId(),
+                    log.getFilePath(), log.getOldPath(),
+                    file == null ? 0L : file.getFileSize(),
+                    file == null ? null : file.getCreateTime());
+            })
+            .toList();
+        return R.ok(new ChangesVo(newest, sinceVersion, null, changes));
     }
 
     /**
@@ -88,39 +159,64 @@ public class DriveController {
      * 有效。真实用量以 RustFS 为准，超额只能在下一次签发时被拦住。
      * <p>
      * 签发同时在 es_file 目录层登记（幂等 upsert），文件自此有稳定 fileId。
+     * <p>
+     * **秒传（切片 6）**：body 带 {@code contentMd5} 且同空间已有同哈希 active 行时，
+     * 服务端直接 {@code CopyObject} 复制既有对象到目标键，响应置 {@code deduped=true}，
+     * 客户端跳过 PUT。未带哈希的旧调用方行为完全不变。
      *
-     * @param body 相对路径、空间、申报大小
-     * @return 预签名 URL
+     * @param body 相对路径、空间、申报大小（可选 contentMd5 / expectedVersion）
+     * @return 预签名 URL（秒传命中时 url 为 null、deduped=true）
      */
     @PostMapping("/presign-put")
     public R<PresignVo> presignPut(@Validated @RequestBody PutBo body) {
         Long userId = LoginHelper.getUserId();
         long size = body.size() == null ? 0L : body.size();
-        String prefix = EsSpace.TYPE_SHARED.equals(body.space())
+        String space = body.space();
+        Long ownerId = ownerIdOf(space, userId);
+        String prefix = EsSpace.TYPE_SHARED.equals(space)
             ? spaceService.checkSharedWritable(userId, size)
             : spaceService.checkPersonalWritable(userId, size);
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
-        fileService.registerOnPresign(body.space(), ownerIdOf(body.space(), userId), userId, body.path(), size);
+        // 秒传判定先于登记：命中时字节路径整段跳过，哈希随登记一并落行
+        if (body.contentMd5() != null && !body.contentMd5().isBlank()) {
+            EsFile source = fileService.findByContentHash(space, ownerId, body.contentMd5());
+            if (source != null && !source.getFilePath().equals(DriveKeys.normalizeRelative(body.path()))) {
+                fileService.registerOnPresign(space, ownerId, userId, body.path(), size,
+                    body.expectedVersion(), body.contentMd5());
+                storage.copyAt(prefix, source.getFilePath(), DriveKeys.normalizeRelative(body.path()));
+                usageService.invalidate(prefix);
+                return R.ok(new PresignVo(null, body.path(), true));
+            }
+        }
+        fileService.registerOnPresign(space, ownerId, userId, body.path(), size,
+            body.expectedVersion(), body.contentMd5());
         // 上传声明可见范围（可选，仅共享空间语义）：登记后立即写入目录层
         if (body.visibleDepts() != null && !body.visibleDepts().isEmpty()
-            && EsSpace.TYPE_SHARED.equals(body.space())) {
-            fileService.setRegisteredVisibleDepts(body.space(), ownerIdOf(body.space(), userId),
+            && EsSpace.TYPE_SHARED.equals(space)) {
+            fileService.setRegisteredVisibleDepts(space, ownerId,
                 userId, body.path(), body.visibleDepts());
         }
-        return R.ok(new PresignVo(storage.presignPutAt(prefix, body.path()), body.path()));
+        return R.ok(new PresignVo(storage.presignPutAt(prefix, body.path()), body.path(), false));
     }
 
     /**
      * 签发下载用预签名 URL。
+     * <p>
+     * 与列表共用同一份可见性口径：**软删的行不能被签、受限的行不能被签**。
+     * 只在列表里过滤而这里不查，等于「看不见但拿得到」——
+     * 知道路径的人仍能绕过文档级可见性把文件拿走。
      *
      * @param body 相对路径与空间
      * @return 预签名 URL
      */
     @PostMapping("/presign-get")
     public R<PresignVo> presignGet(@Validated @RequestBody PathBo body) {
+        Long userId = LoginHelper.getUserId();
         String prefix = readablePrefix(body.space());
-        return R.ok(new PresignVo(storage.presignGetAt(prefix, body.path()), body.path()));
+        fileService.assertDownloadable(body.space(), ownerIdOf(body.space(), userId), body.path(),
+            spaceService.deptIdOf(userId), userId);
+        return R.ok(new PresignVo(storage.presignGetAt(prefix, body.path()), body.path(), false));
     }
 
     /**
@@ -139,10 +235,117 @@ public class DriveController {
             : DriveKeys.userPrefix(userId);
         Long ownerId = ownerIdOf(body.space(), userId);
         String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(), body.path());
-        storage.deleteAt(prefix, path);
-        fileService.deleteRegistered(body.space(), ownerId, path);
+        // 软删（P1 回收站）：RustFS 对象保留，目录行置 recycled + 原路径快照。
+        // 还原时同键复位，无需搬对象；彻底删除走 /recycle/purge 才真删对象。
+        fileService.markRecycled(body.space(), ownerId, path);
         usageService.invalidate(prefix);
         return R.ok();
+    }
+
+    // ── 回收站（P1，wps-cloud-drive-benchmark.md §6-P1 第 1 项）──────────────
+    // 还原冲突策略：原路径已被同名 active 文件占用时返回可读错误，不自动覆盖。
+
+    /**
+     * 改名 / 移动（切片 4）。
+     * <p>
+     * **服务端复制 + 删除源**，字节不出对象存储：旧实现是客户端
+     * 「下载 + 上传 + 删除」，一个 2 GB 文件改名要先拉回本地再传上去，
+     * 等几分钟、流量翻倍、中途失败留两份。S3 的 CopyObject 把这一步变成服务端操作。
+     * <p>
+     * **fileId 不变**——这是「身份与路径解耦」的落点：改名后分享链接、任务引用、
+     * 知识索引仍指向同一个文件。旧实现走「上传新键 + 删旧键」，
+     * 等于换了一个文件（新 fileId），引用全断。
+     * <p>
+     * 顺序刻意是「先占目录行、再复制、最后删源」：目录行是唯一性闸门，
+     * 目标已存在时先拒绝，不会留下复制出来的垃圾；源最后删，失败也不丢数据。
+     *
+     * @param body 源路径、目标路径与空间
+     * @return 目标路径
+     */
+    @PostMapping("/move")
+    public R<MoveVo> move(@Validated @RequestBody MoveBo body) {
+        Long userId = LoginHelper.getUserId();
+        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
+        String prefix = shared
+            ? spaceService.checkSharedWritable(userId, 0L)
+            : DriveKeys.userPrefix(userId);
+        Long ownerId = ownerIdOf(body.space(), userId);
+        String from = DriveKeys.normalizeRelative(body.from());
+        String to = DriveKeys.normalizeRelative(body.to());
+        if (from.equals(to)) {
+            return R.ok(new MoveVo(to));
+        }
+        // 行改 → 复制 → 删源，失败时补偿（顺序理由与补偿细节见 DriveMoveService）
+        moveService.move(body.space(), ownerId, prefix, from, to);
+        usageService.invalidate(prefix);
+        return R.ok(new MoveVo(to));
+    }
+
+    /**
+     * 回收站列表：当前空间的 recycled 行（按删除时间倒序）。
+     *
+     * @param space personal / shared
+     */
+    @GetMapping("/recycle")
+    public R<List<RecycleVo>> recycle(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        Long userId = LoginHelper.getUserId();
+        Long ownerId = ownerIdOf(space, userId);
+        return R.ok(fileService.listRecycled(space, ownerId).stream()
+            .map(row -> new RecycleVo(row.getFileId(), row.getFilePath(), row.getOriginPath(),
+                row.getFileSize(), row.getVersionId(),
+                row.getDeletedAt() == null ? null : row.getDeletedAt().atZone(java.time.ZoneId.systemDefault()).toInstant()))
+            .toList());
+    }
+
+    /**
+     * 还原：按 origin_path 复位为 active。原位置有同名 active 文件时报冲突。
+     */
+    @PostMapping("/recycle/restore")
+    public R<Void> recycleRestore(@Validated @RequestBody RecycleBo body) {
+        Long userId = LoginHelper.getUserId();
+        fileService.restoreFromRecycle(body.space(), ownerIdOf(body.space(), userId), body.fileId());
+        usageService.invalidate(readablePrefix(body.space()));
+        return R.ok();
+    }
+
+    /**
+     * 彻底删除：目录行摘除 + RustFS 对象删除（不可还原）。
+     */
+    @PostMapping("/recycle/purge")
+    public R<Void> recyclePurge(@Validated @RequestBody RecycleBo body) {
+        Long userId = LoginHelper.getUserId();
+        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
+        String prefix = shared
+            ? spaceService.checkSharedWritable(userId, 0L)
+            : DriveKeys.userPrefix(userId);
+        Long ownerId = ownerIdOf(body.space(), userId);
+        DriveFileService.PurgeResult purged = fileService.purgeFromRecycle(body.space(), ownerId, body.fileId());
+        // KI-7：只有当该路径没有 active 行在用时才删对象。
+        // 对象键由路径派生（DriveKeys.keyAt），而用户可能「删完又重新上传了同名文件」——
+        // 那个键此刻属于新文件，删了就会丢掉用户当前在用的内容。
+        if (purged.deletable()) {
+            storage.deleteAt(prefix, purged.row().getFilePath());
+        } else {
+            log.info("purge 跳过删对象：路径 {} 已被同路径 active 文件占用（回收站旧行的对象早已被覆盖）",
+                purged.row().getFilePath());
+        }
+        usageService.invalidate(prefix);
+        return R.ok();
+    }
+
+    /**
+     * 回收站操作请求体：按稳定 fileId 定位（挂 fileId，不新增路径绑定）。
+     */
+    public record RecycleBo(
+        @NotNull(message = "文件ID不能为空") Long fileId,
+        String space) {
+    }
+
+    /**
+     * 回收站行视图：路径快照与删除时间（还原落点展示用）。
+     */
+    public record RecycleVo(Long fileId, String path, String originPath,
+                            Long size, Long versionId, Instant deletedAt) {
     }
 
     /**
@@ -168,7 +371,8 @@ public class DriveController {
         Long userId = LoginHelper.getUserId();
         long size = body.size() == null ? 0L : body.size();
         EsUploadSession session = uploadService.create(body.space(),
-            ownerIdOf(body.space(), userId), userId, body.path(), size);
+            ownerIdOf(body.space(), userId), userId, body.path(), size, body.expectedVersion(),
+            body.contentMd5());
         return R.ok(new SessionVo(session.getSessionId(), session.getUploadId(),
             session.getPartSize()));
     }
@@ -180,7 +384,7 @@ public class DriveController {
     public R<PresignVo> uploadPart(@Validated @RequestBody PartBo body) {
         Long userId = LoginHelper.getUserId();
         String url = uploadService.presignPart(userId, body.sessionId(), body.partNumber());
-        return R.ok(new PresignVo(url, null));
+        return R.ok(new PresignVo(url, null, false));
     }
 
     /**
@@ -243,6 +447,27 @@ public class DriveController {
         String space,
         Long fileId) {
     }
+    /**
+     * 改名 / 移动请求体。
+     *
+     * @param from  源相对路径
+     * @param to    目标相对路径
+     * @param space personal / shared，空则按个人空间
+     */
+    public record MoveBo(
+        @NotBlank(message = "源路径不能为空") String from,
+        @NotBlank(message = "目标路径不能为空") String to,
+        String space) {
+    }
+
+    /**
+     * 改名结果。
+     *
+     * @param path 移动后的相对路径
+     */
+    public record MoveVo(String path) {
+    }
+
 
     /**
      * 上传签发请求体。
@@ -255,16 +480,35 @@ public class DriveController {
         @NotBlank(message = "文件路径不能为空") String path,
         String space,
         Long size,
-        List<Long> visibleDepts) {
+        List<Long> visibleDepts,
+        /**
+         * 调用方看到的版本号（可选，路线图切片 1 的 CAS）。
+         *
+         * <p>传了就做**乐观并发校验**：与服务端当前版本不一致时拒绝签发，
+         * 让用户刷新后重试，而不是静默覆盖别人的修改。
+         *
+         * <p>不传 = 不做校验（旧调用方/新建场景），行为与本字段引入前一致——
+         * 这是刻意的向后兼容：升级客户端与服务端不必同时上线。
+         */
+        Long expectedVersion,
+        /**
+         * 内容 MD5（十六进制小写，切片 6 的秒传判定键）。
+         *
+         * <p>客户端**整文件读算**后随请求上报。服务端同空间已有同哈希 active 行时
+         * 直接服务端复制既有对象，客户端跳过字节上传（分片路径在 complete 判定）。
+         * 不传 = 不判秒传，行为与本字段引入前一致。
+         */
+        String contentMd5) {
     }
 
     /**
      * 预签名结果。
      *
-     * @param url  预签名 URL
-     * @param path 对应的相对路径
+     * @param url     预签名 URL；秒传命中时为 null（客户端跳过 PUT）
+     * @param path    对应的相对路径
+     * @param deduped 秒传命中标记（切片 6）：true = 服务端已复制既有对象，无需上传
      */
-    public record PresignVo(String url, String path) {
+    public record PresignVo(String url, String path, boolean deduped) {
     }
 
     /**
@@ -274,8 +518,35 @@ public class DriveController {
      * @param size         字节数
      * @param lastModified 最后修改时间
      * @param fileId       目录层稳定文件 ID（存量对象惰性补账后亦有）
+     * @param versionId    该文件的当前版本号；客户端下次写同一路径时应带回做 CAS
      */
-    public record FileVo(String path, long size, Instant lastModified, Long fileId) {
+    public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId) {
+    }
+
+    /**
+     * 增量列举结果。
+     *
+     * @param newestSpaceVersion 客户端下次增量拉取应带的版本号
+     * @param sinceVersion       本次请求带入的版本；null 表示这是全量重建
+     * @param files              仅全量重建时非空：当前完整文件列表
+     * @param changes            仅增量拉取时非空：sinceVersion 之后的变更
+     */
+    public record ChangesVo(long newestSpaceVersion, Long sinceVersion,
+                            List<FileVo> files, List<ChangeVo> changes) {
+    }
+
+    /**
+     * 单条文件变更。
+     *
+     * @param spaceVersion 该变更对应的空间版本
+     * @param event        created / updated / deleted / restored / moved / purged
+     * @param fileId       稳定文件 ID
+     * @param path         事件后的当前路径；purged 为 null
+     * @param oldPath      moved 的源路径；其他事件为 null
+     */
+    public record ChangeVo(long spaceVersion, String event, Long fileId,
+                           String path, String oldPath, long size,
+                           java.time.LocalDateTime lastModified) {
     }
 
     /**

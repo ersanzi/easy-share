@@ -63,8 +63,35 @@ export interface CloudFile {
   contentType: string
   lastModified: string
   previewKind: PreviewKind
-  /** 控制面目录层的稳定文件 ID（2026-09-06 起）；旧控制面为 0 */
+  /**
+   * 控制面目录层的稳定文件 ID（2026-09-06 起）；旧控制面为 0。
+   *
+   * ⚠️ 这是雪花 ID（19 位），JS number **无法无损表示**。
+   * 当前前端只透传展示、不用它做寻址，所以尚未出问题；
+   * 一旦要用它调后端（如按 fileId 删除/还原），必须先在 Go 侧转成字符串
+   * ——参见 RecycleEntry.fileId 与本文件 known-issues KI-21。
+   */
   fileId: number
+}
+
+// 回收站条目（P1：软删后的 es_file recycled 行；deletedAt 为 ISO 时间串）
+export interface RecycleEntry {
+  /**
+   * 雪花 ID（19 位），**必须是字符串**。
+   *
+   * JS 的 number 只能精确表示到 2^53-1，而雪花 ID 远超该范围：
+   * 实测 2110992378747158530 经 JSON number 一次往返即变成 …800（差 30），
+   * 再传回后端就查不到任何行。控制面自己对 Long 也是字符串化，
+   * 前后端在这件事上必须一致。
+   */
+  fileId: string
+  path: string
+  /** 删除前的路径快照（还原落点） */
+  originPath: string
+  size: number
+  /** 覆盖上传递增的版本号（0=首次登记） */
+  versionId: number
+  deletedAt?: string
 }
 
 export interface CloudPreview {

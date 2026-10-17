@@ -5,9 +5,11 @@
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { usePlugins } from '../composables/usePlugins'
+import { useConfirm } from '../composables/useConfirm'
 import type { MarketItem } from '../types/core'
 
 const pluginSys = usePlugins()
+const { confirm } = useConfirm()
 
 const tab = ref<'market' | 'installed'>('market')
 const market = ref<MarketItem[]>([])
@@ -65,9 +67,11 @@ const install = async (item: MarketItem) => {
       const action = preview.isUpdate
         ? `更新到 v${preview.version}`
         : `安装 v${preview.version}`
-      const ok = window.confirm(
-        `${action}「${preview.name}」需要以下权限：\n\n${permList}\n\n是否继续？`,
-      )
+      const ok = await confirm({
+        title: `${action}「${preview.name}」`,
+        message: `需要以下权限：\n\n${permList}\n\n是否继续？`,
+        confirmText: '继续',
+      })
       if (!ok) return
     }
     // 同意过的权限集合传给安装器：包内新增权限超出该集合会被 Go 侧拒绝（防静默扩权）
@@ -95,7 +99,7 @@ const togglePlugin = async (id: string, disabled: boolean) => {
   await pluginSys.setDisabled(id, disabled)
 }
 const removePlugin = async (id: string) => {
-  if (!window.confirm('确定卸载该插件？其私有数据将被清除。')) return
+  if (!await confirm({ title: '卸载插件', message: '确定卸载该插件？其私有数据将被清除。', confirmText: '卸载', danger: true })) return
   await pluginSys.uninstall(id)
 }
 

@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Peer } from '../types/core'
+
+const rootRef = ref<HTMLElement | null>(null)
 
 defineProps<{
   files: string[]
@@ -7,13 +10,24 @@ defineProps<{
   peers: Peer[]
   sending: boolean
 }>()
-defineEmits<{ pick: [id: string]; cancel: [] }>()
+const emit = defineEmits<{ pick: [id: string]; cancel: [] }>()
+
+const onKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') emit('cancel')
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  const first = rootRef.value?.querySelector<HTMLElement>('button:not(:disabled)')
+  first?.focus()
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
 const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() ?? path
 </script>
 
 <template>
-  <div class="drop-overlay" role="dialog" aria-modal="true" aria-label="选择接收设备">
+  <div ref="rootRef" class="drop-overlay" role="dialog" aria-modal="true" aria-label="选择接收设备">
     <div class="drop-backdrop" @click="$emit('cancel')" />
 
     <section class="drop-card">

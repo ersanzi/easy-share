@@ -8,11 +8,14 @@ const emit = defineEmits<{ (e: 'submit', username: string, password: string): vo
 const username = ref('')
 const password = ref('')
 const platformUrl = ref('')
+const usernameInput = ref<HTMLInputElement | null>(null)
 const passwordInput = ref<HTMLInputElement | null>(null)
 
 // 不预填 admin：公司部署里每个同事用自己账号，预填管理员名等于诱导试默认口令
 onMounted(async () => {
-  passwordInput.value?.focus()
+  // 聚焦第一个空字段：账号为空聚焦账号，否则聚焦密码
+  if (!username.value.trim()) usernameInput.value?.focus()
+  else passwordInput.value?.focus()
   // 常显公司服务器地址：登录失败电话支持时，员工一眼能报出连的是谁
   try {
     platformUrl.value = (await core.serviceEndpoints()).platformBaseUrl
@@ -43,7 +46,7 @@ const submit = () => {
       <form class="login-form" @submit.prevent="submit">
         <label class="login-field">
           <span>账号</span>
-          <input v-model="username" type="text" autocomplete="username" placeholder="用户名" />
+          <input ref="usernameInput" v-model="username" type="text" autocomplete="username" placeholder="用户名" />
         </label>
         <label class="login-field">
           <span>密码</span>
@@ -65,11 +68,13 @@ const submit = () => {
 
 <style scoped>
 .login-shell {
-  height: 100vh;
+  /* 窗口控制条已提升到外层（36px），登录页占剩余高度 */
+  height: calc(100vh - 36px);
   display: grid;
   place-items: center;
   background: linear-gradient(160deg, #eef2f8, #e3e9f2);
 }
+.login-shell input, .login-shell button, .login-shell a { --wails-draggable: no-drag; }
 .login-card {
   width: 340px;
   padding: 32px 28px 24px;

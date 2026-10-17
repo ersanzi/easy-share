@@ -4,7 +4,10 @@ import { core } from '../services/core'
 import { QUOTA_UNSET } from '../types/core'
 import type { AuthUser, McpConnection, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
 import { usePlugins } from '../composables/usePlugins'
+import { useConfirm } from '../composables/useConfirm'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
+
+const { confirm } = useConfirm()
 
 // 登出走 App.vue 绑定的 app.logout：只有那条路径会清 composable 的登录态并切回登录页
 const emit = defineEmits<{ logout: [] }>()
@@ -57,7 +60,7 @@ const togglePlugin = async (id: string, disabled: boolean, builtin: boolean) => 
 }
 
 const removePlugin = async (id: string) => {
-  if (!window.confirm('确定卸载该插件？其私有数据将被清除。')) return
+  if (!await confirm({ title: '卸载插件', message: '确定卸载该插件？其私有数据将被清除。', confirmText: '卸载', danger: true })) return
   pluginError.value = ''
   try {
     pluginBusy.value = id

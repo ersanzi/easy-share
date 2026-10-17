@@ -96,6 +96,17 @@ func (a *App) refreshSpaceMounts() {
 		return
 	}
 	client := drive.New(base)
+	// 大文件会话持久化目录：与 config.json 同级（数据根），进程重启后同指纹
+	// 文件自动续传（断点续传的"断点"落在本机，服务端会话状态由控制面记账）
+	client.Sessions = drive.NewSessionStore(filepath.Join(filepath.Dir(a.configPath), "upload-sessions"))
+	// WebDAV 上传的暂存目录：同样放数据根。
+	// 不放系统临时目录的原因：拖进来的可能是几十 GB，而系统盘通常最小；
+	// 放数据根，用户至少有「清理数据盘」这一个直觉可循。
+	spoolDir := filepath.Join(filepath.Dir(a.configPath), "upload-spool")
+	// 增量列举版本持久化：桌面端重启后带 last_version 继续拉差异，
+	// 不再退回全量。文件与 upload-sessions 同放数据根。
+	versionStore := spacedav.NewDiskVersionStore(
+		filepath.Join(filepath.Dir(a.configPath), "space-versions.json"))
 	userID := session.User.UserID
 	// 昵称优先、退回账号名：条目名要让人一眼认出是谁的盘
 	displayName := session.User.NickName
@@ -115,10 +126,12 @@ func (a *App) refreshSpaceMounts() {
 		case account.SpacePersonal:
 			port := a.config.WebDAVPort + personalPortOffset
 			fs := spacedav.New(spacedav.Options{
-				Client: client,
-				Space:  drive.SpacePersonal,
-				Token:  a.sessionToken(),
-				Label:  displayName + " 的网盘",
+				Client:   client,
+				Space:    drive.SpacePersonal,
+				Token:    a.sessionToken(),
+				Label:    displayName + " 的网盘",
+				SpoolDir: spoolDir,
+				Versions: versionStore,
 			})
 			if err := a.mounts.personal.Start(port, fs); err != nil {
 				a.logger.Printf("space mount: personal webdav on %d failed: %v", port, err)
@@ -143,6 +156,8 @@ func (a *App) refreshSpaceMounts() {
 				Token:    a.sessionToken(),
 				ReadOnly: readOnly,
 				Label:    "EasyShare 共享",
+				SpoolDir: spoolDir,
+				Versions: versionStore,
 			})
 			if err := a.mounts.shared.Start(port, fs); err != nil {
 				a.logger.Printf("space mount: shared webdav on %d failed: %v", port, err)

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import ActivityDrawer from './components/ActivityDrawer.vue'
 import AdminPanel from './components/AdminPanel.vue'
 import CloudPanel from './components/CloudPanel.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 import DevicePicker from './components/DevicePicker.vue'
 import DrivePanel from './components/DrivePanel.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
@@ -15,20 +16,36 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import TransferList from './components/TransferList.vue'
 import { useEasyShare } from './composables/useEasyShare'
+import { useConfirm } from './composables/useConfirm'
 import { usePlugins } from './composables/usePlugins'
 import { taskKind, taskSection } from './utils/tasks'
-import { WindowMinimise, Quit } from '../wailsjs/runtime/runtime'
+import { WindowMinimise, Quit, WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
 
 // 内置视图 + 动态插件视图（plugin:{id}）
 type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'meetings' | 'admin' | 'plugins' | 'settings'
 type View = BuiltinView | `plugin:${string}`
 
 const app = useEasyShare()
+const { confirmState, confirm, settle } = useConfirm()
 const pluginSys = usePlugins()
 const view = ref<View>('overview')
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 const activityOpen = ref(false)
+const activityTriggerRef = ref<HTMLButtonElement | null>(null)
+const closeActivityDrawer = () => {
+  activityOpen.value = false
+  activityTriggerRef.value?.focus()
+}
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+// 最大化/还原：按钮点击与拖拽区双击共用；切换后重新查询同步图标
+const isMaximised = ref(false)
+const syncMaximised = async () => { isMaximised.value = await WindowIsMaximised() }
+const toggleMaximise = async () => {
+  await WindowToggleMaximise()
+  await syncMaximised()
+}
+onMounted(() => { void syncMaximised() })
 
 const activeTaskCount = computed(() => app.snapshot.value.tasks
   .filter(task => taskSection(task) === 'active').length)
@@ -85,6 +102,14 @@ const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)
 }
 const handleCloudDelete = async (key: string) => {
+  const name = key.split('/').filter(Boolean).pop() ?? key
+  const confirmed = await confirm({
+    title: '删除云端文件',
+    message: `确定删除「${name}」？删除后将无法从云端恢复。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
   await app.cloudDelete(key)
   cloudRef.value?.refresh()
 }
@@ -101,6 +126,49 @@ const avatarText = computed(() => {
 </script>
 
 <template>
+  <!-- 窗口控制条：拖拽区域 + 最小化/最大化/关闭（macOS 用原生红绿灯）。
+       登录页与主界面共用——登录前快捷操作区不渲染，避免暴露活动/账号入口。 -->
+  <div class="window-chrome">
+    <div class="drag-region" @dblclick="toggleMaximise" />
+    <div v-if="app.currentUser.value.loggedIn" class="window-quick-actions">
+      <button
+        ref="activityTriggerRef"
+        class="activity-trigger"
+        type="button"
+        :aria-label="activityLabel"
+        :aria-expanded="activityOpen"
+        aria-controls="activity-title"
+        @click="activityOpen = !activityOpen"
+      >
+        <svg viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8M9 11h6M9 15h4"/></svg>
+        <span>活动</span>
+        <b v-if="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
+        <b v-if="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
+      </button>
+
+      <!-- 当前账号：头像（点击进设置）+ 昵称 + 登出 -->
+      <div class="account-chip" :title="app.currentUser.value.nickName || app.currentUser.value.userName">
+        <button class="account-avatar" type="button" aria-label="账号设置" title="账号设置" @click="view = 'settings'">{{ avatarText }}</button>
+        <span class="account-name">{{ app.currentUser.value.nickName || app.currentUser.value.userName }}</span>
+        <button class="account-logout" type="button" aria-label="退出登录" title="退出登录" @click="app.logout">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>
+        </button>
+      </div>
+    </div>
+    <div v-if="!isMac" class="window-controls">
+      <button class="win-btn" type="button" aria-label="最小化" @click="WindowMinimise()">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="win-btn" type="button" :aria-label="isMaximised ? '还原' : '最大化'" :title="isMaximised ? '还原' : '最大化'" @click="toggleMaximise">
+        <svg v-if="isMaximised" viewBox="0 0 24 24"><path d="M9 9h9v9H9z"/><path d="M6 15H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v1"/></svg>
+        <svg v-else viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></svg>
+      </button>
+      <button class="win-btn close" type="button" aria-label="关闭到托盘" @click="Quit()">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+  </div>
+
   <!-- 登录门禁：未登录只显示登录页（P1，见 ADR-0007） -->
   <LoginView
     v-if="!app.currentUser.value.loggedIn"
@@ -109,6 +177,16 @@ const avatarText = computed(() => {
     @submit="handleLogin"
   />
   <div v-else :class="['app-shell', isMac ? 'is-mac' : '']">
+    <!-- 全局确认对话框：useConfirm 驱动，替换原生 window.confirm -->
+    <ConfirmDialog
+      v-model:open="confirmState.open"
+      :title="confirmState.title"
+      :message="confirmState.message"
+      :confirm-text="confirmState.confirmText"
+      :danger="confirmState.danger"
+      @confirm="settle(true)"
+      @cancel="settle(false)"
+    />
     <!-- 拖拽发送：设备选择浮层 -->
     <DevicePicker
       v-if="app.droppedFiles.value.length || app.droppedDirs.value.length"
@@ -123,46 +201,9 @@ const avatarText = computed(() => {
     <ActivityDrawer
       v-if="activityOpen"
       :tasks="app.snapshot.value.tasks"
-      @close="activityOpen = false"
+      @close="closeActivityDrawer"
       @view-all="showAllTasks"
     />
-
-    <!-- 窗口控制条：拖拽区域 + 最小化/关闭（macOS 使用原生红绿灯，隐藏自定义按钮） -->
-    <div class="window-chrome">
-      <div class="drag-region" />
-      <div class="window-quick-actions">
-        <button
-          class="activity-trigger"
-          type="button"
-          :aria-label="activityLabel"
-          :aria-expanded="activityOpen"
-          aria-controls="activity-title"
-          @click="activityOpen = !activityOpen"
-        >
-          <svg viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8M9 11h6M9 15h4"/></svg>
-          <span>活动</span>
-          <b v-if="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
-          <b v-if="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
-        </button>
-
-        <!-- 当前账号：头像（点击进设置）+ 昵称 + 登出 -->
-        <div class="account-chip" :title="app.currentUser.value.nickName || app.currentUser.value.userName">
-          <button class="account-avatar" type="button" aria-label="账号设置" title="账号设置" @click="view = 'settings'">{{ avatarText }}</button>
-          <span class="account-name">{{ app.currentUser.value.nickName || app.currentUser.value.userName }}</span>
-          <button class="account-logout" type="button" aria-label="退出登录" title="退出登录" @click="app.logout">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>
-          </button>
-        </div>
-      </div>
-      <div v-if="!isMac" class="window-controls">
-        <button class="win-btn" type="button" aria-label="最小化" @click="WindowMinimise()">
-          <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
-        </button>
-        <button class="win-btn close" type="button" aria-label="关闭到托盘" @click="Quit()">
-          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </div>
-    </div>
 
     <div class="app-body">
       <aside class="sidebar">
@@ -174,37 +215,37 @@ const avatarText = computed(() => {
         </div>
 
         <nav class="sidebar-nav" aria-label="主导航">
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" type="button" @click="view = 'overview'">
+          <button :class="['nav-item', view === 'overview' ? 'active' : '']" :aria-current="view === 'overview' ? 'page' : undefined" type="button" @click="view = 'overview'">
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
             首页
           </button>
-          <button :class="['nav-item', view === 'devices' ? 'active' : '']" type="button" @click="view = 'devices'">
+          <button :class="['nav-item', view === 'devices' ? 'active' : '']" :aria-current="view === 'devices' ? 'page' : undefined" type="button" @click="view = 'devices'">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
             设备
             <span class="nav-count">{{ app.snapshot.value.peers.length }}</span>
           </button>
-          <button :class="['nav-item', view === 'transfers' ? 'active' : '']" type="button" @click="view = 'transfers'">
+          <button :class="['nav-item', view === 'transfers' ? 'active' : '']" :aria-current="view === 'transfers' ? 'page' : undefined" type="button" @click="view = 'transfers'">
             <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
             任务中心
             <span class="nav-count">{{ app.snapshot.value.tasks.length }}</span>
           </button>
-          <button :class="['nav-item', view === 'cloud' ? 'active' : '']" type="button" @click="view = 'cloud'">
+          <button :class="['nav-item', view === 'cloud' ? 'active' : '']" :aria-current="view === 'cloud' ? 'page' : undefined" type="button" @click="view = 'cloud'">
             <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
             文件
           </button>
-          <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" type="button" @click="view = 'knowledge'">
+          <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" :aria-current="view === 'knowledge' ? 'page' : undefined" type="button" @click="view = 'knowledge'">
             <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
             知识
           </button>
           <!-- 会议听记：录音 → 转写 → 发言人 → AI 纪要 -->
-          <button :class="['nav-item', view === 'meetings' ? 'active' : '']" type="button" @click="view = 'meetings'">
+          <button :class="['nav-item', view === 'meetings' ? 'active' : '']" :aria-current="view === 'meetings' ? 'page' : undefined" type="button" @click="view = 'meetings'">
             <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"/></svg>
             会议听记
           </button>
           <!-- 管理入口：仅管理员可见。页面在客户端内，账号与空间都在这里管 -->
           <button
             v-if="app.currentUser.value.isAdmin"
-            :class="['nav-item', view === 'admin' ? 'active' : '']"
+            :class="['nav-item', view === 'admin' ? 'active' : '']" :aria-current="view === 'admin' ? 'page' : undefined"
             type="button"
             @click="view = 'admin'"
           >
@@ -213,7 +254,7 @@ const avatarText = computed(() => {
           </button>
 
           <!-- 插件中心：商城 + 已装管理（有插件更新时亮红点） -->
-          <button :class="['nav-item', view === 'plugins' ? 'active' : '']" type="button" @click="view = 'plugins'">
+          <button :class="['nav-item', view === 'plugins' ? 'active' : '']" :aria-current="view === 'plugins' ? 'page' : undefined" type="button" @click="view = 'plugins'">
             <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
             插件中心
             <span v-if="pluginSys.updateNotices.value.length" class="nav-update-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
@@ -223,7 +264,7 @@ const avatarText = computed(() => {
           <button
             v-for="p in enabledPlugins"
             :key="p.id"
-            :class="['nav-item', view === `plugin:${p.id}` ? 'active' : '']"
+            :class="['nav-item', view === `plugin:${p.id}` ? 'active' : '']" :aria-current="activePluginId === p.id ? 'page' : undefined"
             type="button"
             :title="p.description"
             @click="view = `plugin:${p.id}` as View"
@@ -234,7 +275,7 @@ const avatarText = computed(() => {
             <span v-if="p.builtin" class="nav-plugin-builtin" title="内置插件">内</span>
           </button>
 
-          <button :class="['nav-item', view === 'settings' ? 'active' : '']" type="button" @click="view = 'settings'">
+          <button :class="['nav-item', view === 'settings' ? 'active' : '']" :aria-current="view === 'settings' ? 'page' : undefined" type="button" @click="view = 'settings'">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
             设置
             <span v-if="app.updateAvailable.value" class="nav-update-dot" :title="`发现新版本 ${app.updateAvailable.value}`" />

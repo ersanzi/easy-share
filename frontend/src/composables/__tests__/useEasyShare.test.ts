@@ -25,6 +25,14 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../services/core', () => ({ core: mocks }))
+// 退出确认已迁移到全局 ConfirmDialog（useConfirm）：测试中直接按「确认」了结
+vi.mock('../useConfirm', () => ({
+  useConfirm: () => ({
+    confirmState: { open: false, title: '', message: '', confirmText: '确认', danger: false },
+    confirm: vi.fn().mockResolvedValue(true),
+    settle: vi.fn(),
+  }),
+}))
 vi.mock('../../../wailsjs/runtime/runtime', () => ({
   OnFileDrop: mocks.onFileDrop,
   OnFileDropOff: mocks.onFileDropOff,
@@ -67,7 +75,7 @@ describe('useEasyShare', () => {
     mocks.shutdown.mockResolvedValue(undefined)
     mocks.reportError.mockResolvedValue(undefined)
     mocks.logDirectory.mockResolvedValue('C:\\Users\\tester\\EasyShare\\logs')
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
   })
 
   afterEach(() => {

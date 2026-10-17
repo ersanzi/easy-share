@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
+import { useConfirm } from '../composables/useConfirm'
 import { QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminSharedMember, type Capacity, type KnowledgeStats, type ManagedUser, type Space } from '../types/core'
 
 type Tab = 'overview' | 'accounts' | 'spaces'
@@ -10,6 +11,7 @@ const users = ref<ManagedUser[]>([])
 const total = ref(0)
 const loading = ref(false)
 const busyId = ref('')
+const { confirm } = useConfirm()
 const message = ref('')
 const messageKind = ref<'ok' | 'error'>('ok')
 const registerEnabled = ref(false)
@@ -385,7 +387,13 @@ const toggleStatus = async (user: ManagedUser) => {
 
 const removeUser = async (user: ManagedUser) => {
   if (busyId.value) return
-  if (!window.confirm(`删除账号「${user.nickName || user.userName}」？该账号的个人空间将无人可访问。`)) return
+  const confirmed = await confirm({
+    title: '删除账号',
+    message: `删除账号「${user.nickName || user.userName}」？该账号的个人空间将无人可访问。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
   busyId.value = user.userId
   try {
     await core.adminDeleteUser(user.userId)

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import type { CloudFile, CloudPreview as CloudPreviewData } from '../types/core'
 import CloudPreviewView from './CloudPreview.vue'
+import RecyclePanel from './RecyclePanel.vue'
 import { buildDriveView, relativeDir } from '../utils/driveFolder'
 import type { DriveSortDir, DriveSortKey } from '../utils/driveFolder'
 import { core } from '../services/core'
@@ -18,6 +19,8 @@ const previewOpen = ref(false)
 const previewLoading = ref(false)
 const previewError = ref('')
 const previewData = ref<CloudPreviewData | null>(null)
+// 回收站视图开关（P1）：打开时以覆盖层展示回收站面板
+const recycleOpen = ref(false)
 
 // 目录导航状态：currentPath 为相对根的目录（'' = 根）；搜索跨当前目录全部后代
 const currentPath = ref('')
@@ -128,6 +131,7 @@ defineExpose({ refresh: loadFiles })
         <h2>网盘</h2>
       </div>
       <div class="header-actions">
+        <button v-if="enabled" class="text-button" type="button" @click="recycleOpen = true">回收站</button>
         <button class="text-button" type="button" @click="loadFiles">刷新</button>
         <span class="count-badge">{{ view.folderCount }} 个文件夹 · {{ view.fileCount }} 个文件</span>
       </div>
@@ -163,7 +167,7 @@ defineExpose({ refresh: loadFiles })
               @input="onSearchInput"
             >
           </div>
-          <select class="cloud-sort-key" :value="sortKey" title="排序字段" @change="onSortKeyChange">
+          <select class="cloud-sort-key" :value="sortKey" title="排序字段" aria-label="排序字段" @change="onSortKeyChange">
             <option value="lastModified">按时间</option>
             <option value="name">按名称</option>
             <option value="size">按大小</option>
@@ -200,7 +204,7 @@ defineExpose({ refresh: loadFiles })
       </div>
 
       <div v-else class="cloud-list">
-        <article v-for="folder in view.folders" :key="folder.path" class="cloud-row folder-row" @click="enterFolder(folder.path)">
+        <article v-for="folder in view.folders" :key="folder.path" class="cloud-row folder-row" role="button" tabindex="0" @click="enterFolder(folder.path)" @keydown.enter="enterFolder(folder.path)">
           <div class="cloud-icon folder-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           </div>
@@ -238,4 +242,6 @@ defineExpose({ refresh: loadFiles })
     </template>
   </section>
   <CloudPreviewView v-if="previewOpen" :preview="previewData" :loading="previewLoading" :error="previewError" @close="closePreview" />
+  <!-- 回收站覆盖网盘区；返回时刷新主列表确认还原落点 -->
+  <RecyclePanel v-if="recycleOpen" class="recycle-overlay" @back="recycleOpen = false; loadFiles()" />
 </template>

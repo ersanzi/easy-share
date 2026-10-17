@@ -114,6 +114,18 @@ export function CloudPreview(arg1) {
   return window['go']['main']['App']['CloudPreview'](arg1);
 }
 
+export function CloudRecycleList() {
+  return window['go']['main']['App']['CloudRecycleList']();
+}
+
+export function CloudRecyclePurge(arg1) {
+  return window['go']['main']['App']['CloudRecyclePurge'](arg1);
+}
+
+export function CloudRecycleRestore(arg1) {
+  return window['go']['main']['App']['CloudRecycleRestore'](arg1);
+}
+
 export function CloudShare(arg1, arg2) {
   return window['go']['main']['App']['CloudShare'](arg1, arg2);
 }

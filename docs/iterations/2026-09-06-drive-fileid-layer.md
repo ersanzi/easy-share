@@ -26,7 +26,7 @@
 | --- | --- |
 | `deploy/ruoyi-db/easyshare-file.sql`（新） | DDL：es_file 表 + 唯一索引 + 注释（设计要点四条写进 SQL 头） |
 | `domain/EsFile.java` / `mapper/EsFileMapper.java`（新） | MyBatis-Plus 实体与 Mapper（BaseEntity 惯例同 EsSpace） |
-| `service/DriveFileService.java`（新） | `registerOnPresign`（幂等 upsert，并发撞唯一键回退已存在行）/ `reconcileAndMap`（列表补账+回填）/ `resolveDeletePath`（fileId 归属校验）/ `deleteRegistered` |
+| `service/DriveFileService.java`（新） | `registerOnPresign`（幂等 upsert，并发撞唯一键回退已存在行）/ `list`（列表唯一入口：查库 → 按 state 隐藏 → 补账回填；2026-10-16 KI-10 收口）/ `resolveDeletePath`（fileId 归属校验）/ `deleteRegistered` |
 | `DriveController.java` | `/objects` 回填 fileId（新 FileVo）；`/presign-put` 登记；`/object` 删除支持 `fileId`（PathBo 加可选字段，路径校验注解随之放开） |
 | 客户端透传 | Go `drive.Object` + `cloud.File` 加 `FileId`；前端 `CloudFile` 加 `fileId`；Wails 绑定重生成。旧控制面响应无此字段时客户端为 0，行为不变 |
 | `DriveFileServiceTest.java`（新） | 8 用例：规范化登记 / 申报大小更新 / 未知大小不覆盖 / 撞键回退 / 补账映射 / fileId 越权拒绝 / 路径兜底 / 删除清理 |

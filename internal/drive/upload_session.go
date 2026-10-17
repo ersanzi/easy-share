@@ -27,7 +27,63 @@ const (
 
 	// partUploadRetries：单分片上传失败重试次数（指数退避）。
 	partUploadRetries = 3
+
+	// singlePutRetries：单请求上传（< 32 MiB）失败重试次数。
+	// 与分片同理：连接挂死必须能被判死并重试，否则用户只看到进度条不动。
+	singlePutRetries = 3
+
+	// uploadStall：上传时「**多久没有字节流动**」就判定连接挂死（分片与单请求共用）。
+	//
+	// 为什么是「停滞」而不是「整片超时」：两者在慢网络上结果相反。
+	// 8 MiB 一个分片，健康时约 150ms；但 1 Mbps 的链路上要 **60 多秒**。
+	// 若按总时长砍，慢链路会被反复误杀——而重试是从头再传这一片，
+	// 于是**越慢越传不上去**，永远完不成。
+	//
+	// 挂死的连接与慢连接的差别**不在耗时，而在有没有进展**：
+	// 有字节流动就一直等，彻底不动才判死。所以按「停滞」设限。
+	//
+	// 分片与单请求**两条路径都受它保护**：实测两条都会挂死（见 KI-23 与 KI-24）。
+	//
+	// 为什么不能只靠 transfer client 的 30 分钟：那是给整次传输的
+	// （可能几十 GB），对单个分片是上万倍余量。连接一旦挂住，
+	// `Do()` 要等 30 分钟才返回错误——而 `putPartWithRetry` 的重试
+	// **只在 `Do()` 返回错误之后才可能发生**，于是三次重试一次都用不上，
+	// 用户看到的是「上传进度条永远不动」。
+	//
+	// 实测（2026-10-16，本机控制面 + RustFS，33 MiB / 5 片）：
+	// 健康时整包 ~0.9s；异常时**某一片永久停住**——6 次运行里 2 次卡死
+	// （分别卡在第 4 片和第 1 片），给 3 分钟也不恢复。
+	// 这就是「重试逻辑存在，但永远触发不了」的形状。
+	//
+	// 30 秒取值依据：健康单片 ~150ms，是 **200 倍**余量；
+	// 同时它只要求「有字节在动」，所以慢链路不受影响。
+	uploadStall = 30 * time.Second
 )
+
+// stallReader 在「一段时间内没有任何字节被读出」时触发回调（通常用于取消请求）。
+//
+// 为什么包在 body 上：分片上传的成败不在写了多少字节，而在**还在不在动**。
+// 读侧每成功一次就重置计时器；传输层因为对端不接收而停止调用 Read 时，
+// 计时器自然到期——这正是「挂死」的定义。
+type stallReader struct {
+	reader io.Reader
+	timer  *time.Timer
+}
+
+func newStallReader(reader io.Reader, stall time.Duration, onStall func()) *stallReader {
+	return &stallReader{reader: reader, timer: time.AfterFunc(stall, onStall)}
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.reader.Read(p)
+	if n > 0 {
+		s.timer.Reset(uploadStall)
+	}
+	return n, err
+}
+
+// stop 释放计时器（避免 goroutine 悬挂到窗口结束）。
+func (s *stallReader) stop() { s.timer.Stop() }
 
 // PartETag 已完成分片回执（Complete 的最小必填项）。
 type PartETag struct {
@@ -110,21 +166,44 @@ func (s *SessionStore) Clear(state *sessionState) {
 }
 
 // 控制面 Upload Session 端点的返回体。
+//
+// ⚠️ 这两个 ID 用 FlexInt64 而不是 int64：它们都是**雪花 ID**，
+// 必然超出 JS 安全整数（2^53-1），因此 RuoYi 的 BigNumberSerializer
+// 会把它们序列化成**字符串**。用 int64 接会导致整个 Unmarshal 失败——
+// 而且失败方式极具误导性：报的是「解析云盘数据失败」，
+// 看起来像云盘坏了，实际只是分片上传的返回体没跟上。
+//
+// 这个坑在 KI-18 修 `Object`/`RecycleEntry` 时**漏掉了本文件**，
+// 后果是「≥32 MiB 文件走分片上传」这条路径**从来没在真实控制面上跑通过**——
+// 单测里 sessionId 是自己编的小数字，永远撞不到。2026-10-16 由
+// live_multipart_cas_test.go 在真机上一次撞出（见 known-issues KI-20）。
 type sessionCreateData struct {
-	SessionID int64  `json:"sessionId"`
-	UploadID  string `json:"uploadId"`
-	PartSize  int64  `json:"partSize"`
+	SessionID FlexInt64 `json:"sessionId"`
+	UploadID  string    `json:"uploadId"`
+	PartSize  int64     `json:"partSize"`
 }
 type sessionPartData struct {
 	URL string `json:"url"`
 }
 type sessionCompleteData struct {
-	FileID int64 `json:"fileId"`
+	FileID FlexInt64 `json:"fileId"`
 }
 
 // createSession 换会话（配额校验/遗留清理都在服务端）。
-func (c *Client) createSession(ctx context.Context, token, space, path string, size int64) (*sessionState, error) {
-	body, err := json.Marshal(map[string]any{"path": path, "space": normalizeSpace(space), "size": size})
+//
+// expectedVersion 与 contentMd5 都与会话一起**寄存在服务端**：Multipart 的真实写入
+// 发生在 complete（大文件可能几分钟），只有在 complete 校验才能覆盖
+// 「写入那一刻版本是否已过期 / 内容是否已存在（秒传）」。
+func (c *Client) createSession(ctx context.Context, token, space, path string,
+	size int64, expectedVersion *int64, contentMd5 string) (*sessionState, error) {
+	payload := map[string]any{"path": path, "space": normalizeSpace(space), "size": size}
+	if expectedVersion != nil {
+		payload["expectedVersion"] = *expectedVersion
+	}
+	if contentMd5 != "" {
+		payload["contentMd5"] = contentMd5
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -132,11 +211,11 @@ func (c *Client) createSession(ctx context.Context, token, space, path string, s
 	if err := c.call(ctx, http.MethodPost, "/easyshare/drive/upload-session/create", token, body, &data); err != nil {
 		return nil, err
 	}
-	if data.SessionID == 0 || data.PartSize <= 0 {
+	if data.SessionID.Int64() == 0 || data.PartSize <= 0 {
 		return nil, fmt.Errorf("创建上传会话失败：服务端返回不完整")
 	}
 	return &sessionState{
-		SessionID: data.SessionID,
+		SessionID: data.SessionID.Int64(),
 		UploadID:  data.UploadID,
 		PartSize:  data.PartSize,
 		Path:      path,
@@ -174,7 +253,7 @@ func (c *Client) completeSession(ctx context.Context, token string, state *sessi
 	if err := c.call(ctx, http.MethodPost, "/easyshare/drive/upload-session/complete", token, body, &data); err != nil {
 		return 0, err
 	}
-	return data.FileID, nil
+	return data.FileID.Int64(), nil
 }
 
 // abortSession 放弃会话（服务端负责 S3 Abort 与状态推进；失败不阻塞主流程）。
@@ -196,19 +275,28 @@ func (c *Client) putPartWithRetry(ctx context.Context, url string, bodyFn func()
 			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
 			}
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bodyFn())
+		// 停滞守卫：若一段时间内没有任何字节流动，就取消这次尝试。
+		// 取消会让 Do() 返回错误 → 进下一次重试，而不是无限期挂住。
+		attemptCtx, cancelAttempt := context.WithCancel(ctx)
+		guard := newStallReader(bodyFn(), uploadStall, cancelAttempt)
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodPut, url, guard)
 		if err != nil {
+			guard.stop()
+			cancelAttempt()
 			return "", err
 		}
 		req.ContentLength = size
 		// 分片 URL 与单请求一致：不签 Content-Type，客户端也不得设该头
 		resp, err := c.transfer.Do(req)
+		guard.stop()
 		if err != nil {
+			cancelAttempt()
 			lastErr = err
 			continue
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		cancelAttempt()
 		if resp.StatusCode/100 != 2 {
 			lastErr = fmt.Errorf("对象存储返回 %s", resp.Status)
 			continue
@@ -224,13 +312,14 @@ func (c *Client) putPartWithRetry(ctx context.Context, url string, bodyFn func()
 }
 
 // uploadFileMultipart 分片上传主流程：续传 → 逐分片（跳过已完成）→ 幂等 Complete。
+// contentMd5 寄存在服务端会话上，complete 时做秒传判定（命中则服务端复制、跳过聚合）。
 func (c *Client) uploadFileMultipart(ctx context.Context, token, space, objectPath, localPath string,
-	size int64, modTime time.Time, onProgress ProgressFunc) error {
+	size int64, modTime time.Time, expectedVersion *int64, contentMd5 string, onProgress ProgressFunc) error {
 	modUnix := modTime.Unix()
 	state := c.Sessions.Load(space, objectPath, size, modUnix)
 	if state == nil {
 		var err error
-		state, err = c.createSession(ctx, token, space, objectPath, size)
+		state, err = c.createSession(ctx, token, space, objectPath, size, expectedVersion, contentMd5)
 		if err != nil {
 			return err
 		}

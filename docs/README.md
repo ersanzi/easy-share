@@ -27,6 +27,7 @@
 | [`product-positioning.md`](product-positioning.md) | 知识平台定位与破局：市场判断、目标客群、发芽路线 | 定位假设变化或种子验证有新事实时 |
 | [`knowledge-platform.md`](knowledge-platform.md) | 主线二：企业知识平台架构、选型与里程碑 | 知识平台方向或选型变化时 |
 | [`cloudreve-benchmark.md`](cloudreve-benchmark.md) | Cloudreve 对标、能力差距与可迁移设计（服务端架构视角） | 对标基线或优先级变化时 |
+| [`plans/2026-10-16-drive-production-roadmap.md`](plans/2026-10-16-drive-production-roadmap.md) | **网盘生产级路线图**：钉盘 × WPS × Cloudreve 三方交集 → 7 切片 + 依赖图（P1 排期以此为准） | 切片顺序或依赖关系变化时 |
 | [`wps-cloud-drive-benchmark.md`](wps-cloud-drive-benchmark.md) | WPS 云盘对标、信息架构取证与桌面端产品形态差距 | 网盘产品形态或 P1 排期变化时 |
 | [`toolchain-rea.md`](toolchain-rea.md) | REA 逆向工具链：本机可用配置、耗时基线、常见错误正解 | REA 升级或分析环境变化时 |
 | [`technical-selection.md`](technical-selection.md) | 云盘演进的技术选型基线与阶段门禁 | 技术路线或首选方案变化时 |

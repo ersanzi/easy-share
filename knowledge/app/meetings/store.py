@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -61,7 +62,10 @@ class MeetingStore:
     def __init__(self, data_path: str | Path) -> None:
         self._directory = Path(data_path)
         self._directory.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        # **RLock 而非 Lock**：写路径（update/set_block/rename_speaker…）都是
+        # 「持锁 → 调 self.get() → 写」，而 get() 自己也要持锁。
+        # 用普通 Lock 会自死锁；RLock 可重入，同一线程重复获取没问题。
+        self._lock = threading.RLock()
 
     def _meta_path(self, meeting_id: str) -> Path:
         return self._directory / f"{meeting_id}.json"
@@ -97,19 +101,26 @@ class MeetingStore:
         return self._audio_path(meeting_id)
 
     def get(self, meeting_id: str) -> dict:
-        path = self._meta_path(meeting_id)
-        if not path.is_file():
-            raise KeyError(meeting_id)
-        return _ensure_schema(json.loads(path.read_text(encoding="utf-8")))
+        # **读也要持锁**——这是 Windows 上的正确性要求，不是性能取舍：
+        # `_write_meta` 用「写临时文件 + 替换」原子更新，而 Windows 在
+        # 目标文件正被打开读时**不允许替换**。读不持锁 = 与写并发时
+        # 必然偶发 `PermissionError`（实测见 concurrent_readers 用例），
+        # 而那个异常会穿过 `_process` 被线程池吞掉，记录永久停在 processing。
+        with self._lock:
+            path = self._meta_path(meeting_id)
+            if not path.is_file():
+                raise KeyError(meeting_id)
+            return _ensure_schema(json.loads(path.read_text(encoding="utf-8")))
 
     def list(self, limit: int = 50) -> list[dict]:
         """列表视图：不含分段全文（列表页只需要元数据与摘要）。"""
         meetings: list[dict] = []
-        for path in self._directory.glob("*.json"):
-            try:
-                meetings.append(_ensure_schema(json.loads(path.read_text(encoding="utf-8"))))
-            except (json.JSONDecodeError, OSError):
-                logger.warning("跳过损坏的会议记录: %s", path.name)
+        with self._lock:
+            for path in self._directory.glob("*.json"):
+                try:
+                    meetings.append(_ensure_schema(json.loads(path.read_text(encoding="utf-8"))))
+                except (json.JSONDecodeError, OSError):
+                    logger.warning("跳过损坏的会议记录: %s", path.name)
         meetings.sort(key=lambda meta: meta.get("created_at") or "", reverse=True)
         return [self._summary_view(meta) for meta in meetings[: max(1, limit)]]
 
@@ -212,10 +223,39 @@ class MeetingStore:
             path.unlink(missing_ok=True)
 
     def _write_meta(self, meta: dict) -> None:
+        """原子写入：临时文件 + 替换，并在 Windows 上**重试**。
+
+        ⚠️ 这里的重试不是"防御性编程"，是 Windows 的硬约束：
+        **一个文件正被别的线程/进程打开读时，不允许被替换**。
+        `Path.replace` 在那时会抛 `PermissionError: [Errno 13]`。
+        在 POSIX 上 rename 可以覆盖被打开的文件，所以这个竞态**只在 Windows 出现**——
+        本仓主线是 Windows 桌面端，恰好是踩中的那一侧。
+
+        触发场景很常见：前端轮询列表（`list()` 逐文件 `read_text`）
+        与后台管线写同一条记录（`update()`/`set_block()`）并发。
+
+        实测：4 个读线程 + 300 次写，**必然**撞上（见
+        `test_write_meta_survives_concurrent_readers`）。
+
+        重试几轮即可——读是毫秒级的，退避几十毫秒足够错开。
+        上限 50 次 × (5~25ms) ≈ 最长 1.2 秒，之后仍失败就如实抛出
+        （不无限重试：那会把一个可诊断的错误变成静默挂起）。
+        """
         path = self._meta_path(meta["id"])
         temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
+        payload = json.dumps(meta, ensure_ascii=False, indent=2)
+        last: OSError | None = None
+        for attempt in range(50):
+            try:
+                temporary.write_text(payload, encoding="utf-8")
+                temporary.replace(path)
+                return
+            except OSError as exc:  # Windows: 目标文件正被读 → PermissionError
+                last = exc
+                # 退避递增（5ms 起、封顶 25ms）：读写都是短操作，
+                # 几十毫秒足够让读线程释放句柄。
+                time.sleep(min(0.005 * (attempt + 1), 0.025))
+        raise OSError(f"写入会议记录失败（重试 50 次仍被占用）: {path}") from last
 
     @staticmethod
     def _summary_view(meta: dict) -> dict:

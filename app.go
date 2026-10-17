@@ -409,9 +409,9 @@ func (a *App) Logout() {
 // 其余服务地址从这里拿（租户服务发现）。registry=管理员在控制面登记；
 // derived=未登记时按同主机默认端口推导（控制面 :8090 → 知识服务 :8000）。
 type ServiceEndpoints struct {
-	KnowledgeURL        string `json:"knowledgeUrl"`
-	KnowledgeURLSource  string `json:"knowledgeUrlSource"`
-	PlatformBaseURL     string `json:"platformBaseUrl"`
+	KnowledgeURL       string `json:"knowledgeUrl"`
+	KnowledgeURLSource string `json:"knowledgeUrlSource"`
+	PlatformBaseURL    string `json:"platformBaseUrl"`
 }
 
 // ServiceEndpoints 给「知识」页等提供登录后的服务地址。控制面拉取失败不阻塞：
@@ -518,7 +518,8 @@ func (a *App) AdminAiConfigSave(llmBaseUrl, llmModel, llmApiKey string, asrEnabl
 }
 
 // publishTrayUser 把当前登录态推给托盘悬浮窗（非阻塞，模式同 updateTrayStatus）。
-func (a *App) publishTrayUser() {	user := a.CurrentUser()
+func (a *App) publishTrayUser() {
+	user := a.CurrentUser()
 	select {
 	case a.trayUserCh <- user:
 	default:
@@ -824,14 +825,18 @@ func (a *App) AdminSetSharedQuota(quotaBytes int64) error {
 }
 
 // SetFileVisibility 设置共享空间文档的可见部门（空列表=恢复全体可见；仅上传者本人可调）。
-func (a *App) SetFileVisibility(space, path string, deptIDs []int64) error {
+// deptIDs 是**十进制字符串**：部门 ID 与文件 ID 一样是雪花 ID，
+// 超出 JS 安全整数（实测 4/4 个真实部门 ID 经 number 往返后撞成同一个值）。
+// 前端已有的 Dept 契约本来就用 string（见 frontend/src/types/core.ts 的 deptId），
+// 这个入口此前用 []int64 是同一件事的第二套表示法，现已统一。
+func (a *App) SetFileVisibility(space, path string, deptIDs []string) error {
 	client, token, err := a.driveClient()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := client.SetFileVisibility(ctx, token, space, path, deptIDs); err != nil {
+	if err := client.SetFileVisibilityByRef(ctx, token, space, path, deptIDs); err != nil {
 		a.reportError("set file visibility", err)
 		return err
 	}
@@ -1050,7 +1055,7 @@ func driveObjectToFile(object drive.Object) cloud.File {
 		ContentType:  contentType,
 		LastModified: object.LastModified,
 		PreviewKind:  cloud.DetectPreviewKind(contentType, object.Path),
-		FileId:       object.FileId,
+		FileId:       object.FileId.Int64(),
 	}
 }
 
@@ -1146,6 +1151,62 @@ func joinObjectKey(dir, key string) string {
 	return dir + "/" + strings.TrimLeft(key, "/")
 }
 
+// objectVersionMap 把对象列表转成 path -> versionId。
+//
+// CAS 的关键在于「上传方带回自己看到的版本」；这份 map 就是上传方在本次动作开始时
+// 看到的世界。后面每次写入都会把它带回控制面，服务端发现别人先改过就拒绝。
+func objectVersionMap(objects []drive.Object) map[string]int64 {
+	versions := make(map[string]int64, len(objects))
+	for _, obj := range objects {
+		versions[obj.Path] = obj.VersionId.Int64()
+	}
+	return versions
+}
+
+// expectedVersionFor 返回上传时带回给控制面的版本指针。
+//
+// 语义：0 = 我认为这个路径还不存在；n>0 = 我看到的是第 n 版。
+// 必须返回指针而不是值，nil 与 0 在服务端是两个语义（nil = 旧客户端不校验）。
+func expectedVersionFor(versions map[string]int64, key string) *int64 {
+	if v, ok := versions[key]; ok {
+		return &v
+	}
+	zero := int64(0)
+	return &zero
+}
+
+// isVersionConflict 判断是否是 CAS 拒绝。
+//
+// 只在**版本冲突**这一类错误上做自动改名重试；配额、权限、网络错误绝不能改名重试——
+// 那样会把“没权限”变成“写到别的地方”，既掩盖根因也可能越权。
+func isVersionConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "已被其他人修改") ||
+		strings.Contains(msg, "已被删除") ||
+		strings.Contains(msg, "版本") && strings.Contains(msg, "已过期")
+}
+
+// conflictObjectKey 生成不覆盖任何现有文件的冲突副本路径。
+//
+// 规则来自路线图切片 3：保双方、冲突副本、不覆盖。
+// 先尝试 “原名 (冲突副本).ext”；若仍被占用则递增 “(冲突副本2)”。
+func conflictObjectKey(versions map[string]int64, key string) string {
+	ext := filepath.Ext(key)
+	base := strings.TrimSuffix(key, ext)
+	if _, exists := versions[base+" (冲突副本)"+ext]; !exists {
+		return base + " (冲突副本)" + ext
+	}
+	for i := 2; ; i++ {
+		candidate := base + " (冲突副本" + strconv.Itoa(i) + ")" + ext
+		if _, exists := versions[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
 // CloudUpload 选择单个文件上传到网盘（targetDir 非空时落到该目录下）。
 func (a *App) CloudUpload(targetDir string) (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传到网盘的文件"})
@@ -1221,9 +1282,20 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 		a.reportError("create cloud upload task", createErr)
 		return
 	}
+	// 上传前先看一眼当前版本：这是 CAS 的“我看到的世界”。
+	objects, listErr := driveClient.Objects(a.ctx, token, space)
+	if listErr != nil {
+		a.reportError("cloud upload list", listErr)
+		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
+			"status": "failed", "error": listErr.Error(),
+		})
+		return
+	}
+	versions := objectVersionMap(objects)
+
 	start := time.Now()
 	var lastPatch time.Time
-	uploadErr := driveClient.UploadFile(a.ctx, token, space, objectKey, filePath, func(sent, total int64) {
+	progress := func(sent, total int64) {
 		now := time.Now()
 		if now.Sub(lastPatch) < 200*time.Millisecond && sent < total {
 			return
@@ -1237,7 +1309,27 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 			"transferredBytes": sent, "speed": speed, "status": "running",
 		})
-	})
+	}
+	uploadErr := driveClient.UploadFileIfVersion(a.ctx, token, space, objectKey, filePath,
+		expectedVersionFor(versions, objectKey), progress)
+
+	// 版本冲突：不覆盖对方内容，自动落到冲突副本（切片 3 的固定规则）。
+	if isVersionConflict(uploadErr) {
+		fresh, freshErr := driveClient.Objects(a.ctx, token, space)
+		if freshErr != nil {
+			a.reportError("cloud upload refresh", freshErr)
+			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
+				"status": "failed", "error": uploadErr.Error(),
+			})
+			return
+		}
+		versions = objectVersionMap(fresh)
+		conflictKey := conflictObjectKey(versions, objectKey)
+		zero := int64(0) // 冲突副本是新建，不允许覆盖任何人
+		a.logger.Printf("cloud upload conflict: %s -> %s", objectKey, conflictKey)
+		uploadErr = driveClient.UploadFileIfVersion(a.ctx, token, space, conflictKey, filePath, &zero, progress)
+	}
+
 	if uploadErr != nil {
 		a.reportError("cloud upload", uploadErr)
 		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
@@ -1273,13 +1365,44 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 		a.reportError("create cloud folder upload task", createErr)
 		return
 	}
+	// 批量上传只列一次版本，避免每个文件都打一遍控制面。
+	objects, listErr := driveClient.Objects(a.ctx, token, space)
+	if listErr != nil {
+		a.reportError("cloud folder upload list", listErr)
+		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
+			"status": "failed", "error": listErr.Error(),
+		})
+		return
+	}
+	versions := objectVersionMap(objects)
+
 	for i, filePath := range files {
 		rel, relErr := filepath.Rel(dir, filePath)
 		if relErr != nil {
 			continue
 		}
 		objectKey := joinObjectKey(baseDir, folderName+"/"+filepath.ToSlash(rel))
-		if uploadErr := driveClient.UploadFile(a.ctx, token, space, objectKey, filePath, nil); uploadErr != nil {
+		uploadErr := driveClient.UploadFileIfVersion(a.ctx, token, space, objectKey, filePath,
+			expectedVersionFor(versions, objectKey), nil)
+
+		// 版本冲突：生成副本，不覆盖远端；副本名仍避开所有现有文件。
+		if isVersionConflict(uploadErr) {
+			fresh, freshErr := driveClient.Objects(a.ctx, token, space)
+			if freshErr != nil {
+				a.reportError("cloud folder upload refresh", freshErr)
+				_ = core.PatchTask(a.ctx, created.ID, map[string]any{
+					"status": "failed", "error": uploadErr.Error(),
+				})
+				return
+			}
+			versions = objectVersionMap(fresh)
+			conflictKey := conflictObjectKey(versions, objectKey)
+			zero := int64(0)
+			a.logger.Printf("cloud folder upload conflict: %s -> %s", objectKey, conflictKey)
+			uploadErr = driveClient.UploadFileIfVersion(a.ctx, token, space, conflictKey, filePath, &zero, nil)
+		}
+
+		if uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
 			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 				"status": "failed", "error": uploadErr.Error(),
@@ -1333,8 +1456,73 @@ func (a *App) CloudDelete(key string) error {
 	if err != nil {
 		return err
 	}
+	// 软删（P1 回收站）：控制面置 state='recycled'，对象保留，可经回收站还原
 	err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
 	a.reportError("cloud delete", err)
+	return err
+}
+
+// ── 回收站（P1，wps-cloud-drive-benchmark.md §6-P1）──────────────────────
+// 三个导出方法直通控制面；fileId 是回收站内唯一定位方式（挂 fileId，不绑路径）。
+
+// CloudRecycleList 列举个人空间回收站。
+//
+// ⚠️ 出参的 fileId 是**十进制字符串**，不是数字——这是一个必须守住的边界。
+//
+// 雪花 ID 是 19 位，超出 JS 安全整数 2^53-1。RuoYi 因此把 Long 序列化成字符串
+// （Go 侧用 drive.FlexInt64 收下），但**跨 Wails 边界时又变回了 JSON number**：
+// 前端拿到的是被静默截断的值，再传回来就查不到任何行。
+// 实测本机 13 行真实 ID 经一次往返**全部改变**（known-issues.md KI-21）。
+//
+// 所以 JS 边界上只用字符串：能无损表示 19 位整数的最小改动，
+// 也是控制面本身的选择（前后端在这件事上不该有两套表示法）。
+func (a *App) CloudRecycleList() ([]drive.RecycleEntryView, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := client.RecycleList(a.ctx, token, drive.SpacePersonal)
+	a.reportError("cloud recycle list", err)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]drive.RecycleEntryView, 0, len(entries))
+	for _, entry := range entries {
+		views = append(views, entry.View())
+	}
+	return views, nil
+}
+
+// CloudRecycleRestore 按 fileId 还原到原位置；原位置被占用时错误透出冲突说明。
+//
+// fileID 是十进制字符串（理由见 CloudRecycleList）：JS 侧没有那个整数的精确值，
+// 收 number 就等于收一个已经错了的值。
+func (a *App) CloudRecycleRestore(fileID string) error {
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return err
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.RecycleRestore(a.ctx, token, drive.SpacePersonal, id)
+	a.reportError("cloud recycle restore", err)
+	return err
+}
+
+// CloudRecyclePurge 按 fileId 彻底删除（摘行 + 删对象，不可还原）。
+func (a *App) CloudRecyclePurge(fileID string) error {
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return err
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.RecyclePurge(a.ctx, token, drive.SpacePersonal, id)
+	a.reportError("cloud recycle purge", err)
 	return err
 }
 

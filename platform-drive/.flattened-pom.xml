@@ -23,6 +23,21 @@
         EasyShare 云盘存储授权模块：验登录态 → 按用户命名空间签发 RustFS 预签名 URL
     </description>
 
+    <properties>
+        <!--
+          覆盖上游 RuoYi 父 POM 的 <maven.test.skip>true</maven.test.skip>。
+
+          父 POM 的注释是「打包默认跳过测试」，对上游整包构建是合理默认；但本模块
+          只有 4 个纯单测类（无 Spring 上下文、无外部依赖），跳过它们没有任何收益，
+          代价却是**「mvn test 返回 BUILD SUCCESS 但一个测试都没跑」**——
+          KI-8 就是这样藏了很久，并让 KI-7（数据丢失缺陷）也跟着藏住了。
+
+          用 maven.test.skip 而非 skipTests：父 POM 用的是前者，它连**编译**都跳过，
+          所以必须同时把它关掉，否则测试源码改了都不会被编译。
+        -->
+        <maven.test.skip>false</maven.test.skip>
+    </properties>
+
     <dependencies>
         <!-- 通用工具：R 统一响应、ServiceException -->
         <dependency>

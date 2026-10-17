@@ -50,4 +50,13 @@ public class EsSpace extends BaseEntity {
 
     /** 0 正常、1 停用 */
     private String status;
+
+    /**
+     * 空间级单调递增版本（增量列举，路线图切片 2）。
+     *
+     * <p>任何文件生命周期变更（新建/覆盖/软删/还原/移动/彻底删除）都会 +1，
+     * 并写入 es_file_change_log。客户端记住上次看到的版本，
+     * 下一次只拉它之后的变更。</p>
+     */
+    private Long spaceVersion;
 }

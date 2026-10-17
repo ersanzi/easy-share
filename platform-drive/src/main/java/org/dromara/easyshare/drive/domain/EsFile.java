@@ -6,6 +6,8 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.dromara.common.mybatis.core.domain.BaseEntity;
 
+import java.time.LocalDateTime;
+
 /**
  * 文件目录层实体：稳定 fileId 与空间内相对路径的绑定（Cloudreve 对标 P0）。
  * <p>
@@ -32,6 +34,15 @@ public class EsFile extends BaseEntity {
     /** 惰性补账的存量行无法归因上传者，记 0 */
     public static final long UPLOAD_BY_UNKNOWN = 0L;
 
+    /** 生命周期：在用 */
+    public static final String STATE_ACTIVE = "active";
+
+    /** 生命周期：回收站（软删，对象仍保留在 RustFS） */
+    public static final String STATE_RECYCLED = "recycled";
+
+    /** 生命周期：已彻底清除（逻辑态预留；彻底删除目前直接删行） */
+    public static final String STATE_PURGED = "purged";
+
     @TableId(value = "file_id")
     private Long fileId;
 
@@ -55,4 +66,25 @@ public class EsFile extends BaseEntity {
 
     /** 文档可见部门 ID 逗号分隔（仅共享空间语义）；空=全体可见 */
     private String visibleDepts;
+
+    /** 生命周期状态（active/recycled/purged），默认 active */
+    private String state;
+
+    /** 进入回收站的时间；active 行为 NULL */
+    private LocalDateTime deletedAt;
+
+    /** 删除前的 file_path 快照（还原落点；回收站行的 file_path 保持原值，本列是冗余快照） */
+    private String originPath;
+
+    /** 删除前的父目录 fileId（目录建模后启用，本片恒为 NULL） */
+    private Long originParentId;
+
+    /** 同路径覆盖上传递增的版本号（0=首次登记） */
+    private Long versionId;
+
+    /** 内容 MD5（十六进制小写）；秒传判定键，未上报为 NULL（切片 6） */
+    private String contentMd5;
+
+    /** 哈希可靠性来源：client=客户端整文件读算；NULL=未上报（秒传不生效） */
+    private String md5Reliable;
 }

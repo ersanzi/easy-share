@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
+import { useConfirm } from './useConfirm'
 import type { AuthUser, CoreSnapshot, TransferTask } from '../types/core'
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
@@ -113,9 +114,17 @@ export function useEasyShare() {
     }
   }
 
+  const { confirm } = useConfirm()
+
   const shutdown = async () => {
     if (inactive()) return
-    if (!window.confirm('确定退出 EasyShare 的全部后台服务吗？正在进行的传输将会停止。')) return
+    const confirmed = await confirm({
+      title: '退出 EasyShare',
+      message: '确定退出 EasyShare 的全部后台服务吗？正在进行的传输将会停止。',
+      confirmText: '退出',
+      danger: true,
+    })
+    if (!confirmed) return
 
     // Stop polling before ShutdownAll. Once shutdown begins, no code path is
     // allowed to contact a Core process that may already have exited.

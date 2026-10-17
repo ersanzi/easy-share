@@ -197,11 +197,29 @@ class MeetingService:
             return
 
         # 以下区块彼此独立：某块失败只置该块 failed，用户可单独补跑（对标钉钉分任务状态）
-        if segments:
-            self._run_summary_block(meeting_id, meta, segments, speaker_names)
-            self._run_keywords_block(meeting_id, segments, speaker_names)
-            self._run_mindmap_block(meeting_id, segments, speaker_names)
-        self.store.update(meeting_id, status="completed")
+        # 后续区块：各自有 try（内部只置本块 failed），但**仍需一层兜底**。
+        #
+        # 为什么：这些区块内部会调用 `store.update()` / `set_block()`，
+        # 而存储写入在 Windows 上可能因文件被占用而抛 OSError（见 store 的说明）。
+        # 那种异常会穿过 `_process`，被 `ThreadPoolExecutor` 吞进 Future——
+        # 于是下面的 `status='completed'` 永远执行不到，
+        # 记录**永久停在 processing**，用户看到永不结束的「正在处理」。
+        #
+        # 实测（`test_process_marks_failed_instead_of_stuck_processing`）：
+        # 让关键词区块抛 PermissionError，原实现下 status 恒为 'processing'。
+        try:
+            if segments:
+                self._run_summary_block(meeting_id, meta, segments, speaker_names)
+                self._run_keywords_block(meeting_id, segments, speaker_names)
+                self._run_mindmap_block(meeting_id, segments, speaker_names)
+            self.store.update(meeting_id, status="completed")
+        except Exception as exc:  # noqa: BLE001 - 兜底：绝不能让记录停在 processing
+            logger.exception("会议处理未预期失败: id=%s", meeting_id)
+            try:
+                self.store.update(meeting_id, status="failed", error=f"处理中断：{exc}")
+            except Exception:  # noqa: BLE001 - 连失败都写不进去时，至少留下日志
+                logger.exception("记录失败状态同样写入失败: id=%s", meeting_id)
+            return
         fresh = self.store.get(meeting_id)
         logger.info(
             "会议听记处理完成: id=%s segments=%d speakers=%d blocks=%s keywords=%d todos=%d",

@@ -1,0 +1,239 @@
+//go:build windows
+
+package cfapi
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// TestAsyncFetchSlow 是异步取数的**决定性用例**：故意让取数耗时 3 秒
+// （模拟慢网络 / 大文件），断言读取仍然成功。
+//
+// 这条用例的意义在于：**同步实现在这里会失败**——回调线程被占满 3 秒，
+// 而异步实现只占住入队的瞬间。
+//
+// 我们不断言「系统一定超时」（那取决于系统实现细节，不该写在测试里），
+// 只断言「异步路径在慢取数下仍然正确」——这是我们要保证的事实。
+func TestAsyncFetchSlow(t *testing.T) {
+	if !Available() {
+		t.Skip("本机无 CfApi")
+	}
+	root := t.TempDir()
+
+	const content = "slow but correct"
+	const delay = 3 * time.Second
+
+	list := func(ctx contextContext) ([]CloudEntry, error) {
+		return []CloudEntry{{
+			Path: "slow.txt", Size: int64(len(content)),
+			ModifiedUnix: 1767225600,
+			Identity:     EncodeIdentity(7),
+		}}, nil
+	}
+
+	// 记录「受理」与「数据就绪」的间隔，用来证明慢活在后台，而不是在回调里
+	var accepted time.Time
+	asyncFetch := func(req FetchRequest) <-chan FetchResult {
+		// **立刻返回通道**（这是契约），慢活在 goroutine 里
+		accepted = time.Now()
+		ch := make(chan FetchResult, 1)
+		go func() {
+			defer close(ch)
+			time.Sleep(delay)
+			ch <- FetchResult{Data: []byte(content), Offset: 0}
+		}()
+		return ch
+	}
+
+	sr, err := NewSyncRoot(testProvider, []byte("easyshare-async-slow"), []byte("esf:"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterSyncRoot(root, &sr.Registration, &sr.Policies, RegisterFlagNone); err != nil {
+		t.Fatalf("RegisterSyncRoot: %v", err)
+	}
+	defer func() { _ = UnregisterSyncRoot(root) }()
+
+	sess, err := ConnectAsync(root, asyncFetch,
+		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath)
+	if err != nil {
+		t.Fatalf("ConnectAsync: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	stats := BuildTree(root, mustList(t, list))
+	if len(stats.Failures) != 0 {
+		t.Fatalf("建树失败: %s", stats.Error())
+	}
+
+	start := time.Now()
+	got, err := os.ReadFile(filepath.Join(root, "slow.txt"))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("内容 = %q，期望 %q", got, content)
+	}
+	// 读取应当至少覆盖取数延迟（证明真的等了数据回来，而不是读了空）
+	if elapsed < delay {
+		t.Errorf("读取耗时 %v 短于取数延迟 %v——数据不可能是真的", elapsed, delay)
+	}
+	t.Logf("慢取数（%v）下读取成功：受理于 %s，总耗时 %v，内容匹配",
+		delay, accepted.Format("15:04:05.000"), elapsed.Round(time.Millisecond))
+}
+
+// mustList 把 ListFunc 的产物直接取出来（测试辅助）。
+func mustList(t *testing.T, f ListFunc) []CloudEntry {
+	t.Helper()
+	e, err := f(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// TestAsyncFetchMultipleChunks 验证「通道给多块」时逐块回填。
+//
+// 这是大文件分块传输的路径：fetcher 按块产出，每块都回填给系统。
+func TestAsyncFetchMultipleChunks(t *testing.T) {
+	if !Available() {
+		t.Skip("本机无 CfApi")
+	}
+	root := t.TempDir()
+
+	// 拼出一个可校验的多块文件
+	chunks := [][]byte{
+		bytes.Repeat([]byte("A"), 512),
+		bytes.Repeat([]byte("B"), 512),
+		bytes.Repeat([]byte("C"), 100),
+	}
+	var whole []byte
+	for _, c := range chunks {
+		whole = append(whole, c...)
+	}
+
+	list := func(ctx contextContext) ([]CloudEntry, error) {
+		return []CloudEntry{{
+			Path: "multi.bin", Size: int64(len(whole)),
+			ModifiedUnix: 1767225600,
+			Identity:     EncodeIdentity(11),
+		}}, nil
+	}
+	asyncFetch := func(req FetchRequest) <-chan FetchResult {
+		ch := make(chan FetchResult, len(chunks))
+		go func() {
+			defer close(ch)
+			var off int64
+			for _, c := range chunks {
+				ch <- FetchResult{Data: c, Offset: off}
+				off += int64(len(c))
+			}
+		}()
+		return ch
+	}
+
+	sr, err := NewSyncRoot(testProvider, []byte("easyshare-async-multi"), []byte("esf:"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterSyncRoot(root, &sr.Registration, &sr.Policies, RegisterFlagNone); err != nil {
+		t.Fatalf("RegisterSyncRoot: %v", err)
+	}
+	defer func() { _ = UnregisterSyncRoot(root) }()
+
+	sess, err := ConnectAsync(root, asyncFetch,
+		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath)
+	if err != nil {
+		t.Fatalf("ConnectAsync: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	stats := BuildTree(root, mustList(t, list))
+	if len(stats.Failures) != 0 {
+		t.Fatalf("建树失败: %s", stats.Error())
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "multi.bin"))
+	if err != nil {
+		if v := sess.lastExecuteErr.Load(); v != nil {
+			t.Fatalf("读取失败: %v（CfExecute 诊断：%v）", err, v)
+		}
+		t.Fatalf("读取失败: %v", err)
+	}
+	if !bytes.Equal(got, whole) {
+		t.Errorf("多块内容不匹配：got %d 字节，want %d 字节", len(got), len(whole))
+	}
+	t.Logf("多块（%d 块 / %d 字节）回填成功", len(chunks), len(got))
+}
+
+// TestAsyncFetchErrorSurfaces 验证取数失败会**如实报给读取方**，
+// 而不是让读取永久挂起。
+func TestAsyncFetchErrorSurfaces(t *testing.T) {
+	if !Available() {
+		t.Skip("本机无 CfApi")
+	}
+	root := t.TempDir()
+
+	list := func(ctx contextContext) ([]CloudEntry, error) {
+		return []CloudEntry{{
+			Path: "broken.txt", Size: 100,
+			ModifiedUnix: 1767225600,
+			Identity:     EncodeIdentity(13),
+		}}, nil
+	}
+	asyncFetch := func(req FetchRequest) <-chan FetchResult {
+		ch := make(chan FetchResult, 1)
+		go func() {
+			defer close(ch)
+			ch <- FetchResult{Err: errFakeCloudDown}
+		}()
+		return ch
+	}
+
+	sr, err := NewSyncRoot(testProvider, []byte("easyshare-async-err"), []byte("esf:"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterSyncRoot(root, &sr.Registration, &sr.Policies, RegisterFlagNone); err != nil {
+		t.Fatalf("RegisterSyncRoot: %v", err)
+	}
+	defer func() { _ = UnregisterSyncRoot(root) }()
+
+	sess, err := ConnectAsync(root, asyncFetch,
+		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath)
+	if err != nil {
+		t.Fatalf("ConnectAsync: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	stats := BuildTree(root, mustList(t, list))
+	if len(stats.Failures) != 0 {
+		t.Fatalf("建树失败: %s", stats.Error())
+	}
+
+	// 读取**必须返回错误**，而不是永久挂起或返回空内容
+	done := make(chan error, 1)
+	go func() {
+		_, err := os.ReadFile(filepath.Join(root, "broken.txt"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("云端取数失败，但读取竟然成功了——错误没有上报")
+		} else {
+			if v := sess.lastExecuteErr.Load(); v != nil {
+				t.Logf("错误已如实上报给读取方: %v（CfExecute 诊断：%v）", err, v)
+			} else {
+				t.Logf("错误已如实上报给读取方: %v", err)
+			}
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("读取永久挂起——错误没有上报（不变量 2 被破坏）")
+	}
+}

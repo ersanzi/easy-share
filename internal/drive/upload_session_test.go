@@ -84,7 +84,7 @@ func TestMultipartUploadSplitsAndCompletes(t *testing.T) {
 
 	var progress []int64
 	err := client.uploadFileMultipart(context.Background(), "tok", SpacePersonal,
-		"big.bin", localPath, int64(len(content)), modTime, func(sent, total int64) {
+		"big.bin", localPath, int64(len(content)), modTime, nil, func(sent, total int64) {
 			progress = append(progress, sent)
 		})
 	if err != nil {
@@ -116,7 +116,7 @@ func TestMultipartResumesFromSavedSession(t *testing.T) {
 	}
 
 	if err := client.uploadFileMultipart(context.Background(), "tok", SpacePersonal,
-		"big.bin", localPath, int64(len(content)), modTime, nil); err != nil {
+		"big.bin", localPath, int64(len(content)), modTime, nil, nil); err != nil {
 		t.Fatalf("续传失败：%v", err)
 	}
 	if state.createCalls.Load() != 0 {
@@ -151,7 +151,7 @@ func TestMultipartFingerprintChangeAbortsOldSession(t *testing.T) {
 	}
 	info, _ := os.Stat(localPath)
 	if err := client.uploadFileMultipart(context.Background(), "tok", SpacePersonal,
-		"big.bin", localPath, int64(len(content)), info.ModTime(), nil); err != nil {
+		"big.bin", localPath, int64(len(content)), info.ModTime(), nil, nil); err != nil {
 		t.Fatalf("指纹变化后上传失败：%v", err)
 	}
 	if state.createCalls.Load() != 1 {

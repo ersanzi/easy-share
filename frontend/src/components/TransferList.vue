@@ -193,7 +193,7 @@ const canConfirmReceive = (task: TransferTask) =>
                   <div v-if="item.status === 'completed' && item.localPath" class="row-actions">
                     <button class="secondary-button compact" type="button" @click="openFile(item)">打开</button>
                   </div>
-                  <button v-if="taskIsTerminal(item.status)" class="delete-btn" type="button" aria-label="删除记录" @click="$emit('delete', item.id)">×</button>
+                  <button v-if="taskIsTerminal(item.status)" class="delete-btn" type="button" :aria-label="`删除记录 ${item.fileName}`" @click="$emit('delete', item.id)">×</button>
                 </div>
               </div>
             </article>
@@ -231,7 +231,7 @@ const canConfirmReceive = (task: TransferTask) =>
               <div v-if="entry.task.status === 'completed' && entry.task.localPath" class="row-actions">
                 <button class="secondary-button compact" type="button" @click="openFile(entry.task)">打开文件</button>
               </div>
-              <button v-if="taskIsTerminal(entry.task.status)" class="delete-btn" type="button" aria-label="删除记录" @click="$emit('delete', entry.task.id)">×</button>
+              <button v-if="taskIsTerminal(entry.task.status)" class="delete-btn" type="button" :aria-label="`删除记录 ${entry.task.fileName}`" @click="$emit('delete', entry.task.id)">×</button>
             </div>
           </div>
         </article>

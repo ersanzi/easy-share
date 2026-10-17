@@ -1,0 +1,385 @@
+//go:build windows
+
+package cfapi
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"unsafe"
+)
+
+// 本文件实现**异步取数**：回调立刻返回，业务侧取到数据后自己回填。
+//
+// ── 为什么要异步（对照 WPS 取证 §2.1b (4)）──────────────────────
+//
+// 同步模型把整个取数过程占在系统回调线程上。小文件（测试里的内存数据）无感，
+// 但真实云端拉一个 GB 级文件时，回调线程被占住的时长可能超过系统容忍上限，
+// 结果是 I/O 超时失败——而大文件恰恰是占位符最大的受益场景。
+//
+// WPS 的做法正是异步：`cfApiFetchDataCallback` 只造一个 JobContext，用 Qt 队列
+// 连接派发给业务线程，**立刻返回**。本文件把同一个模型落到 Go 上。
+//
+// ── 三条必须守住的不变量 ──────────────────────────────────────
+//
+//  1. **回调返回后，CF_CALLBACK_INFO 的内存就失效了。** 所以必须立刻把
+//     需要的三个 key（ConnectionKey/TransferKey/RequestKey）**按值复制**出来，
+//     之后的 CfExecute 只用这份副本，绝不碰原指针。
+//     这是本文件最容易写错的地方——原指针看起来"一直有效"，实则不是。
+//
+//  2. **每个请求最终都必须恰好回填一次**（除非它被取消）。只受理不回填，
+//     会让发起读取的进程永久挂起。所以这里用 defer 兜住「通道没产出任何结果」
+//     的情况，补一个错误回填。
+//
+//  3. **取消要能打断在跑的取数。** CANCEL_FETCH_DATA 带同一个 TransferKey，
+//     用它反查并 cancel 对应 context。
+
+// opContext 是回调期间复制出来的、回调返回后仍需使用的信息。
+//
+// 全部按键值类型保存（不是指针），这是不变量 1 的落实。
+//
+// 其中 **protectedHandle 是异步模型的关键**：CfApi 规定，
+// **回调返回之后**再调 CfExecute(TRANSFER_DATA) 必须先持有该文件句柄
+// （由 CfOpenFileWithOplock 取得）。不拿句柄就直接回填会得到
+// 0x8007017C (ERROR_CLOUD_FILE_INVALID_REQUEST)——这一点是实测撞出来的，
+// 也是同步模型能跑、异步模型初版不能跑的根本原因。
+type opContext struct {
+	ConnectionKey connectionKey
+	TransferKey   int64
+	RequestKey    int64
+
+	// protectedHandle 是 CfOpenFileWithOplock 取得的句柄；
+	// 0 表示没拿到（此时不应尝试回填）。
+	protectedHandle uintptr
+}
+
+// AsyncFetcher 由调用方实现：**受理**一次取数请求，返回一个结果通道。
+//
+// 契约：
+//   - 必须立刻返回（不要在里面做 I/O），回调线程只等这一步；
+//   - 通道上每收到一个 FetchResult，就向系统回填一块；
+//   - **返回 Err 非 nil 的结果表示失败**，挂载层会以错误状态回填并停止；
+//   - **关闭通道表示传输完成**（正常结束）。
+//
+// 实现方应当尊重传入的 request 的区间语义（见 FetchRequest 注释）。
+type AsyncFetcher func(req FetchRequest) <-chan FetchResult
+
+// inflight 记录进行中的异步取数，用于取消。
+type inflight struct {
+	cancel context.CancelFunc
+}
+
+// asyncState 是每个连接上的异步取数状态。
+type asyncState struct {
+	mu sync.Mutex
+	m  map[int64]*inflight // TransferKey → 进行中的请求
+}
+
+func newAsyncState() *asyncState {
+	return &asyncState{m: map[int64]*inflight{}}
+}
+
+func (a *asyncState) add(key int64, cancel context.CancelFunc) {
+	a.mu.Lock()
+	a.m[key] = &inflight{cancel: cancel}
+	a.mu.Unlock()
+}
+
+func (a *asyncState) remove(key int64) {
+	a.mu.Lock()
+	delete(a.m, key)
+	a.mu.Unlock()
+}
+
+// cancel 取消指定 TransferKey 的取数；返回是否命中。
+func (a *asyncState) cancel(key int64) bool {
+	a.mu.Lock()
+	f, ok := a.m[key]
+	if ok {
+		delete(a.m, key)
+	}
+	a.mu.Unlock()
+	if ok {
+		f.cancel()
+	}
+	return ok
+}
+
+// ConnectAsync 连接同步根并注册回调，取数走**异步**模型。
+//
+// 与 Connect 的区别只在取数方式；回调表相同（FETCH_DATA + CANCEL_FETCH_DATA），
+// 但这里的 CANCEL 是**真正参与**的（同步模型下它无从下手）。
+func ConnectAsync(rootPath string, fetcher AsyncFetcher, connectFlags uint32) (*AsyncSession, error) {
+	if fetcher == nil {
+		return nil, fmt.Errorf("cfapi: asyncFetcher 不能为 nil")
+	}
+	pathPtr, err := syscall.UTF16PtrFromString(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("cfapi: 同步根路径转换失败: %w", err)
+	}
+
+	s := &AsyncSession{
+		rootPath: rootPath,
+		fetcher:  fetcher,
+		state:    newAsyncState(),
+	}
+
+	table := []callbackRegistration{
+		{Type: int32(CallbackTypeFetchData), Callback: syscall.NewCallback(s.onFetchData)},
+		{Type: int32(CallbackTypeCancelFetchData), Callback: syscall.NewCallback(s.onCancelFetchData)},
+		{Type: int32(CallbackTypeNone), Callback: 0},
+	}
+
+	p, err := proc("CfConnectSyncRoot")
+	if err != nil {
+		return nil, err
+	}
+	var key connectionKey
+	r1, _, _ := p.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(unsafe.Pointer(&table[0])),
+		uintptr(unsafe.Pointer(s)),
+		uintptr(connectFlags),
+		uintptr(unsafe.Pointer(&key)),
+	)
+	if err := checkHResult(r1, "CfConnectSyncRoot"); err != nil {
+		return nil, err
+	}
+	s.key = key
+	s.active = true
+	return s, nil
+}
+
+// AsyncSession 是一次异步取数的连接。用 ConnectAsync 创建、Close 释放。
+type AsyncSession struct {
+	rootPath string
+	fetcher  AsyncFetcher
+	state    *asyncState
+
+	key    connectionKey
+	once   sync.Once
+	active bool
+	mu     sync.Mutex
+
+	// wg 等待所有在跑的取数 goroutine 退出，避免 Close 后它们还在回填。
+	wg sync.WaitGroup
+
+	// lastExecuteErr 记录最近一次 CfExecute 失败的原因（诊断用，仅测试读取）。
+	lastExecuteErr atomic.Value
+}
+
+// Close 断开连接。会先取消所有在跑的取数。
+func (s *AsyncSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	var err error
+	s.once.Do(func() {
+		// 取消全部在跑的取数，否则它们可能在断开后继续 CfExecute
+		s.state.mu.Lock()
+		for k, f := range s.state.m {
+			f.cancel()
+			delete(s.state.m, k)
+		}
+		s.state.mu.Unlock()
+		s.wg.Wait()
+
+		s.mu.Lock()
+		active := s.active
+		s.active = false
+		s.mu.Unlock()
+		if !active {
+			return
+		}
+		p, perr := proc("CfDisconnectSyncRoot")
+		if perr != nil {
+			err = perr
+			return
+		}
+		r1, _, _ := p.Call(uintptr(s.key))
+		err = checkHResult(r1, "CfDisconnectSyncRoot")
+	})
+	return err
+}
+
+// onFetchData 是异步版 FETCH_DATA 处理函数。
+//
+// 流程：复制 key → 受理请求 → 起 goroutine 回填 → **立刻返回**。
+func (s *AsyncSession) onFetchData(infoPtr, paramsPtr uintptr) uintptr {
+	// 兜住 panic，避免穿过 C 边界终止进程
+	defer func() { _ = recover() }()
+
+	info := asCallbackInfo(infoPtr)
+	params := asCallbackParamsFetch(paramsPtr)
+
+	// —— 不变量 1：立刻按值复制三个 key ——
+	// 回调返回后 info 指向的内存即失效，之后一律用 op。
+	op := opContext{
+		ConnectionKey: info.ConnectionKey,
+		TransferKey:   info.TransferKey,
+		RequestKey:    info.RequestKey,
+	}
+
+	req := FetchRequest{
+		// 身份与路径**必须复制**：回调返回后原缓冲区失效。
+		// unsafeSlice 是零拷贝视图，所以这里显式 Clone。
+		FileIdentity:   append([]byte(nil), unsafeSlice(info.FileIdentity, uintptr(info.FileIdentityLength))...),
+		NormalizedPath: utf16ToString(info.NormalizedPath),
+		FileSize:       info.FileSize,
+		RequiredOffset: params.RequiredFileOffset,
+		RequiredLength: params.RequiredLength,
+		OptionalOffset: params.OptionalFileOffset,
+		OptionalLength: params.OptionalLength,
+		PriorityHint:   info.PriorityHint,
+	}
+
+	// 关键：**在回调返回前**取得文件句柄。回调返回后再取是拿不到的
+	// （CfApi 只允许在回调上下文里开这个受保护句柄）。
+	if h, err := openProtectedHandle(req.NormalizedPath); err == nil {
+		op.protectedHandle = h
+	} else {
+		// 拿不到句柄就没法异步回填——此时退化为「立刻回一个错误」，
+		// 至少不让读取方永久挂起。
+		s.executeTransferChunk(op, FetchResult{Err: fmt.Errorf("获取受保护句柄失败: %w", err)})
+		return 0
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.state.add(op.TransferKey, cancel)
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer cancel()
+		defer s.state.remove(op.TransferKey)
+		defer closeProtectedHandle(op.protectedHandle)
+		s.runFetch(ctx, op, req)
+	}()
+
+	return 0
+}
+
+// openProtectedHandle 用 CfOpenFileWithOplock 取得可跨回调使用的文件句柄。
+//
+// 为什么需要它：CfExecute(TRANSFER_DATA) 要求调用方持有受保护句柄——
+// 在**回调内部**可以不显式持有（系统的回调栈算作持有），但回调返回后就必须要。
+// WPS 的名表里同样有 CfOpenFileWithOplock + CfCloseHandle（取证 §2.1），
+// 说明它的异步路径也走这一套。
+func openProtectedHandle(filePath string) (uintptr, error) {
+	p, err := proc("CfOpenFileWithOplock")
+	if err != nil {
+		return 0, err
+	}
+	pathPtr, err := syscall.UTF16PtrFromString(filePath)
+	if err != nil {
+		return 0, err
+	}
+	var h uintptr
+	// CfOpenFileWithOplock(PCWSTR, CF_OPEN_FILE_FLAGS, PHANDLE)
+	// 用 FOREGROUND：这是用户主动发起的读取，不该被后台任务的节流压后。
+	r1, _, _ := p.Call(
+		uintptr(unsafe.Pointer(pathPtr)),
+		uintptr(OpenFileFlagForeground),
+		uintptr(unsafe.Pointer(&h)),
+	)
+	if err := checkHResult(r1, "CfOpenFileWithOplock"); err != nil {
+		return 0, err
+	}
+	return h, nil
+}
+
+// closeProtectedHandle 释放受保护句柄。
+func closeProtectedHandle(h uintptr) {
+	if h == 0 {
+		return
+	}
+	p, err := proc("CfCloseHandle")
+	if err != nil {
+		return
+	}
+	p.Call(h)
+}
+
+// runFetch 在后台跑完一次取数并逐块回填。
+//
+// 不变量 2 的落实：无论 fetcher 行为如何（通道直接关闭、只给错误、给一半就断），
+// 本函数都保证「要么回填了至少一块，要么回填了一个错误」。
+func (s *AsyncSession) runFetch(ctx context.Context, op opContext, req FetchRequest) {
+	ch := s.fetcher(req)
+
+	filled := false
+	for res := range ch {
+		if ctx.Err() != nil {
+			// 已被取消：不再回填（系统已放弃这次读取）
+			return
+		}
+		if hr := s.executeTransferChunk(op, res); hr != 0 {
+			// CfExecute 自身失败：回填没被系统接受，再试无意义。
+			s.lastExecuteErr.Store(fmt.Sprintf("CfExecute 失败: 0x%08x（chunk off=%d len=%d）",
+				uint32(hr), res.Offset, len(res.Data)))
+			return
+		}
+		filled = true
+		if res.Err != nil {
+			// 失败即终止：后续块无意义
+			return
+		}
+	}
+
+	if !filled {
+		// 通道没产出任何结果就关闭了——不能让系统继续等，
+		// 补一个错误回填（不变量 2）。
+		s.executeTransferChunk(op, FetchResult{Err: fmt.Errorf("取数未返回任何数据")})
+	}
+}
+
+// executeTransferChunk 用 CfExecute(TRANSFER_DATA) 回填一块数据（或错误）。
+//
+// 与同步版共用同一套结构体；区别是本函数**不依赖 CF_CALLBACK_INFO 指针**，
+// 只吃复制出来的 op。
+func (s *AsyncSession) executeTransferChunk(op opContext, res FetchResult) uintptr {
+	opInfo := OperationInfo{
+		StructSize:    uint32(unsafe.Sizeof(OperationInfo{})),
+		Type:          OperationTypeTransferData,
+		ConnectionKey: op.ConnectionKey,
+		TransferKey:   op.TransferKey,
+		RequestKey:    op.RequestKey,
+	}
+	opParams := OperationParameters{
+		ParamSize: uint32(unsafe.Sizeof(OperationParameters{})),
+		Offset:    res.Offset,
+	}
+	if res.Err != nil || len(res.Data) == 0 {
+		opParams.CompletionStatus = int32(statusCloudFileUnsuccessful)
+		opParams.Length = 0
+		opParams.Buffer = nil
+	} else {
+		opParams.CompletionStatus = int32(statusSuccess)
+		opParams.Length = int64(len(res.Data))
+		opParams.Buffer = unsafe.Pointer(&res.Data[0])
+	}
+
+	p, err := proc("CfExecute")
+	if err != nil {
+		return 0
+	}
+	r1, _, _ := p.Call(
+		uintptr(unsafe.Pointer(&opInfo)),
+		uintptr(unsafe.Pointer(&opParams)),
+	)
+	return r1
+}
+
+// onCancelFetchData 取消一次在跑的取数。
+//
+// 与同步版不同，这里**真的有事可做**：用 TransferKey 反查并 cancel。
+// WPS 的这个回调是空实现（取证 §3.2b），因为它不阻塞——但它的 JobContext
+// 另有取消通路。我们走 context，所以这里必须接上。
+func (s *AsyncSession) onCancelFetchData(infoPtr, _ uintptr) uintptr {
+	defer func() { _ = recover() }()
+	info := asCallbackInfo(infoPtr)
+	s.state.cancel(info.TransferKey)
+	return 0
+}
