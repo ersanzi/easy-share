@@ -126,7 +126,6 @@ func (s *Service) handleUpdate() {
 // 轮询产生的回环事件由 record 内的去重窗口吸收。
 func (s *Service) Write(req WriteRequest) error {
 	var hash string
-	var err error
 	switch req.Kind {
 	case KindText:
 		if req.Text == "" {

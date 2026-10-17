@@ -676,23 +676,8 @@ func withEmptyClipboard(fn func() error) error {
 
 // --- 小工具 ---
 
-func hashOf(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:8])
-}
-
-func stringsJoin(list []string, sep string) string {
-	out := ""
-	for i, s := range list {
-		if i > 0 {
-			out += sep
-		}
-		out += s
-	}
-	return out
-}
-
-func nowMillis() int64 { return time.Now().UnixMilli() }
+// hashOf / stringsJoin / nowMillis 已移到 util.go：darwin 实现也依赖它们，
+// 留在这里会导致 macOS 编不过（undefined）。
 
 func colorNRGBA(r, g, b, a byte) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: a} }
 

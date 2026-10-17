@@ -4,7 +4,6 @@ import {account} from '../models';
 import {knowledge} from '../models';
 import {main} from '../models';
 import {http} from '../models';
-import {drive} from '../models';
 import {cloud} from '../models';
 import {drive} from '../models';
 import {desktop} from '../models';
@@ -63,18 +62,16 @@ export function CheckUpdate():Promise<main.UpdateCheckResult>;
 export function ClearHistory():Promise<void>;
 
 export function CloudDelete(arg1:string):Promise<void>;
-export function CloudRename(arg1:string,arg2:string):Promise<void>;
-export function CloudMove(arg1:string,arg2:string):Promise<void>;
-export function CloudStar(arg1:string,arg2:boolean):Promise<void>;
-export function CloudStars():Promise<Array<string>>;
-export function CloudTouch(arg1:string):Promise<void>;
-export function CloudRecents(arg1:number):Promise<Array<string>>;
 
 export function CloudDownload(arg1:string):Promise<void>;
 
 export function CloudList():Promise<Array<cloud.File>>;
 
+export function CloudMove(arg1:string,arg2:string):Promise<void>;
+
 export function CloudPreview(arg1:string):Promise<cloud.Preview>;
+
+export function CloudRecents(arg1:number):Promise<Array<string>>;
 
 export function CloudRecycleList():Promise<Array<drive.RecycleEntryView>>;
 
@@ -82,18 +79,31 @@ export function CloudRecyclePurge(arg1:string):Promise<void>;
 
 export function CloudRecycleRestore(arg1:string):Promise<void>;
 
-export function CloudShare(arg1:string,arg2:number):Promise<string>;
-export function CloudShareLink(arg1:string,arg2:number):Promise<drive.ShareLink>;
-export function CloudShares():Promise<Array<drive.ShareLink>>;
-export function CloudRevokeShare(arg1:string):Promise<boolean>;
-export function CloudVersions(arg1:string):Promise<Array<drive.VersionEntry>>;
+export function CloudRename(arg1:string,arg2:string):Promise<void>;
+
 export function CloudRestoreVersion(arg1:string,arg2:number):Promise<void>;
+
+export function CloudRevokeShare(arg1:string):Promise<boolean>;
+
+export function CloudShare(arg1:string,arg2:number):Promise<string>;
+
+export function CloudShareLink(arg1:string,arg2:number):Promise<drive.ShareLink>;
+
+export function CloudShares():Promise<Array<drive.ShareLink>>;
+
+export function CloudStar(arg1:string,arg2:boolean):Promise<void>;
+
+export function CloudStars():Promise<Array<string>>;
+
+export function CloudTouch(arg1:string):Promise<void>;
 
 export function CloudUpload(arg1:string):Promise<string>;
 
 export function CloudUploadFolder(arg1:string):Promise<string>;
 
 export function CloudUploadPaths(arg1:Array<string>):Promise<void>;
+
+export function CloudVersions(arg1:string):Promise<Array<drive.VersionEntry>>;
 
 export function CurrentUser():Promise<main.AuthUser>;
 

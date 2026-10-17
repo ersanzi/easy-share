@@ -360,25 +360,27 @@ export namespace discovery {
 
 export namespace drive {
 	
-	export class VersionEntry {
+	export class RecycleEntryView {
+	    fileId: string;
+	    path: string;
+	    originPath: string;
+	    size: number;
 	    versionId: number;
-	    fileSize: number;
-	    contentMd5?: string;
 	    // Go type: time
-	    createdAt?: any;
-	    createdBy?: number;
+	    deletedAt?: any;
 	
 	    static createFrom(source: any = {}) {
-	        return new VersionEntry(source);
+	        return new RecycleEntryView(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fileId = source["fileId"];
+	        this.path = source["path"];
+	        this.originPath = source["originPath"];
+	        this.size = source["size"];
 	        this.versionId = source["versionId"];
-	        this.fileSize = source["fileSize"];
-	        this.contentMd5 = source["contentMd5"];
-	        this.createdAt = this.convertValues(source["createdAt"], null);
-	        this.createdBy = source["createdBy"];
+	        this.deletedAt = this.convertValues(source["deletedAt"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -399,7 +401,6 @@ export namespace drive {
 		    return a;
 		}
 	}
-	
 	export class ShareLink {
 	    shareId: string;
 	    token: string;
@@ -448,28 +449,25 @@ export namespace drive {
 		    return a;
 		}
 	}
-	
-	export class RecycleEntryView {
-	    fileId: string;
-	    path: string;
-	    originPath: string;
-	    size: number;
+	export class VersionEntry {
 	    versionId: number;
+	    fileSize: number;
+	    contentMd5?: string;
 	    // Go type: time
-	    deletedAt?: any;
+	    createdAt?: any;
+	    createdBy?: number;
 	
 	    static createFrom(source: any = {}) {
-	        return new RecycleEntryView(source);
+	        return new VersionEntry(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.fileId = source["fileId"];
-	        this.path = source["path"];
-	        this.originPath = source["originPath"];
-	        this.size = source["size"];
 	        this.versionId = source["versionId"];
-	        this.deletedAt = this.convertValues(source["deletedAt"], null);
+	        this.fileSize = source["fileSize"];
+	        this.contentMd5 = source["contentMd5"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.createdBy = source["createdBy"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1374,6 +1372,8 @@ export namespace task {
 	    speed: number;
 	    status: string;
 	    error?: string;
+	    errorCode?: string;
+	    systemCode?: string;
 	    // Go type: time
 	    createdAt: any;
 	    // Go type: time
@@ -1397,6 +1397,8 @@ export namespace task {
 	        this.speed = source["speed"];
 	        this.status = source["status"];
 	        this.error = source["error"];
+	        this.errorCode = source["errorCode"];
+	        this.systemCode = source["systemCode"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }

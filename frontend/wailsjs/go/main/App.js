@@ -106,30 +106,6 @@ export function CloudDelete(arg1) {
   return window['go']['main']['App']['CloudDelete'](arg1);
 }
 
-export function CloudRename(arg1, arg2) {
-  return window['go']['main']['App']['CloudRename'](arg1, arg2);
-}
-
-export function CloudMove(arg1, arg2) {
-  return window['go']['main']['App']['CloudMove'](arg1, arg2);
-}
-
-export function CloudStar(arg1, arg2) {
-  return window['go']['main']['App']['CloudStar'](arg1, arg2);
-}
-
-export function CloudStars() {
-  return window['go']['main']['App']['CloudStars']();
-}
-
-export function CloudTouch(arg1) {
-  return window['go']['main']['App']['CloudTouch'](arg1);
-}
-
-export function CloudRecents(arg1) {
-  return window['go']['main']['App']['CloudRecents'](arg1);
-}
-
 export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }
@@ -138,8 +114,16 @@ export function CloudList() {
   return window['go']['main']['App']['CloudList']();
 }
 
+export function CloudMove(arg1, arg2) {
+  return window['go']['main']['App']['CloudMove'](arg1, arg2);
+}
+
 export function CloudPreview(arg1) {
   return window['go']['main']['App']['CloudPreview'](arg1);
+}
+
+export function CloudRecents(arg1) {
+  return window['go']['main']['App']['CloudRecents'](arg1);
 }
 
 export function CloudRecycleList() {
@@ -154,6 +138,18 @@ export function CloudRecycleRestore(arg1) {
   return window['go']['main']['App']['CloudRecycleRestore'](arg1);
 }
 
+export function CloudRename(arg1, arg2) {
+  return window['go']['main']['App']['CloudRename'](arg1, arg2);
+}
+
+export function CloudRestoreVersion(arg1, arg2) {
+  return window['go']['main']['App']['CloudRestoreVersion'](arg1, arg2);
+}
+
+export function CloudRevokeShare(arg1) {
+  return window['go']['main']['App']['CloudRevokeShare'](arg1);
+}
+
 export function CloudShare(arg1, arg2) {
   return window['go']['main']['App']['CloudShare'](arg1, arg2);
 }
@@ -166,16 +162,16 @@ export function CloudShares() {
   return window['go']['main']['App']['CloudShares']();
 }
 
-export function CloudRevokeShare(arg1) {
-  return window['go']['main']['App']['CloudRevokeShare'](arg1);
+export function CloudStar(arg1, arg2) {
+  return window['go']['main']['App']['CloudStar'](arg1, arg2);
 }
 
-export function CloudVersions(arg1) {
-  return window['go']['main']['App']['CloudVersions'](arg1);
+export function CloudStars() {
+  return window['go']['main']['App']['CloudStars']();
 }
 
-export function CloudRestoreVersion(arg1, arg2) {
-  return window['go']['main']['App']['CloudRestoreVersion'](arg1, arg2);
+export function CloudTouch(arg1) {
+  return window['go']['main']['App']['CloudTouch'](arg1);
 }
 
 export function CloudUpload(arg1) {
@@ -188,6 +184,10 @@ export function CloudUploadFolder(arg1) {
 
 export function CloudUploadPaths(arg1) {
   return window['go']['main']['App']['CloudUploadPaths'](arg1);
+}
+
+export function CloudVersions(arg1) {
+  return window['go']['main']['App']['CloudVersions'](arg1);
 }
 
 export function CurrentUser() {
