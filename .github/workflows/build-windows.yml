@@ -113,15 +113,17 @@ jobs:
           # ldflags 漏传时构建全程无异常，只是包指向 localhost——发布出去才发现，同事全登不进。
           # 这里把「地址确实写进去了」变成构建期硬失败，而不是发布后的人工排查。
           $expected = $env:PLATFORM_URL
+          $allText = ''
           foreach ($f in @('build/bin/easyshare.exe', 'build/bin/easyshare-core.exe')) {
             $bytes = [System.IO.File]::ReadAllBytes($f)
             $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            $allText += $text
             if (-not $text.Contains($expected)) {
               throw "$f 中未找到 '$expected'——ldflags 注入失败，构建产物不可发布"
             }
             Write-Host "OK: $f 已烘焙 $expected"
           }
-          if ($text -match 'http://localhost:8090') {
+          if ($allText -match 'http://localhost:8090') {
             Write-Warning "二进制中仍存在 http://localhost:8090 字符串（可能是无关代码路径），请人工确认"
           }
 

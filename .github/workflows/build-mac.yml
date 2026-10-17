@@ -142,13 +142,35 @@ jobs:
 
             # 断言控制面地址真的进了二进制：ldflags 漏传时构建无异常，
             # 只是包指向 localhost，发布出去同事才发现登不进去。
-            for bin in "$APP_EXEC" "$CORE_EXEC"; do
-              if ! strings "$bin" | grep -qF "${PLATFORM_URL}"; then
-                echo "::error::$bin 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
-                exit 1
+            # 注意不能直接 `strings <fat binary>`：universal 产物是 lipo 合并的，
+            # strings 默认只扫第一个架构切片，会漏判。逐架构切片检查。
+            verify_baked_url() {
+              local binary="$1"
+              local archs
+              archs="$(lipo -archs "$binary" 2>/dev/null || true)"
+              if [ -z "$archs" ]; then
+                # 非 fat 二进制（单架构构建）直接扫；lipo 不可用时也走这里。
+                if strings "$binary" | grep -qF "${PLATFORM_URL}"; then
+                  echo "OK: $binary 已烘焙 ${PLATFORM_URL}"
+                else
+                  echo "::error::$binary 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
+                  return 1
+                fi
+                return 0
               fi
-              echo "OK: $bin 已烘焙 ${PLATFORM_URL}"
-            done
+              local arch
+              for arch in $archs; do
+                local slice="$RUNNER_TEMP/slice-$arch.bin"
+                lipo "$binary" -thin "$arch" -output "$slice"
+                if ! strings "$slice" | grep -qF "${PLATFORM_URL}"; then
+                  echo "::error::$binary ($arch) 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
+                  return 1
+                fi
+                echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
+              done
+            }
+            verify_baked_url "$APP_EXEC"
+            verify_baked_url "$CORE_EXEC"
 
             cd build/bin
             shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
