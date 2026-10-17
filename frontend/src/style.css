@@ -604,6 +604,36 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
 .cloud-info strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .cloud-info span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 .cloud-actions { display: flex; gap: 5px; flex: 0 0 auto; }
+
+/* 行内操作条悬停浮现（对标 WPS 2026-10-17）。
+   WPS 的列表在未悬停时是干净的（只有图标/名称/时间/大小），
+   悬停才在行内浮出操作——动作跟着对象走，用户眼睛已经在那一行上了。
+   我们原先每行常驻 4 个按钮，一屏 10 行就是 40 个按钮，视觉噪声远大于信息量。
+   按钮本身要保留在 DOM 里（而非 v-if），否则键盘用户与触摸屏无法触达。 */
+.cloud-row .cloud-actions { opacity: 0; transition: opacity .14s ease; }
+.cloud-row:hover .cloud-actions,
+.cloud-row:focus-within .cloud-actions { opacity: 1; }
+/* 触摸设备没有 hover：一律显示，否则永远点不到 */
+@media (hover: none) { .cloud-row .cloud-actions { opacity: 1; } }
+
+/* 列表终止标记（对标 WPS「没有更多了」）：
+   明确告诉用户到底了，而不是让他怀疑「是不是还有没加载的」 */
+.cloud-list-end {
+  padding: 18px 0 22px; text-align: center;
+  color: var(--faint, #8e8e93); font-size: 11px; user-select: none;
+}
+
+/* 空间用量常驻条（对标 WPS 侧栏底部「企业空间 86.87G / 3.92T」）：
+   放在面包屑右侧当作「这个盘的体量」上下文，用户不必跳去设置页看还剩多少 */
+.cloud-usage { display: flex; align-items: center; gap: 7px; margin-left: auto; flex: 0 0 auto; }
+.cloud-usage .usage-text { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.cloud-usage .usage-bar {
+  display: block; width: 56px; height: 4px; border-radius: 999px;
+  background: rgba(60,60,67,.12); overflow: hidden;
+}
+.cloud-usage .usage-bar i { display: block; height: 100%; background: var(--blue); border-radius: 999px; transition: width .2s ease; }
+/* 快满时变红：用量本身是个预警信号，不该只在数字上体现 */
+.cloud-usage .usage-bar i.warn { background: #ff3b30; }
 .share-bar { display: flex; align-items: center; gap: 8px; margin: 10px 18px 4px; padding: 10px 12px; background: #f7f9fc; border: 1px solid rgba(0,122,255,.12); border-radius: 10px; font-size: 12px; }
 .share-label { flex: 0 0 auto; color: var(--muted); font-weight: 600; }
 .share-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); font-size: 12px; }
@@ -623,6 +653,25 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(0,122,255,.32); 
   flex: none; padding: 5px 6px; border: 1px solid rgba(60,60,67,.14); border-radius: 8px;
   background: #fff; font-size: 12px; color: var(--text); outline: none; cursor: pointer;
 }
+
+/* 视图筛选行（对标 WPS「全部类型 ▾   最后修改 ↓   大小 ▾」，2026-10-17）。
+   排序做成**列头**而不是工具栏下拉框：用户视线在文件列表上，
+   操作就该在视线上，不必移开眼睛去工具栏找。 */
+.cloud-view-bar {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 18px 6px; font-size: 11px; color: var(--muted);
+}
+.cloud-view-bar .view-label { color: var(--muted); }
+.cloud-view-bar .view-spacer { flex: 1; }
+.cloud-view-bar .view-col {
+  border: 0; background: transparent; padding: 3px 7px; border-radius: 6px;
+  font-size: 11px; color: var(--muted); cursor: pointer; white-space: nowrap;
+}
+.cloud-view-bar .view-col:hover { background: rgba(60,60,67,.06); color: var(--text); }
+/* 当前排序列加重：一眼看出「按什么排的、什么方向」 */
+.cloud-view-bar .view-col.on { color: var(--blue); font-weight: 600; }
+/* 大小列与文件行的尺寸信息大致对齐（行尾按钮区之前） */
+.cloud-view-bar .view-col.col-size { min-width: 62px; text-align: right; }
 .cloud-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 0 18px 8px; font-size: 12px; }
 .crumb {
   border: 0; background: transparent; padding: 2px 4px; border-radius: 6px;

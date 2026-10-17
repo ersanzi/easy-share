@@ -23,6 +23,37 @@ const previewData = ref<CloudPreviewData | null>(null)
 const recycleOpen = ref(false)
 // CfApi 占位符目录（切片 5）：登录且系统支持时非空；入口按它隐藏
 const cfapiPath = ref('')
+// 空间用量（对标 WPS 的侧栏常驻用量条）：网盘页直接可见「还剩多少」，
+// 不必跳去设置页。0/-1 分别表示未分配与不限，展示时分别处理。
+const spaceUsage = ref<{ usedBytes: number; quotaBytes: number } | null>(null)
+
+const loadSpaceUsage = async () => {
+  try {
+    const spaces = await core.mySpaces()
+    const personal = spaces.find((s) => s.spaceType === 'personal')
+    if (personal) {
+      spaceUsage.value = { usedBytes: personal.usedBytes, quotaBytes: personal.quotaBytes }
+    }
+  } catch {
+    spaceUsage.value = null
+  }
+}
+
+// 用量占比（0–100）；未分配或不限返回 null（不画进度条）
+const usagePercent = computed(() => {
+  const usage = spaceUsage.value
+  if (!usage || usage.quotaBytes <= 0) return null
+  return Math.min(100, Math.round(usage.usedBytes / usage.quotaBytes * 100))
+})
+
+// 用量文案：对标 WPS 的「86.87G / 3.92T」形态
+const usageLabel = computed(() => {
+  const usage = spaceUsage.value
+  if (!usage) return ''
+  if (usage.quotaBytes === -1) return `已用 ${formatSize(usage.usedBytes)} / 不限`
+  if (usage.quotaBytes === 0) return '尚未分配容量'
+  return `已用 ${formatSize(usage.usedBytes)} / ${formatSize(usage.quotaBytes)}`
+})
 
 const loadCfapiPath = async () => {
   try {
@@ -121,11 +152,19 @@ const copyShare = () => {
   }
 }
 
-const toggleSortDir = () => {
-  sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
-}
-const onSortKeyChange = (event: Event) => {
-  sortKey.value = (event.target as HTMLSelectElement).value as DriveSortKey
+// sortBy 点列头排序（对标 WPS：排序控件就是列头本身）。
+//
+// 交互约定与桌面文件管理器一致：
+//   - 点**同一列** → 切换升/降序；
+//   - 点**不同列** → 换列并给该列的默认方向（时间/大小默认降序=大到小、新到旧；
+//     名称默认升序=字典序），而不是沿用上一列的方向——那会让用户困惑。
+const sortBy = (key: DriveSortKey) => {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  sortKey.value = key
+  sortDir.value = key === 'name' ? 'asc' : 'desc'
 }
 const onSearchInput = (event: Event) => {
   searchQuery.value = (event.target as HTMLInputElement).value
@@ -138,6 +177,7 @@ const enterFolder = (path: string) => {
 onMounted(() => {
   loadFiles()
   loadCfapiPath()
+  loadSpaceUsage()
 })
 defineExpose({ refresh: loadFiles })
 </script>
@@ -187,15 +227,32 @@ defineExpose({ refresh: loadFiles })
               @input="onSearchInput"
             >
           </div>
-          <select class="cloud-sort-key" :value="sortKey" title="排序字段" aria-label="排序字段" @change="onSortKeyChange">
-            <option value="lastModified">按时间</option>
-            <option value="name">按名称</option>
-            <option value="size">按大小</option>
-          </select>
-          <button class="secondary-button compact" type="button" :title="sortDir === 'asc' ? '升序' : '降序'" @click="toggleSortDir">
-            {{ sortDir === 'asc' ? '↑' : '↓' }}
-          </button>
         </div>
+      </div>
+
+      <!-- 视图筛选行（对标 WPS「全部类型 ▾ … 最后修改 ↓ 大小 ▾」）：
+           排序不是工具栏里的下拉框，而是**列头本身**——用户视线在列表上，操作就在视线上。 -->
+      <div v-if="!loading" class="cloud-view-bar">
+        <span class="view-label">共 {{ view.folderCount + view.fileCount }} 项</span>
+        <span class="view-spacer"></span>
+        <button
+          class="view-col"
+          type="button"
+          :class="{ on: sortKey === 'name' }"
+          @click="sortBy('name')"
+        >名称{{ sortKey === 'name' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '' }}</button>
+        <button
+          class="view-col"
+          type="button"
+          :class="{ on: sortKey === 'lastModified' }"
+          @click="sortBy('lastModified')"
+        >最后修改{{ sortKey === 'lastModified' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '' }}</button>
+        <button
+          class="view-col col-size"
+          type="button"
+          :class="{ on: sortKey === 'size' }"
+          @click="sortBy('size')"
+        >大小{{ sortKey === 'size' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '' }}</button>
       </div>
 
       <div class="cloud-crumbs">
@@ -209,6 +266,13 @@ defineExpose({ refresh: loadFiles })
           >{{ crumb.name }}</button>
         </template>
         <span v-if="view.totalSize" class="crumb-size">{{ formatSize(view.totalSize) }}</span>
+        <!-- 用量常驻（对标 WPS 侧栏底部用量条）：放在面包屑右侧当作「这个盘的体量」上下文 -->
+        <div v-if="spaceUsage" class="cloud-usage" :title="usageLabel">
+          <span class="usage-text">{{ usageLabel }}</span>
+          <span v-if="usagePercent !== null" class="usage-bar">
+            <i :style="{ width: usagePercent + '%' }" :class="{ warn: usagePercent >= 90 }"></i>
+          </span>
+        </div>
       </div>
 
       <div v-if="loading" class="empty-state compact-empty">
@@ -252,6 +316,10 @@ defineExpose({ refresh: loadFiles })
             <button class="secondary-button compact destructive-text" type="button" title="删除" @click="$emit('delete', file.key)">删除</button>
           </div>
         </article>
+
+        <!-- 列表终止标记（对标 WPS 的「没有更多了」）：
+             明确告诉用户列表到底了，而不是让他怀疑「是不是还有没加载的」 -->
+        <div class="cloud-list-end">{{ view.searching ? '搜索完毕' : '没有更多了' }}</div>
       </div>
 
       <div v-if="shareUrl" class="share-bar">

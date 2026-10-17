@@ -36,6 +36,14 @@ type cfapiMounts struct {
 	personalRoot string
 	// syncStop 停掉定期同步循环。
 	syncStop chan struct{}
+	// mounting 标记「正在挂载中」——单飞闸门。
+	//
+	// 为什么需要：refreshSpaceMounts 会在多个时机被并发触发（登录、配额刷新、
+	// 上传完成）。实测日志里一次登录打了两条挂载，第一条撞
+	// `CfConnectSyncRoot` 的 0x8007017A（ERROR_CLOUD_FILE_ALREADY_CONNECTED）失败、
+	// 第二条成功。结果虽然对（有重复挂载保护），但**日志里留了一条误导性的失败**，
+	// 排查时会被当成真故障。挂载是有状态的内核操作，应当串行。
+	mounting bool
 }
 
 // cfaPiProviderID 个人空间同步根的提供方 GUID（固定不变，换了系统会当成新提供方）。
@@ -62,6 +70,28 @@ func (a *App) mountCfapiSpaces() {
 		a.logger.Printf("cfapi mount: 系统不支持 Cloud Files API，跳过（WebDAV 盘不受影响）")
 		return
 	}
+
+	// ── 单飞闸门 ──────────────────────────────────────────────
+	//
+	// refreshSpaceMounts 会被并发触发（登录、配额刷新、上传完成）。
+	// 实测过一次登录打了两条：第一条撞 0x8007017A（已连接）失败、
+	// 第二条成功——结果对，但日志里那条失败是**误导性噪声**。
+	// 挂载是有状态的内核操作，并发进来只该有一个真干活。
+	//
+	// 判定必须在**取 client 之前**做：越早挡住，浪费越少。
+	a.cfapi.mu.Lock()
+	if a.cfapi.personal != nil || a.cfapi.mounting {
+		a.cfapi.mu.Unlock()
+		return
+	}
+	a.cfapi.mounting = true
+	a.cfapi.mu.Unlock()
+	// 无论成功失败都要清标记，否则一次失败会让后续再也不敢挂
+	defer func() {
+		a.cfapi.mu.Lock()
+		a.cfapi.mounting = false
+		a.cfapi.mu.Unlock()
+	}()
 
 	client, token, err := a.driveClient()
 	if err != nil {
