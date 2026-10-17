@@ -77,7 +77,11 @@ jobs:
             echo "::error::PLATFORM_URL 为空：客户端会退回 http://localhost:8090，连不上服务器"
             exit 1
           fi
-          echo "EASYSHARE_LDFLAGS=-X easyshare/internal/config.defaultPlatformBaseURL=${PLATFORM_URL}" >> "$GITHUB_ENV"
+          # build-mac.sh 读的是 EASYSHARE_PLATFORM_URL（它自己拼 ldflags）。
+          # 之前这里导出的是 EASYSHARE_LDFLAGS，与脚本读的变量名不一致 →
+          # 脚本拿到空值、LDFLAGS 为空、地址压根没注入，而构建全程无异常，
+          # 直到产物断言才报「未找到地址」。变量名必须与脚本保持一致。
+          echo "EASYSHARE_PLATFORM_URL=${PLATFORM_URL}" >> "$GITHUB_ENV"
           echo "烘焙控制面地址：${PLATFORM_URL}"
 
       - name: 构建 Core、App 与 DMG
@@ -142,8 +146,11 @@ jobs:
 
             # 断言控制面地址真的进了二进制：ldflags 漏传时构建无异常，
             # 只是包指向 localhost，发布出去同事才发现登不进去。
-            # 注意不能直接 `strings <fat binary>`：universal 产物是 lipo 合并的，
-            # strings 默认只扫第一个架构切片，会漏判。逐架构切片检查。
+            #
+            # 为什么逐架构切片查而不用整文件 grep：universal 产物是 lipo 合并的 fat binary。
+            # 若注入只对其中一个架构生效，整文件 grep 仍可能命中（扫到了有地址的那片），
+            # 于是「一半用户连不上」这种最坏情况会被判为通过。切片查把每个架构都验一遍，
+            # 漏注入与半注入都会硬失败。
             verify_baked_url() {
               local binary="$1"
               local archs

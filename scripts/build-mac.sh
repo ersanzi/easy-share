@@ -15,10 +15,18 @@ PLATFORM_URL="${EASYSHARE_PLATFORM_URL:-}"
 
 # 控制面地址靠 ldflags -X 覆盖 internal/config.defaultPlatformBaseURL（const 改 var 即为此）。
 # 漏传时构建照样成功，只是包指向 localhost:8090 —— 发布出去才发现，同事全登不进。
+#
+# CI 必须显式注入：GitHub Actions 里设 EASYSHARE_PLATFORM_URL，漏设就是配置事故，
+# 不能只打一行警告就放行（v0.3.1 就这样产出了一批指向 localhost 的包，且全程无异常）。
+# 本地开发允许不设，那正是「连本机 RuoYi」的正常用法。
 LDFLAGS=()
 if [ -n "$PLATFORM_URL" ]; then
   LDFLAGS=(-ldflags "-X easyshare/internal/config.defaultPlatformBaseURL=${PLATFORM_URL}")
   echo "==> 烘焙控制面地址：${PLATFORM_URL}"
+elif [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "错误: CI 中未设置 EASYSHARE_PLATFORM_URL，产出的包会指向 localhost:8090，不可发布。" >&2
+  echo "请在 build-mac.yml 的「校验平台地址」步骤中导出该变量。" >&2
+  exit 1
 else
   echo "警告: 未设置 EASYSHARE_PLATFORM_URL，客户端将使用源码默认 http://localhost:8090（仅限本地开发）" >&2
 fi

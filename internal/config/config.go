@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,17 @@ func loadUnlocked(path string) (Config, error) {
 			return Config{}, fmt.Errorf("validate config: %w", err)
 		}
 		// 旧配置迁移：早于账号体系的 config.json 无 platformBaseUrl，补默认值。
-		if strings.TrimSpace(value.PlatformBaseURL) == "" {
+		// 还需处理另一种更常见的情况：早期 dev 版把源码默认值 localhost 写盘了，
+		// 此后升级安装不清理该文件。烘焙的公司地址只对「字段为空」的新装生效，
+		// 对这类已有 localhost 的老用户一直是空转 —— 装完仍连本机，公司环境本就无服务。
+		// 故：存量值是本机地址、而烘焙值指向公司服务器时，改写为烘焙值并落盘。
+		// 只在 loopback → 非 loopback 这一方向迁移，手工填过真实地址的用户不受影响。
+		if shouldRebasePlatformURL(value.PlatformBaseURL, defaultPlatformBaseURL) {
+			value.PlatformBaseURL = defaultPlatformBaseURL
+			if err := saveUnlocked(path, value); err != nil {
+				return Config{}, fmt.Errorf("rebase platform url: %w", err)
+			}
+		} else if strings.TrimSpace(value.PlatformBaseURL) == "" {
 			value.PlatformBaseURL = defaultPlatformBaseURL
 		}
 		if strings.TrimSpace(value.AdminConsoleURL) == "" {
@@ -269,4 +280,41 @@ func randomHex(byteCount int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(value), nil
+}
+
+// shouldRebasePlatformURL 判断存量配置里的控制面地址是否该被构建期烘焙值改写。
+//
+// 触发条件刻意收窄：存量值指向本机（localhost / 127.0.0.1 等 loopback），
+// 而烘焙值指向外部服务器。含义是「这份配置是早期 dev 版留下的占位值，
+// 现在装的是公司版本，应当改指服务器」。
+//
+// 明确不做的事：
+//   - 烘焙值本身是 loopback（本地 dev 构建）时不迁移，否则会把本地配置改坏；
+//   - 存量值已是外部地址时不迁移，那是用户自己填的，尊重它；
+//   - 存量值为空不走这里，由调用方的「空则填默认值」分支处理。
+func shouldRebasePlatformURL(stored, baked string) bool {
+	if !isLoopbackURL(stored) {
+		return false
+	}
+	return strings.TrimSpace(baked) != "" && !isLoopbackURL(baked)
+}
+
+// isLoopbackURL 判断 URL 的主机部分是否为本机地址。
+// 解析失败按「非本机」处理——宁可漏迁移，也不要拿一个坏地址去覆盖用户配置。
+func isLoopbackURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host = parsed.Host
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
