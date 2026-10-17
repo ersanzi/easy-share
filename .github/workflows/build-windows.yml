@@ -20,6 +20,14 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
 
+    env:
+      # 客户端烘焙的控制面地址。走 -ldflags -X 覆盖 internal/config.defaultPlatformBaseURL，
+      # 同事装完开箱即指向公司服务器（开箱即用原则，见 ADR-0007）。
+      # 为什么必须有：漏传时该变量退回源码默认值 http://localhost:8090，客户端连自己电脑，
+      # 表现为「装上了但登不进去」，且构建过程毫无异常——v0.3.0 就是这么废掉的。
+      # 改地址改这里（仓库变量），不改代码；两个工作流共用同一个值。
+      PLATFORM_URL: ${{ vars.PLATFORM_URL || 'http://47.96.128.231:11054' }}
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
@@ -65,13 +73,23 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
           echo "$(go env GOPATH)/bin" >> $env:GITHUB_PATH
 
+      - name: 校验并生成 ldflags
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PLATFORM_URL)) {
+            throw "PLATFORM_URL 为空：客户端会退回 http://localhost:8090，连不上服务器"
+          }
+          "EASYSHARE_LDFLAGS=-X easyshare/internal/config.defaultPlatformBaseURL=$($env:PLATFORM_URL)" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "烘焙控制面地址：$($env:PLATFORM_URL)"
+
       - name: 构建 Core
         run: |
           New-Item -ItemType Directory -Force -Path build/bin | Out-Null
-          go build -o build/bin/easyshare-core.exe ./cmd/core
+          go build -ldflags "$env:EASYSHARE_LDFLAGS" -o build/bin/easyshare-core.exe ./cmd/core
 
       - name: 构建桌面端与安装包
-        run: wails build --nsis
+        run: wails build --nsis -ldflags "$env:EASYSHARE_LDFLAGS"
 
       - name: 校验产物
         run: |
@@ -88,6 +106,24 @@ jobs:
             throw "Windows installer not found in build/bin"
           }
           Write-Host "OK: $($installer.Name) ($('{0:N2} MB' -f ($installer.Length / 1MB)))"
+
+      - name: 断言控制面地址已烘焙进二进制
+        shell: pwsh
+        run: |
+          # ldflags 漏传时构建全程无异常，只是包指向 localhost——发布出去才发现，同事全登不进。
+          # 这里把「地址确实写进去了」变成构建期硬失败，而不是发布后的人工排查。
+          $expected = $env:PLATFORM_URL
+          foreach ($f in @('build/bin/easyshare.exe', 'build/bin/easyshare-core.exe')) {
+            $bytes = [System.IO.File]::ReadAllBytes($f)
+            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if (-not $text.Contains($expected)) {
+              throw "$f 中未找到 '$expected'——ldflags 注入失败，构建产物不可发布"
+            }
+            Write-Host "OK: $f 已烘焙 $expected"
+          }
+          if ($text -match 'http://localhost:8090') {
+            Write-Warning "二进制中仍存在 http://localhost:8090 字符串（可能是无关代码路径），请人工确认"
+          }
 
       - name: 上传产物
         uses: actions/upload-artifact@v6

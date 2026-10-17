@@ -11,13 +11,24 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PLATFORM="${WAILS_PLATFORM:-darwin/universal}"
+PLATFORM_URL="${EASYSHARE_PLATFORM_URL:-}"
+
+# 控制面地址靠 ldflags -X 覆盖 internal/config.defaultPlatformBaseURL（const 改 var 即为此）。
+# 漏传时构建照样成功，只是包指向 localhost:8090 —— 发布出去才发现，同事全登不进。
+LDFLAGS=()
+if [ -n "$PLATFORM_URL" ]; then
+  LDFLAGS=(-ldflags "-X easyshare/internal/config.defaultPlatformBaseURL=${PLATFORM_URL}")
+  echo "==> 烘焙控制面地址：${PLATFORM_URL}"
+else
+  echo "警告: 未设置 EASYSHARE_PLATFORM_URL，客户端将使用源码默认 http://localhost:8090（仅限本地开发）" >&2
+fi
 
 mkdir -p build/bin
 
 build_core() {
   local arch="$1"
   local output="$2"
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -o "$output" ./cmd/core
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build "${LDFLAGS[@]}" -o "$output" ./cmd/core
 }
 
 echo "==> 构建 Core 后台服务（平台: ${PLATFORM}）"
@@ -74,7 +85,7 @@ fi
 
 # wails build 会自动执行 frontend:install + frontend:build（含 vue-tsc 类型检查）。
 echo "==> 构建桌面端（.app，平台: ${PLATFORM}）"
-wails build -platform "$PLATFORM"
+wails build -platform "$PLATFORM" "${LDFLAGS[@]}"
 
 APP_PATH="build/bin/easyshare.app"
 DMG_PATH="build/bin/EasyShare.dmg"

@@ -30,6 +30,9 @@ jobs:
     timeout-minutes: 45
     env:
       WAILS_PLATFORM: ${{ github.event.inputs.platform || 'darwin/universal' }}
+      # 与 Windows 工作流同源：客户端烘焙的控制面地址，漏传则退回 localhost:8090。
+      # 说明见 build-windows.yml 中同名变量的注释。
+      PLATFORM_URL: ${{ vars.PLATFORM_URL || 'http://47.96.128.231:11054' }}
 
     steps:
       - name: 检出代码
@@ -66,6 +69,16 @@ jobs:
 
       - name: Wails 环境检查
         run: wails doctor || true
+
+      - name: 校验平台地址并生成 ldflags
+        run: |
+          set -euo pipefail
+          if [ -z "${PLATFORM_URL:-}" ]; then
+            echo "::error::PLATFORM_URL 为空：客户端会退回 http://localhost:8090，连不上服务器"
+            exit 1
+          fi
+          echo "EASYSHARE_LDFLAGS=-X easyshare/internal/config.defaultPlatformBaseURL=${PLATFORM_URL}" >> "$GITHUB_ENV"
+          echo "烘焙控制面地址：${PLATFORM_URL}"
 
       - name: 构建 Core、App 与 DMG
         run: |
@@ -126,6 +139,17 @@ jobs:
             esac
 
             ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ZIP"
+
+            # 断言控制面地址真的进了二进制：ldflags 漏传时构建无异常，
+            # 只是包指向 localhost，发布出去同事才发现登不进去。
+            for bin in "$APP_EXEC" "$CORE_EXEC"; do
+              if ! strings "$bin" | grep -qF "${PLATFORM_URL}"; then
+                echo "::error::$bin 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
+                exit 1
+              fi
+              echo "OK: $bin 已烘焙 ${PLATFORM_URL}"
+            done
+
             cd build/bin
             shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
           } 2>&1 | tee build/logs/artifact-validation.log
