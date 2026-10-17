@@ -1620,6 +1620,49 @@ func (a *App) CloudMove(key, targetDir string) error {
 	return err
 }
 
+// CloudStar 设置或取消星标。
+//
+// 星标是「用户 × 路径」的标记，不挂 fileId——同名文件删掉重建会换 fileId，
+// 但用户认知里星标的还是那个位置。
+func (a *App) CloudStar(key string, starred bool) error {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	err = client.Star(a.ctx, token, drive.SpacePersonal, key, starred)
+	a.reportError("cloud star", err)
+	return err
+}
+
+// CloudStars 取当前空间的星标路径列表。
+func (a *App) CloudStars() ([]string, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.Stars(a.ctx, token, drive.SpacePersonal)
+}
+
+// CloudTouch 记录一次最近访问。
+//
+// 刻意不返回 error：这是埋点，记录失败不该让「打开文件」这件事跟着失败。
+func (a *App) CloudTouch(key string) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return
+	}
+	_ = client.Touch(a.ctx, token, drive.SpacePersonal, key)
+}
+
+// CloudRecents 取最近访问路径（时间倒序）。
+func (a *App) CloudRecents(limit int) ([]string, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.Recents(a.ctx, token, drive.SpacePersonal, limit)
+}
+
 // ── 回收站（P1，wps-cloud-drive-benchmark.md §6-P1）──────────────────────
 // 三个导出方法直通控制面；fileId 是回收站内唯一定位方式（挂 fileId，不绑路径）。
 

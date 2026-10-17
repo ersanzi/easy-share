@@ -114,6 +114,22 @@ export function CloudMove(arg1, arg2) {
   return window['go']['main']['App']['CloudMove'](arg1, arg2);
 }
 
+export function CloudStar(arg1, arg2) {
+  return window['go']['main']['App']['CloudStar'](arg1, arg2);
+}
+
+export function CloudStars() {
+  return window['go']['main']['App']['CloudStars']();
+}
+
+export function CloudTouch(arg1) {
+  return window['go']['main']['App']['CloudTouch'](arg1);
+}
+
+export function CloudRecents(arg1) {
+  return window['go']['main']['App']['CloudRecents'](arg1);
+}
+
 export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }

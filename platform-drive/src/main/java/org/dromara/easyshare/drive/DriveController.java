@@ -76,6 +76,8 @@ public class DriveController {
      * 与 SpaceService 共用同一个 Mapper（同一张 sys_user 投影），不再单独建 DAO。
      */
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
+    /** 星标 / 最近访问 */
+    private final org.dromara.easyshare.drive.service.FileMarkService markService;
 
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
@@ -497,6 +499,68 @@ public class DriveController {
     }
 
     /**
+     * 当前空间下该用户的星标路径集合。
+     *
+     * <p>只返回路径不返回文件信息：星标是「在列表里打标」的辅助视图，
+     * 列表本来就会拿到完整对象，前端按路径匹配即可，不必重复传一遍元数据。
+     *
+     * @param space personal / shared
+     * @return 星标路径集合
+     */
+    @GetMapping("/stars")
+    public R<Set<String>> stars(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        return R.ok(markService.starredPaths(LoginHelper.getUserId(), space));
+    }
+
+    /**
+     * 设置或取消星标。
+     *
+     * @param body 相对路径 + 目标状态
+     * @return 操作后的状态（true=已星标）
+     */
+    @PostMapping("/star")
+    public R<Boolean> star(@Validated @RequestBody StarBo body) {
+        Long userId = LoginHelper.getUserId();
+        String space = body.space() == null || body.space().isBlank()
+            ? EsSpace.TYPE_PERSONAL : body.space();
+        return R.ok(markService.setStar(userId, space, body.path(), body.starred()));
+    }
+
+    /**
+     * 记录一次最近访问（打开 / 预览 / 下载时由客户端上报）。
+     *
+     * <p>不返回内容：这是埋点语义，写失败不该阻断用户正在做的事。
+     *
+     * @param body 相对路径
+     */
+    @PostMapping("/touch")
+    public R<Void> touch(@Validated @RequestBody PathBo body) {
+        // PathBo 的 path 没有 @NotBlank（别的接口允许只给 fileId），这里自己兜
+        if (body.path() == null || body.path().isBlank()) {
+            return R.ok();
+        }
+        Long userId = LoginHelper.getUserId();
+        String space = body.space() == null || body.space().isBlank()
+            ? EsSpace.TYPE_PERSONAL : body.space();
+        markService.touch(userId, space, body.path());
+        return R.ok();
+    }
+
+    /**
+     * 最近访问路径（按时间倒序）。
+     *
+     * @param space personal / shared
+     * @param limit 条数上限，服务端再兜一次
+     * @return 路径列表
+     */
+    @GetMapping("/recents")
+    public R<List<String>> recents(
+        @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space,
+        @RequestParam(defaultValue = "30") int limit) {
+        return R.ok(markService.recentPaths(LoginHelper.getUserId(), space, limit));
+    }
+
+    /**
      * 取可读空间的前缀。个人空间无需授权（自己的），共享空间要有成员行。
      */
     private String readablePrefix(String space) {
@@ -513,6 +577,19 @@ public class DriveController {
      * @param space personal / shared，空则按个人空间
      * @param fileId 目录层稳定文件 ID，可选；给出时优先于 path
      */
+    /**
+     * 星标请求。
+     *
+     * @param path    空间内相对路径
+     * @param starred true=打星标，false=取消
+     * @param space   personal / shared，空则按个人空间
+     */
+    public record StarBo(
+        @NotBlank String path,
+        boolean starred,
+        String space) {
+    }
+
     public record PathBo(
         String path,
         String space,

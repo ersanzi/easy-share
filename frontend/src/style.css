@@ -841,6 +841,41 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .cloud-row.has-check:hover .icon-glyph,
 .cloud-row.checked .icon-glyph { opacity: 0; }
 
+/* ─── 星标 ─── */
+.star-filter {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+  height: 28px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: #fff; color: var(--muted); font-size: 12px; cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.star-filter:hover { background: var(--bg-hover); color: var(--text); }
+.star-filter svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.star-filter.on {
+  color: var(--amber); border-color: rgba(var(--amber-rgb), .45);
+  background: rgba(var(--amber-rgb), .08); font-weight: 600;
+}
+.star-filter.on svg { fill: currentColor; }
+
+/* 行内星标徽章：钉在图标右上角，不占任何一列，三列对齐不受影响 */
+.star-badge {
+  position: absolute; right: -3px; top: -3px;
+  width: 12px; height: 12px;
+  fill: var(--amber); stroke: #fff; stroke-width: 1.5;
+  pointer-events: none;
+}
+
+/* 详情面板的星标开关 */
+.detail-star {
+  flex: 0 0 auto; width: 24px; height: 24px; display: grid; place-items: center;
+  border: 0; background: none; border-radius: var(--r-sm); color: var(--faint);
+  cursor: pointer; transition: color .12s, background .12s;
+}
+.detail-star svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.detail-star:hover { background: rgba(var(--fill-rgb),.1); color: var(--amber); }
+.detail-star.on { color: var(--amber); }
+.detail-star.on svg { fill: currentColor; }
+
 /* ─── 批量操作条：与工具栏同高，切换时列表不跳动 ─── */
 .cloud-batch-bar {
   display: flex; align-items: center; gap: 10px;

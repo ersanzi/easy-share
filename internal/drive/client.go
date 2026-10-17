@@ -352,6 +352,54 @@ func (c *Client) Move(ctx context.Context, token, space, from, to string) error 
 	return c.call(ctx, http.MethodPost, "/easyshare/drive/move", token, body, nil)
 }
 
+// Star 设置或取消星标（starred=false 为取消）。
+func (c *Client) Star(ctx context.Context, token, space, path string, starred bool) error {
+	body, err := json.Marshal(map[string]any{
+		"path": path, "starred": starred, "space": normalizeSpace(space),
+	})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodPost, "/easyshare/drive/star", token, body, nil)
+}
+
+// Stars 取当前空间下该用户的星标路径集合。
+//
+// 只回路径不回文件信息：星标是在列表里打标的辅助视图，
+// 列表本身已经带完整对象，前端按路径匹配即可。
+func (c *Client) Stars(ctx context.Context, token, space string) ([]string, error) {
+	var paths []string
+	endpoint := "/easyshare/drive/stars?space=" + url.QueryEscape(normalizeSpace(space))
+	if err := c.call(ctx, http.MethodGet, endpoint, token, nil, &paths); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// Touch 记录一次最近访问。
+//
+// 埋点语义：调用方可以吞掉错误——记录「最近」失败不该阻断用户正在做的打开/下载。
+func (c *Client) Touch(ctx context.Context, token, space, path string) error {
+	body, err := json.Marshal(map[string]string{
+		"path": path, "space": normalizeSpace(space),
+	})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodPost, "/easyshare/drive/touch", token, body, nil)
+}
+
+// Recents 取最近访问路径（时间倒序）。
+func (c *Client) Recents(ctx context.Context, token, space string, limit int) ([]string, error) {
+	var paths []string
+	endpoint := "/easyshare/drive/recents?space=" + url.QueryEscape(normalizeSpace(space)) +
+		"&limit=" + strconv.Itoa(limit)
+	if err := c.call(ctx, http.MethodGet, endpoint, token, nil, &paths); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
 // normalizeSpace 兜空空间名。空字符串按个人空间——旧调用方不传时行为不变。
 func normalizeSpace(space string) string {
 	if space == "" {

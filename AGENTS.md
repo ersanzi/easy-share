@@ -70,6 +70,31 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 | Explorer 缓存顽固 | 改注册表后须 Stop-Process explorer 重启，清 iconcache/thumbcache |
 | macOS 链接重复 `AppDelegate` | Wails 与 getlantern/systray 的 Darwin 实现都会定义/接管 AppDelegate；macOS 不得导入 systray，必须使用只创建 `NSStatusItem` 的 `tray_native_darwin.m`，且不可用 linker suppress 掩盖 |
 
+## 界面设计体系（以 WPS KD 为准）
+
+颜色、圆角、字号、阴影一律走 `frontend/src/style.css` 的 `:root` token，**组件里不写字面色值**。
+体系来源与全部实测数据见 [`docs/wps-dingtalk-ui-reverse.md`](docs/wps-dingtalk-ui-reverse.md)（WPS `.kuip` 明文 XML 逆向 + 钉钉逐像素测量）。
+
+四条硬约束（违反其中任一条都会让界面「看着不像专业软件」）：
+
+1. **中性色带 220° 蓝相，越浅越去饱和**（S 31%→14%）。不要用纯灰，纯灰会发死。
+2. **品牌色 S=76%，不用满饱和蓝**（`#1F69E0` 而非 `#007aff`）。大屏上满饱和会刺眼。
+3. **透明叠加用「深色基 + alpha」**：`--line-rgb`/`--fill-rgb` 都是 `38,46,62`。用浅色基配低 alpha（如 `228,230,235` + `.12`）在白底上会淡到看不见。
+4. **`var()` 不能直接塞进 `rgba()`**，必须拆 `--x-rgb: r,g,b` 三元组。
+
+## 逆向取证：该用 REA 时必须用
+
+本机 REA 工具链的安装、耗时基线、大目标通路见 [`docs/toolchain-rea.md`](docs/toolchain-rea.md)。
+
+**以下情况必须上 REA 取证，不许凭印象下结论：**
+
+1. 第三方软件（钉钉 / WPS / 竞品）的**行为**无法从文档、资源文件、界面推断时——协议格式、加密方式、状态机、错误码取值域、注册表写入时机。
+2. 需要给出**可复现证据**的判断。REA 每次返回 `evidence_id`（`ev_<sha256>`），写文档要引用它，不要只写「反编译看到」。
+3. 排查疑难现场（谁改了这个键、占位符何时触发、失败分支走了哪条）需要确认「程序到底做了什么」。
+
+**反向的一条同样重要：视觉/设计层的逆向不要用 REA。**
+配色、圆角、字号不写在机器码里，而是以数据躺在资源包内——WPS 的 `office6/**/*.kuip` 是明文 XML，钉钉的 `web_content.dat` 是 AES 加密的 ZIP。解析资源比反编译快一个量级，Ghidra 在这里只会浪费时间。
+
 ## 架构边界
 
 - UI 不直接依赖 WebDAV；文件入口是 Core 提供的一种能力

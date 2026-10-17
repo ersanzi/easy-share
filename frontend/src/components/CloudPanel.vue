@@ -330,6 +330,52 @@ const doBatchDelete = async () => {
   await loadFiles()
 }
 
+// ─── 星标 ───
+// 星标挂在「用户 × 路径」上（控制面 es_file_mark），不跟 fileId 走：
+// 同名文件删掉重建会换 fileId，但用户认知里星标的还是那个位置。
+const starredKeys = ref<Set<string>>(new Set())
+const onlyStarred = ref(false)
+
+const loadStars = async () => {
+  try {
+    const paths = await core.cloudStars()
+    starredKeys.value = new Set(paths)
+  } catch {
+    // 星标拉不到不该拖垮主列表：降级为空集合，星标功能暂时不可见
+    starredKeys.value = new Set()
+  }
+}
+
+const isStarred = (key: string) => starredKeys.value.has(key)
+
+const toggleStar = async (file: CloudFile) => {
+  const next = !isStarred(file.key)
+  // 先改本地再发请求：星星是即时反馈，等一个往返会让点击显得迟钝
+  const optimistic = new Set(starredKeys.value)
+  if (next) optimistic.add(file.key)
+  else optimistic.delete(file.key)
+  starredKeys.value = optimistic
+  try {
+    await core.cloudStar(file.key, next)
+  } catch {
+    // 写失败就回滚，不能让界面停在一个没存下来的状态
+    const rollback = new Set(starredKeys.value)
+    if (next) rollback.delete(file.key)
+    else rollback.add(file.key)
+    starredKeys.value = rollback
+    showNotice('星标保存失败，请稍后重试')
+  }
+}
+
+// 「只看星标」时文件夹一并隐藏：文件夹没有星标概念，留着会让筛选结果自相矛盾
+const displayedFiles = computed(() =>
+  onlyStarred.value ? view.value.files.filter(f => isStarred(f.key)) : view.value.files)
+const displayedFolders = computed(() => (onlyStarred.value ? [] : view.value.folders))
+const visibleCount = computed(() => displayedFolders.value.length + displayedFiles.value.length)
+
+// 最近访问埋点：失败静默，记录「最近」不该阻断用户正在做的事
+const touchRecent = (key: string) => { void core.cloudTouch(key) }
+
 // ─── 打开文件（双击 / Enter）───
 // 可预览的直接开预览；其余类型不做隐式下载——下载会弹保存对话框，
 // 误触的代价比「没反应」高，所以改成明确告知。
@@ -337,6 +383,7 @@ const openFile = (file: CloudFile) => {
   // 双击前浏览器会先触发两次 click，而 selectFile 是「同 key 反选」——
   // 第二次点击已经把它取消了，这里纠回选中态，否则打开后详情面板会莫名收起。
   selectedFile.value = file
+  touchRecent(file.key)
   if (file.previewKind !== 'unsupported') {
     openPreview(file)
     return
@@ -374,6 +421,7 @@ const runCtx = (action: (file: CloudFile) => void) => {
 const ctxPreview = () => runCtx(file => openFile(file))
 const ctxDownload = () => runCtx(file => emit('download', file.key))
 const ctxShare = () => runCtx(file => { void requestShare(file.key) })
+const ctxStar = () => runCtx(file => { void toggleStar(file) })
 const ctxRename = () => runCtx(() => startRename())
 const ctxMove = () => runCtx(() => {
   moveMode.value = 'single'
@@ -514,6 +562,8 @@ const closePreview = () => {
 }
 
 const openPreview = async (file: CloudFile) => {
+  // 预览也算一次访问：从行内按钮进来时不经过 openFile，这里补埋点
+  touchRecent(file.key)
   previewOpen.value = true
   previewLoading.value = true
   previewError.value = ''
@@ -565,6 +615,7 @@ onMounted(() => {
   loadFiles()
   loadCfapiPath()
   loadSpaceUsage()
+  loadStars()
   document.addEventListener('keydown', onGlobalKeydown)
   document.addEventListener('click', closeCtxMenu)
   window.addEventListener('resize', closeCtxMenu)
@@ -628,6 +679,16 @@ defineExpose({ refresh: loadFiles })
           上传文件夹
         </button>
         <div class="cloud-nav-tools">
+          <button
+            class="star-filter"
+            type="button"
+            :class="{ on: onlyStarred }"
+            :title="onlyStarred ? '显示全部文件' : '只看已星标'"
+            @click="onlyStarred = !onlyStarred"
+          >
+            <svg viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.8Z"/></svg>
+            星标
+          </button>
           <div class="cloud-search">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
             <input
@@ -686,7 +747,7 @@ defineExpose({ refresh: loadFiles })
         </template>
         <!-- 项数与总大小合到一处：列头让位给真正的三列，这里做上下文摘要 -->
         <span class="crumb-size">
-          {{ view.folderCount + view.fileCount }} 项<template v-if="view.totalSize"> · {{ formatSize(view.totalSize) }}</template>
+          {{ visibleCount }} 项<template v-if="view.totalSize && !onlyStarred"> · {{ formatSize(view.totalSize) }}</template>
         </span>
         <!-- 用量常驻（对标 WPS 侧栏底部用量条）：放在面包屑右侧当作「这个盘的体量」上下文 -->
         <div v-if="spaceUsage" class="cloud-usage" :title="usageLabel">
@@ -701,16 +762,17 @@ defineExpose({ refresh: loadFiles })
         <strong>加载中…</strong>
       </div>
 
-      <div v-else-if="!view.folders.length && !view.files.length" class="empty-state compact-empty">
+      <div v-else-if="!visibleCount" class="empty-state compact-empty">
         <span class="empty-illustration cloud-empty">
           <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
         </span>
-        <strong>{{ view.searching ? '没有匹配的文件' : '此文件夹为空' }}</strong>
-        <p>{{ view.searching ? '换个关键词，或回到上级目录再试。' : '点击上方"上传文件"将文件存储到云端。' }}</p>
+        <strong>{{ onlyStarred ? '还没有星标文件' : (view.searching ? '没有匹配的文件' : '此文件夹为空') }}</strong>
+        <p v-if="onlyStarred">在文件上右键，或打开右侧详情点星星，即可加入星标。</p>
+        <p v-else>{{ view.searching ? '换个关键词，或回到上级目录再试。' : '点击上方"上传文件"将文件存储到云端。' }}</p>
       </div>
 
       <div v-else class="cloud-list">
-        <article v-for="folder in view.folders" :key="folder.path" class="cloud-row folder-row" role="button" tabindex="0" @click="enterFolder(folder.path)" @keydown.enter="enterFolder(folder.path)">
+        <article v-for="folder in displayedFolders" :key="folder.path" class="cloud-row folder-row" role="button" tabindex="0" @click="enterFolder(folder.path)" @keydown.enter="enterFolder(folder.path)">
           <div class="cloud-icon folder-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           </div>
@@ -727,7 +789,7 @@ defineExpose({ refresh: loadFiles })
         </article>
 
         <article
-          v-for="file in view.files"
+          v-for="file in displayedFiles"
           :key="file.key"
           class="cloud-row has-check"
           :class="{ on: selectedFile?.key === file.key, checked: checkedHas(file.key) }"
@@ -744,6 +806,8 @@ defineExpose({ refresh: loadFiles })
               :title="checkedHas(file.key) ? '取消选择' : '选择'"
               @click.stop="toggleCheck(file.key)"
             ><i></i></button>
+            <!-- 星标徽章钉在图标右上角：不进任何一列，三列对齐不会被它破坏 -->
+            <svg v-if="isStarred(file.key)" class="star-badge" aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.8Z"/></svg>
           </div>
           <div class="cloud-info">
             <strong>{{ file.name }}</strong>
@@ -792,6 +856,13 @@ defineExpose({ refresh: loadFiles })
         <div class="detail-title">
           <template v-if="!renaming">
             <h2 class="detail-name" :title="detail.name">{{ detail.name }}</h2>
+            <button
+              class="detail-star"
+              :class="{ on: isStarred(detail.key) }"
+              type="button"
+              :title="isStarred(detail.key) ? '取消星标' : '添加星标'"
+              @click="toggleStar(detail)"
+            ><svg viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.8Z"/></svg></button>
             <button class="detail-rename" type="button" title="重命名" @click="startRename">
               <svg viewBox="0 0 24 24"><path d="M4 19.5h4L19 8.5a2.1 2.1 0 0 0-3-3L5 16.5Z"/></svg>
             </button>
@@ -844,6 +915,7 @@ defineExpose({ refresh: loadFiles })
     <button v-if="ctxMenu.file.previewKind !== 'unsupported'" class="ctx-item" type="button" @click="ctxPreview">预览</button>
     <button class="ctx-item" type="button" @click="ctxDownload">下载</button>
     <button class="ctx-item" type="button" @click="ctxShare">分享链接</button>
+    <button class="ctx-item" type="button" @click="ctxStar">{{ ctxMenu.file && isStarred(ctxMenu.file.key) ? '取消星标' : '添加星标' }}</button>
     <div class="ctx-sep"></div>
     <button class="ctx-item" type="button" @click="ctxRename">重命名</button>
     <button class="ctx-item" type="button" @click="ctxMove">移动到…</button>

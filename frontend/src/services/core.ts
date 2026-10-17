@@ -26,6 +26,10 @@ import {
   CloudDownload,
   CloudRename,
   CloudMove,
+  CloudStar,
+  CloudStars,
+  CloudTouch,
+  CloudRecents,
   CloudList,
   CloudPreview,
   CloudRecycleList,
@@ -178,6 +182,11 @@ export const core = {
   cloudRename: CloudRename,
   // 移动只换目录、名字不变（同样走 /move，但拒绝 .. 逃逸）
   cloudMove: CloudMove,
+  // 星标：用户 × 路径的标记；最近访问是埋点，失败可忽略
+  cloudStar: CloudStar,
+  cloudStars: CloudStars,
+  cloudTouch: CloudTouch,
+  cloudRecents: CloudRecents,
   cloudShare: CloudShare,
   // 回收站（P1）：列表/还原/彻底删除；还原冲突时控制面返回可读错误
   cloudRecycleList: () => CloudRecycleList() as Promise<RecycleEntry[]>,
