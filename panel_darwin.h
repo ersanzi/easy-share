@@ -23,9 +23,15 @@ void easyshare_panel_schedule_hide(void);
 // （需辅助功能授权，未授权时降级为仅复制）。
 void easyshare_panel_paste_after_hide(void);
 
+// 下面两个函数由 panel_darwin.go 的 //export 生成，声明必须**与 cgo 生成的签名
+// 逐字一致**：cgo 会把本头文件塞进 _cgo_export.c 的 prolog，手写成
+// `const char* f(const char*)` 会与生成的 `char* f(char*)` 判为
+// conflicting types，macOS 直接编不过（tray_native_darwin.h 里的 void 版本
+// 不带 const，所以那边从来没冲突）。不要用 const。
+
 // 处理面板页发来的一条消息（JSON 信封），返回要在页面执行的 JS；
 // 无需回复返回 NULL。返回串由调用方 free。
-const char* easysharePanelMessage(const char* json);
+char* easysharePanelMessage(char* json);
 
 // 返回「面板已弹出」事件的分发脚本（SDK 协议的 Go 侧单一事实源）；调用方 free。
-const char* easysharePanelShownScript(void);
+char* easysharePanelShownScript(void);

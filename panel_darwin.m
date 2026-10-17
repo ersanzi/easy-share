@@ -247,7 +247,9 @@ static OSStatus ESPanelHotKeyHandler(EventHandlerCallRef next, EventRef event, v
   if (!json) return;
   NSString *text = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
 
-  const char *reply = easysharePanelMessage(text.UTF8String);
+  // UTF8String 是 const char*，而导出的形参是 char*（cgo 生成签名不带 const），
+  // 这里只是把只读串传进去做解析，不做修改，强转丢掉 const 是安全的。
+  const char *reply = easysharePanelMessage((char *)text.UTF8String);
   if (reply) {
     NSString *js = [NSString stringWithUTF8String:reply];
     free((void *)reply);
