@@ -178,21 +178,16 @@ jobs:
             # 取 ${#arr[@]} 会直接报 unbound variable。
             MISSING=""
             bytes_hit() {
-              # 字节级包含判定：与 Windows 侧 ReadAllBytes + Contains 同语义
-              python3 -c 'import sys
-data = open(sys.argv[1], "rb").read()
-sys.exit(0 if sys.argv[2].encode() in data else 1)' "$1" "$2"
+              # 字节级包含判定：与 Windows 侧 ReadAllBytes + Contains 同语义。
+              # python 代码必须保持单行——run: | 块标量内顶格的多行会被 YAML 当作
+              # 新键解析，直接语法错误（v0.4.0 第三轮就这么挂过一次）。
+              python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); sys.exit(0 if sys.argv[2].encode() in d else 1)' "$1" "$2"
             }
             bytes_count() {
-              python3 -c 'import sys
-data = open(sys.argv[1], "rb").read()
-print(data.count(sys.argv[2].encode()))' "$1" "$2"
+              python3 -c 'import sys; d=open(sys.argv[1],"rb").read(); print(d.count(sys.argv[2].encode()))' "$1" "$2"
             }
             bytes_urls() {
-              python3 -c 'import re, sys
-data = open(sys.argv[1], "rb").read()
-urls = sorted(set(u.decode() for u in re.findall(rb"https?://[0-9a-zA-Z.:_/-]+", data)))
-print(" ".join(urls[:8]))' "$1"
+              python3 -c 'import re,sys; d=open(sys.argv[1],"rb").read(); print(" ".join(sorted(set(u.decode() for u in re.findall(rb"https?://[0-9a-zA-Z.:_/-]+", d)))[:8]))' "$1"
             }
             check_baked_url() {
               local binary="$1"
