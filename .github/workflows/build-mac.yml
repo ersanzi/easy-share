@@ -163,34 +163,49 @@ jobs:
             # 于是「一半用户连不上」这种最坏情况会被判为通过。切片查把每个架构都验一遍，
             # 漏注入与半注入都会硬失败。
             #
-            # 为什么是 strings -a 而不是 strings：macOS 的 strings 默认只扫 initialized
-            # data section（__DATA 等），Go 的字符串常量在只读段，默认参数扫不到。
-            # -a 强制扫全文件。Windows 侧走 ReadAllBytes 字节级扫描，没有段的概念，
-            # 所以同一处检查在 Windows 上从未误报过——不是 Windows 注入了、macOS 没注入，
-            # 是两边查法不同。
+            # 为什么用 python3 字节级判定而不是 strings：macOS strings 对 Mach-O 有段语义
+            # （默认只扫 __DATA，-a 的覆盖范围与 GNU strings 也不是一回事），v0.3.2/v0.4.0
+            # 两轮的「未找到」都栽在它上面——连 CGO_ENABLED=0 的 Core（本地同款 go build
+            # 命令，binutils strings 稳定命中 3 次）都判缺失。Windows 侧走 ReadAllBytes +
+            # Contains，没有段的概念，从未误报。这里改用与 Windows 同款的字节级 in 判定，
+            # 扫不到就是真不在；strings 抽样降级为对照输出。
             #
-            # 【v0.4.0 实测教训】改 -a 之后 x86_64 切片**仍然**报未找到——段扫描不是
-            # （唯一）真因。而旧实现查到第一个缺失就 return，于是「只有 x86_64 缺」
-            # 还是「两个架构都缺」、App 缺还是 Core 也缺，永远看不出来——而这几种
-            # 情况的修法完全不同。故改为：**全部查完再统一判定**，每个缺失打全线索：
-            # localhost 有命中 = 注入了但值是源码默认（ldflags 没进来/被覆盖）；
-            # 两者都无 = 符号在二进制里压根不存在（被优化掉或没链进去）。
-            # 空数组累积用字符串而非 bash 数组：runner 的 bash 3.2 在 set -u 下
-            # 对空数组取 ${#arr[@]} 会直接报 unbound variable。
+            # 【实测教训】旧实现查到第一个缺失就 return，于是「只有 x86_64 缺」还是
+            # 「两个架构都缺」、App 缺还是 Core 也缺永远看不出来——而这几种原因的修法
+            # 完全不同。故改为全部查完再统一判定。诊断行走 ::error:: 前缀：普通 echo
+            # 只进日志文件，会被第 12 步的 tail -n 挤掉，而匿名只能拿到 annotations。
+            # 空累积用字符串而非 bash 数组：runner 的 bash 3.2 在 set -u 下对空数组
+            # 取 ${#arr[@]} 会直接报 unbound variable。
             MISSING=""
+            bytes_hit() {
+              # 字节级包含判定：与 Windows 侧 ReadAllBytes + Contains 同语义
+              python3 -c 'import sys
+data = open(sys.argv[1], "rb").read()
+sys.exit(0 if sys.argv[2].encode() in data else 1)' "$1" "$2"
+            }
+            bytes_count() {
+              python3 -c 'import sys
+data = open(sys.argv[1], "rb").read()
+print(data.count(sys.argv[2].encode()))' "$1" "$2"
+            }
+            bytes_urls() {
+              python3 -c 'import re, sys
+data = open(sys.argv[1], "rb").read()
+urls = sorted(set(u.decode() for u in re.findall(rb"https?://[0-9a-zA-Z.:_/-]+", data)))
+print(" ".join(urls[:8]))' "$1"
+            }
             check_baked_url() {
               local binary="$1"
               local archs
               archs="$(lipo -archs "$binary" 2>/dev/null || true)"
               if [ -z "$archs" ]; then
                 # 非 fat 二进制（单架构构建）直接扫；lipo 不可用时也走这里。
-                if strings -a "$binary" | grep -qF "${PLATFORM_URL}"; then
-                  echo "OK: $binary 已烘焙 ${PLATFORM_URL}"
+                if bytes_hit "$binary" "${PLATFORM_URL}"; then
+                  echo "OK: $binary 已烘焙 ${PLATFORM_URL}（命中 $(bytes_count "$binary" "${PLATFORM_URL}") 次）"
                 else
                   echo "::error::$binary 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
-                  echo "  切片大小: $(wc -c < "$binary" | tr -d ' ')"
-                  echo "  localhost:8090 命中次数: $(strings -a "$binary" | grep -cF 'http://localhost:8090' || true)"
-                  echo "  同类地址抽样: $(strings -a "$binary" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
+                  echo "::error::  大小 $(wc -c < "$binary" | tr -d ' ') 字节；localhost:8090 命中 $(bytes_count "$binary" "http://localhost:8090") 次"
+                  echo "::error::  二进制内全部 URL 抽样: $(bytes_urls "$binary")"
                   MISSING="$MISSING $binary"
                 fi
                 return 0
@@ -207,13 +222,13 @@ jobs:
                   MISSING="$MISSING $binary($arch)"
                   continue
                 fi
-                if strings -a "$slice" | grep -qF "${PLATFORM_URL}"; then
-                  echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
+                if bytes_hit "$slice" "${PLATFORM_URL}"; then
+                  echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}（命中 $(bytes_count "$slice" "${PLATFORM_URL}") 次）"
                 else
                   echo "::error::$binary ($arch) 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
-                  echo "  切片大小: $(wc -c < "$slice" | tr -d ' ')"
-                  echo "  localhost:8090 命中次数: $(strings -a "$slice" | grep -cF 'http://localhost:8090' || true)"
-                  echo "  同类地址抽样: $(strings -a "$slice" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
+                  echo "::error::  切片大小 $(wc -c < "$slice" | tr -d ' ') 字节；localhost:8090 命中 $(bytes_count "$slice" "http://localhost:8090") 次"
+                  echo "::error::  切片内全部 URL 抽样: $(bytes_urls "$slice")"
+                  echo "::error::  strings -a 对照命中 $(strings -a "$slice" | grep -cF "${PLATFORM_URL}" || true) 次"
                   MISSING="$MISSING $binary($arch)"
                 fi
               done
@@ -235,7 +250,9 @@ jobs:
         run: |
           echo "### macOS 构建失败日志" >> "$GITHUB_STEP_SUMMARY"
           echo '```text' >> "$GITHUB_STEP_SUMMARY"
-          cat build/logs/*.log | tail -n 200 | tee -a "$GITHUB_STEP_SUMMARY"
+          # 先 validation 后 build log：前者短且带断言诊断，混在一起 tail 会被
+          # Wails 的长日志挤出 200 行窗口，匿名看 annotations 时等于没有
+          cat build/logs/artifact-validation.log build/logs/macos-build.log 2>/dev/null | tail -n 200 | tee -a "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
           log_tail="$(cat build/logs/*.log | tail -n 100)"
