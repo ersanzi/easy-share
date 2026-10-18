@@ -164,15 +164,21 @@ jobs:
             # 漏注入与半注入都会硬失败。
             #
             # 为什么是 strings -a 而不是 strings：macOS 的 strings 默认只扫 initialized
-            # data section（__DATA 等），而 Go 的字符串常量在只读段（__TEXT/__cstring），
-            # 默认参数扫不到 → ldflags 明明注入成功（Wails 日志的 LDFlags 行可证）却报
-            # 「未找到」，纯假失败。-a 强制扫全文件。Windows 侧走 ReadAllBytes 字节级扫描，
-            # 没有段的概念，所以同一处检查在 Windows 上从未误报过——不是 Windows 注入了、
-            # macOS 没注入，是两边查法不同。
+            # data section（__DATA 等），Go 的字符串常量在只读段，默认参数扫不到。
+            # -a 强制扫全文件。Windows 侧走 ReadAllBytes 字节级扫描，没有段的概念，
+            # 所以同一处检查在 Windows 上从未误报过——不是 Windows 注入了、macOS 没注入，
+            # 是两边查法不同。
             #
-            # 失败时把排查线索一并打出来：这个地址在二进制里出现了几次、
-            # 切片是否真的切出来了。裸一句「未找到」无法区分「没注入」与「查法不对」。
-            verify_baked_url() {
+            # 【v0.4.0 实测教训】改 -a 之后 x86_64 切片**仍然**报未找到——段扫描不是
+            # （唯一）真因。而旧实现查到第一个缺失就 return，于是「只有 x86_64 缺」
+            # 还是「两个架构都缺」、App 缺还是 Core 也缺，永远看不出来——而这几种
+            # 情况的修法完全不同。故改为：**全部查完再统一判定**，每个缺失打全线索：
+            # localhost 有命中 = 注入了但值是源码默认（ldflags 没进来/被覆盖）；
+            # 两者都无 = 符号在二进制里压根不存在（被优化掉或没链进去）。
+            # 空数组累积用字符串而非 bash 数组：runner 的 bash 3.2 在 set -u 下
+            # 对空数组取 ${#arr[@]} 会直接报 unbound variable。
+            MISSING=""
+            check_baked_url() {
               local binary="$1"
               local archs
               archs="$(lipo -archs "$binary" 2>/dev/null || true)"
@@ -182,11 +188,10 @@ jobs:
                   echo "OK: $binary 已烘焙 ${PLATFORM_URL}"
                 else
                   echo "::error::$binary 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
-                  echo "  期望字节: ${PLATFORM_URL}"
-                  echo "  实际命中次数: $(strings -a "$binary" | grep -cF "${PLATFORM_URL}" || true)"
-                  echo "  文件大小: $(wc -c < "$binary" | tr -d ' ')"
+                  echo "  切片大小: $(wc -c < "$binary" | tr -d ' ')"
+                  echo "  localhost:8090 命中次数: $(strings -a "$binary" | grep -cF 'http://localhost:8090' || true)"
                   echo "  同类地址抽样: $(strings -a "$binary" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
-                  return 1
+                  MISSING="$MISSING $binary"
                 fi
                 return 0
               fi
@@ -199,19 +204,27 @@ jobs:
                 local slice="$tmpdir/slice-$arch.bin"
                 if ! lipo "$binary" -thin "$arch" -output "$slice" 2>&1; then
                   echo "::error::无法从 $binary 抽出 $arch 切片"
-                  return 1
+                  MISSING="$MISSING $binary($arch)"
+                  continue
                 fi
-                if ! strings -a "$slice" | grep -qF "${PLATFORM_URL}"; then
+                if strings -a "$slice" | grep -qF "${PLATFORM_URL}"; then
+                  echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
+                else
                   echo "::error::$binary ($arch) 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
                   echo "  切片大小: $(wc -c < "$slice" | tr -d ' ')"
+                  echo "  localhost:8090 命中次数: $(strings -a "$slice" | grep -cF 'http://localhost:8090' || true)"
                   echo "  同类地址抽样: $(strings -a "$slice" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
-                  return 1
+                  MISSING="$MISSING $binary($arch)"
                 fi
-                echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
               done
+              return 0
             }
-            verify_baked_url "$APP_EXEC"
-            verify_baked_url "$CORE_EXEC"
+            check_baked_url "$APP_EXEC"
+            check_baked_url "$CORE_EXEC"
+            if [ -n "$MISSING" ]; then
+              echo "::error::以下产物缺失控制面地址：$MISSING"
+              exit 1
+            fi
 
             cd build/bin
             shasum -a 256 EasyShare.dmg EasyShare.app.zip > SHA256SUMS.txt
