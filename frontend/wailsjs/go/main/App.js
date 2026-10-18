@@ -114,6 +114,10 @@ export function CloudList() {
   return window['go']['main']['App']['CloudList']();
 }
 
+export function CloudMkdir(arg1, arg2) {
+  return window['go']['main']['App']['CloudMkdir'](arg1, arg2);
+}
+
 export function CloudMove(arg1, arg2) {
   return window['go']['main']['App']['CloudMove'](arg1, arg2);
 }

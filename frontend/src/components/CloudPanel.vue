@@ -258,6 +258,52 @@ const openMove = () => {
   moveOpen.value = true
 }
 
+// ─── 新建文件夹（名称输入浮层）───
+// 目录在服务端是「键以 / 结尾的 0 字节标记对象」：建完列表立即可见，
+// 点进去能继续上传。重复创建同名幂等成功，与本地文件系统行为对齐。
+const mkdirOpen = ref(false)
+const mkdirName = ref('')
+const mkdirBusy = ref(false)
+const mkdirInput = ref<HTMLInputElement | null>(null)
+
+const openMkdir = () => {
+  mkdirName.value = ''
+  mkdirOpen.value = true
+  // 打开即聚焦输入框：这个对话框的唯一目的就是打字，少一次点击
+  void nextTick(() => mkdirInput.value?.focus())
+}
+
+const commitMkdir = async () => {
+  if (mkdirBusy.value) return
+  const name = mkdirName.value.trim()
+  if (!name) {
+    showNotice('文件夹名不能为空')
+    return
+  }
+  mkdirBusy.value = true
+  try {
+    await core.cloudMkdir(currentPath.value, name)
+    mkdirOpen.value = false
+    await loadFiles()
+  } catch (err) {
+    // 服务端拒掉的路径（分隔符 / .. 等）原样透出，用户知道该怎么改
+    showNotice(err instanceof Error ? err.message : '新建文件夹失败')
+  } finally {
+    mkdirBusy.value = false
+  }
+}
+
+// 删除文件夹（只针对空文件夹）：非空时拒绝——递归删子树的事务边界没解决之前，
+// 不给用户一个「看起来删掉了、实际文件还在」的入口。确认框与真删语义在 App.vue。
+const requestDeleteFolder = (folder: { name: string; path: string }) => {
+  const prefix = `${folder.path}/`
+  if (files.value.some(f => f.key.startsWith(prefix))) {
+    showNotice(`「${folder.name}」不为空，请先删除或移出其中的文件`)
+    return
+  }
+  emit('delete', prefix)
+}
+
 // ─── 批量选择 ───
 // 只对文件生效：目录的移动/删除后端仍是单路径操作，递归搬子树的事务边界
 // 没解决之前，不给用户一个「看起来能用、实际会留半截状态」的入口。
@@ -451,7 +497,7 @@ const onGlobalKeydown = (event: KeyboardEvent) => {
   // 输入框 / 可编辑区内的按键不归列表管
   if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return
   // 有浮层时让浮层优先
-  if (moveOpen.value || batchConfirmOpen.value || previewOpen.value || recycleOpen.value) return
+  if (moveOpen.value || batchConfirmOpen.value || previewOpen.value || recycleOpen.value || mkdirOpen.value) return
 
   // 右键菜单打开时只接 Esc：此时方向键属于菜单，不该同时把列表选中项挪走
   if (ctxMenu.value) {
@@ -797,6 +843,10 @@ defineExpose({ refresh: loadFiles })
           <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           上传文件夹
         </button>
+        <button class="secondary-button compact" type="button" @click="openMkdir">
+          <svg viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5m-2.5-2.5h5"/></svg>
+          新建文件夹
+        </button>
         <div class="cloud-nav-tools">
           <button
             class="star-filter"
@@ -904,6 +954,7 @@ defineExpose({ refresh: loadFiles })
           <div class="cloud-size"></div>
           <div class="cloud-actions">
             <button class="secondary-button compact" type="button" title="打开" @click.stop="enterFolder(folder.path)">打开</button>
+            <button class="secondary-button compact destructive-text" type="button" title="删除此空文件夹" @click.stop="requestDeleteFolder(folder)">删除</button>
           </div>
         </article>
 
@@ -1150,6 +1201,43 @@ defineExpose({ refresh: loadFiles })
           :disabled="moveBusy || (moveMode === 'single' && moveTarget === detailDir)"
           @click="commitMove"
         >{{ moveMode === 'single' && moveTarget === detailDir ? '已在目标目录' : (moveBusy ? '移动中…' : '移动到这里') }}</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- 新建文件夹：名称输入浮层。Enter 直接提交——唯一动作就是打字后确认 -->
+  <div v-if="mkdirOpen" class="move-overlay" @click.self="mkdirOpen = false">
+    <div class="move-dialog" role="dialog" aria-label="新建文件夹">
+      <header class="move-head">
+        <b>新建文件夹</b>
+        <button type="button" title="关闭" @click="mkdirOpen = false">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+
+      <div class="mkdir-form">
+        <span class="move-arrow">位置</span>
+        <code class="move-dest">{{ currentPath || '根目录' }}</code>
+      </div>
+      <input
+        ref="mkdirInput"
+        v-model="mkdirName"
+        class="mkdir-input"
+        type="text"
+        placeholder="文件夹名称"
+        autocomplete="off"
+        spellcheck="false"
+        @keydown.enter="commitMkdir"
+      >
+
+      <footer class="move-foot">
+        <button class="secondary-button compact" type="button" @click="mkdirOpen = false">取消</button>
+        <button
+          class="primary-button compact"
+          type="button"
+          :disabled="mkdirBusy"
+          @click="commitMkdir"
+        >{{ mkdirBusy ? '创建中…' : '创建' }}</button>
       </footer>
     </div>
   </div>

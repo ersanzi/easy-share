@@ -67,6 +67,8 @@ export function CloudDownload(arg1:string):Promise<void>;
 
 export function CloudList():Promise<Array<cloud.File>>;
 
+export function CloudMkdir(arg1:string,arg2:string):Promise<void>;
+
 export function CloudMove(arg1:string,arg2:string):Promise<void>;
 
 export function CloudPreview(arg1:string):Promise<cloud.Preview>;

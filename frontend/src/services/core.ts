@@ -26,6 +26,7 @@ import {
   CloudDownload,
   CloudRename,
   CloudMove,
+  CloudMkdir,
   CloudStar,
   CloudStars,
   CloudTouch,
@@ -197,6 +198,8 @@ export const core = {
   cloudRename: CloudRename,
   // 移动只换目录、名字不变（同样走 /move，但拒绝 .. 逃逸）
   cloudMove: CloudMove,
+  // 新建文件夹：targetDir='' 表示当前根；重复创建同名幂等成功
+  cloudMkdir: CloudMkdir,
   // 星标：用户 × 路径的标记；最近访问是埋点，失败可忽略
   cloudStar: CloudStar,
   cloudStars: CloudStars,

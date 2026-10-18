@@ -233,3 +233,71 @@ func TestNewTrimsTrailingSlash(t *testing.T) {
 		t.Errorf("baseURL 未去尾斜杠：%s", got)
 	}
 }
+
+// Mkdir 走 POST /easyshare/drive/mkdir，body 带 path 与 space，
+// 返回体里的 path 带尾斜杠（与列举出口的目录对象同形）。
+func TestMkdirSendsPathAndReturnsTrailingSlashPath(t *testing.T) {
+	var method, gotBody string
+	client, closeFn := newTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/easyshare/drive/mkdir" {
+			t.Errorf("路径错误：%s", r.URL.Path)
+		}
+		method = r.Method
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Write([]byte(`{"code":200,"data":{"path":"photos/2026/"}}`))
+	}))
+	defer closeFn()
+
+	created, err := client.Mkdir(context.Background(), "tok", SpacePersonal, "photos/2026")
+	if err != nil {
+		t.Fatalf("Mkdir 出错：%v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("应为 POST，实际 %s", method)
+	}
+	if !strings.Contains(gotBody, `"path":"photos/2026"`) {
+		t.Errorf("请求体未含目录路径：%s", gotBody)
+	}
+	if !strings.Contains(gotBody, `"space":"personal"`) {
+		t.Errorf("请求体未含空间：%s", gotBody)
+	}
+	if created != "photos/2026/" {
+		t.Errorf("返回路径应带尾斜杠，实际 %q", created)
+	}
+}
+
+// ObjectsWithDirs 必须带 includeDirs=true 查询参数；
+// 漏带时服务端按默认 false 过滤掉目录标记对象，空文件夹就看不见。
+func TestObjectsWithDirsRequestsIncludeDirsParam(t *testing.T) {
+	client, closeFn := newTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("includeDirs") != "true" {
+			t.Errorf("缺少 includeDirs=true：%s", r.URL.RawQuery)
+		}
+		w.Write([]byte(`{"code":200,"data":[{"path":"photos/","size":0,"lastModified":"2026-10-18T01:00:00Z"}]}`))
+	}))
+	defer closeFn()
+
+	objects, err := client.ObjectsWithDirs(context.Background(), "tok", SpacePersonal)
+	if err != nil {
+		t.Fatalf("ObjectsWithDirs 出错：%v", err)
+	}
+	if len(objects) != 1 || objects[0].Path != "photos/" {
+		t.Errorf("目录对象解析错误：%+v", objects)
+	}
+}
+
+// Objects 保持默认行为：不带 includeDirs，目录标记对象不出现在结果里。
+func TestObjectsOmitsIncludeDirsParam(t *testing.T) {
+	client, closeFn := newTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("includeDirs") {
+			t.Errorf("Objects 不应带 includeDirs：%s", r.URL.RawQuery)
+		}
+		w.Write([]byte(`{"code":200,"data":[]}`))
+	}))
+	defer closeFn()
+
+	if _, err := client.Objects(context.Background(), "tok", SpacePersonal); err != nil {
+		t.Fatalf("Objects 出错：%v", err)
+	}
+}

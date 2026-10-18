@@ -103,10 +103,15 @@ const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)
 }
 const handleCloudDelete = async (key: string) => {
+  // 目录 key 带尾斜杠：目录没有 es_file 行，删除是直接删对象、不进回收站，
+  // 文案必须讲清楚，不能沿用文件的「可在回收站还原」
+  const isDir = key.endsWith('/')
   const name = key.split('/').filter(Boolean).pop() ?? key
   const confirmed = await confirm({
-    title: '删除云端文件',
-    message: `确定删除「${name}」？删除后可在回收站还原，回收站保留 ${RECYCLE_RETENTION_DAYS} 天。`,
+    title: isDir ? '删除云端文件夹' : '删除云端文件',
+    message: isDir
+      ? `确定删除文件夹「${name}」？文件夹将直接删除，不可从回收站还原。`
+      : `确定删除「${name}」？删除后可在回收站还原，回收站保留 ${RECYCLE_RETENTION_DAYS} 天。`,
     confirmText: '删除',
     danger: true,
   })

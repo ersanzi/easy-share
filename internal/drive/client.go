@@ -153,12 +153,48 @@ type presignData struct {
 
 // Objects 列举指定空间内的对象。space 传空按个人空间。
 func (c *Client) Objects(ctx context.Context, token, space string) ([]Object, error) {
+	return c.objects(ctx, token, space, false)
+}
+
+// ObjectsWithDirs 与 Objects 相同，但包含目录标记对象（路径以 / 结尾的 0 字节占位）。
+//
+// 只有网盘页用这个变体：它需要把空文件夹显示出来。挂载盘 / WebDAV / 快搜
+// 继续走 Objects——它们各有既定目录语义，多一种 0 字节「文件」只会造成混乱。
+// 目录标识就是路径尾斜杠，服务端没有单独的 isDir 字段（前端 driveFolder.ts
+// 同款判断），两侧共用一套规则。
+func (c *Client) ObjectsWithDirs(ctx context.Context, token, space string) ([]Object, error) {
+	return c.objects(ctx, token, space, true)
+}
+
+func (c *Client) objects(ctx context.Context, token, space string, includeDirs bool) ([]Object, error) {
 	var objects []Object
 	endpoint := "/easyshare/drive/objects?space=" + url.QueryEscape(normalizeSpace(space))
+	if includeDirs {
+		endpoint += "&includeDirs=true"
+	}
 	if err := c.call(ctx, http.MethodGet, endpoint, token, nil, &objects); err != nil {
 		return nil, err
 	}
 	return objects, nil
+}
+
+// Mkdir 新建文件夹（目录标记对象，路径以 / 结尾的 0 字节占位）。
+//
+// path 是目录的空间内相对路径（不含首尾斜杠）。重复创建同一路径幂等成功，
+// 与本地文件系统行为对齐。目录没有 es_file 行，故没有 fileId；
+// 删除目录即删标记对象（控制面软删找不到行时直接删对象）。
+func (c *Client) Mkdir(ctx context.Context, token, space, path string) (string, error) {
+	body, err := json.Marshal(map[string]string{"path": path, "space": normalizeSpace(space)})
+	if err != nil {
+		return "", err
+	}
+	var created struct {
+		Path string `json:"path"`
+	}
+	if err := c.call(ctx, http.MethodPost, "/easyshare/drive/mkdir", token, body, &created); err != nil {
+		return "", err
+	}
+	return created.Path, nil
 }
 
 // 变更事件类型（与服务端 EsFileChangeLog 的 event_type 一一对应）。

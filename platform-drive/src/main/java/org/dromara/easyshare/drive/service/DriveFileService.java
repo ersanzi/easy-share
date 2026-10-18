@@ -309,6 +309,13 @@ public class DriveFileService {
         Map<String, EsFile> byPath = view.activeByPath();
         Map<String, Long> result = new HashMap<>(objects.size());
         for (DriveObject object : objects) {
+            // 目录标记对象（键以 / 结尾）不补账：补一行 file_size=0 的「文件」会污染
+            // 秒传判定（同哈希 0 字节文件会被误判已存在）与回收站语义（目录进了回收站
+            // 还得给它补一套文件生命周期）。目录没有 fileId，客户端按尾斜杠识别即可。
+            if (object.path().endsWith("/")) {
+                result.put(object.path(), null);
+                continue;
+            }
             String path;
             try {
                 path = DriveKeys.normalizeRelative(object.path());

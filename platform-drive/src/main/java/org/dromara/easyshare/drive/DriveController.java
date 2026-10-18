@@ -88,19 +88,26 @@ public class DriveController {
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
      * （目录层上线前的存量对象在首次列举时惰性补账，自愈归账）。
      *
-     * @param space personal / shared
+     * <p>{@code includeDirs=true} 时额外返回目录标记对象（键以 / 结尾的 0 字节
+     * 占位）。默认 false：挂载盘 / WebDAV / 快搜这些出口各自有既定目录语义，
+     * 多一种 0 字节「文件」只会造成混乱。目前只有网盘页（CloudPanel）请求它。
+     *
+     * @param space       personal / shared
+     * @param includeDirs 是否包含目录标记对象
      * @return 相对路径列表（含 fileId）
      */
     @GetMapping("/objects")
     public R<List<FileVo>> objects(
-        @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space,
+        @RequestParam(defaultValue = "false") boolean includeDirs) {
         Long userId = LoginHelper.getUserId();
         String prefix = readablePrefix(space);
         Long ownerId = ownerIdOf(space, userId);
         // 查库 → 藏掉软删 → 回填 fileId（KI-10）。三步的配套关系是正确性的一部分，
         // 故收在 DriveFileService.list 里一次做完，控制器不再自己串。
         // 版本快照（.versions/）必须先剔掉：它是实现细节，不是用户文件。
-        List<DriveObject> raw = storage.listAt(prefix).stream()
+        List<DriveObject> raw = (includeDirs ? storage.listWithDirs(prefix) : storage.listAt(prefix))
+            .stream()
             .filter(object -> !object.path()
                 .startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
             .toList();
@@ -323,10 +330,25 @@ public class DriveController {
             ? spaceService.checkSharedWritable(userId, 0L)
             : DriveKeys.userPrefix(userId);
         Long ownerId = ownerIdOf(body.space(), userId);
-        String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(), body.path());
+        // 目录标记对象的 path 带尾斜杠（"photos/"）。normalizeRelative 拒绝尾斜杠，
+        // 故先剥掉再走解析；是否目录记下来，删对象时要补回斜杠拼对键。
+        boolean isDir = body.path() != null && body.path().endsWith("/");
+        String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(),
+            isDir ? body.path().replaceAll("/+$", "") : body.path());
         // 软删（P1 回收站）：RustFS 对象保留，目录行置 recycled + 原路径快照。
         // 还原时同键复位，无需搬对象；彻底删除走 /recycle/purge 才真删对象。
-        fileService.markRecycled(body.space(), ownerId, path);
+        EsFile recycled = fileService.markRecycled(body.space(), ownerId, path);
+        if (recycled == null) {
+            // 没有 active 行的对象：目录标记（mkdir 建的，无 es_file 行），
+            // 或登记后从未真正写入的幽灵行。软删找不到可置状态的行，对象留着
+            // 等于「删不掉」——目录会永远挂在列表里。直接删对象。
+            if (isDir) {
+                // 目录键带尾斜杠，keyAt 内的 normalizeRelative 会拒，走专用方法
+                storage.deleteDirectory(prefix, path);
+            } else {
+                storage.deleteAt(prefix, path);
+            }
+        }
         usageService.invalidate(prefix);
         return R.ok();
     }
@@ -371,12 +393,42 @@ public class DriveController {
     }
 
     /**
+     * 新建文件夹（目录标记对象）。
+     *
+     * <p>对象存储没有目录实体，空目录靠「键以 / 结尾的 0 字节标记对象」占位；
+     * 建完后网盘页（/objects?includeDirs=true）即可看到它，点进去能继续上传。
+     * 重复创建同一路径时服务端覆盖同内容，幂等，不报「已存在」——
+     * 与本地文件系统的行为对齐，避免用户为了点第二次「新建文件夹」先删一次。
+     *
+     * <p>刻意只建标记对象、不写 es_file 行：目录没有内容哈希、版本与上传者，
+     * 补一行 file_size=0 的「文件」只会污染秒传判定与回收站语义（详见
+     * {@link DriveStorage#createDirectory}）。目录的权威目录层留待后续切片。
+     *
+     * <p>共享空间与 move 同口径：先过可写校验再动手，无权限者连标记对象都建不了。
+     *
+     * @param body 目录的相对路径与空间
+     * @return 创建成功后的相对路径（带尾斜杠，与列举出口的目录对象同形）
+     */
+    @PostMapping("/mkdir")
+    public R<MkdirVo> mkdir(@Validated @RequestBody MkdirBo body) {
+        Long userId = LoginHelper.getUserId();
+        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
+        String prefix = shared
+            ? spaceService.checkSharedWritable(userId, 0L)
+            : DriveKeys.userPrefix(userId);
+        // normalizeRelative 会拒绝空串、首尾斜杠、. / .. 段与控制字符——
+        // 调用方传什么就原样校验，不在这里另写一套规则
+        String relative = DriveKeys.normalizeRelative(body.path());
+        storage.createDirectory(prefix, relative);
+        return R.ok(new MkdirVo(relative + "/"));
+    }
+
+    /**
      * 回收站列表：当前空间的 recycled 行（按删除时间倒序）。
      *
      * @param space personal / shared
      */
-    @GetMapping("/recycle")
-    public R<List<RecycleVo>> recycle(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+    @GetMapping("/recycle")    public R<List<RecycleVo>> recycle(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
         Long userId = LoginHelper.getUserId();
         Long ownerId = ownerIdOf(space, userId);
         return R.ok(fileService.listRecycled(space, ownerId).stream()
@@ -804,6 +856,26 @@ public class DriveController {
      * @param path 移动后的相对路径
      */
     public record MoveVo(String path) {
+    }
+
+    /**
+     * 新建文件夹请求体。
+     *
+     * @param path  目录的空间内相对路径（如 "photos/2024"；不含首尾斜杠）
+     * @param space personal / shared，空则按个人空间
+     */
+    public record MkdirBo(
+        @NotBlank(message = "目录路径不能为空") String path,
+        String space) {
+    }
+
+    /**
+     * 新建文件夹结果。
+     *
+     * @param path 创建成功后的相对路径，带尾斜杠——与列举出口返回的目录对象同形，
+     *             客户端按同一套尾斜杠规则识别，不必为两种响应各写一份判断
+     */
+    public record MkdirVo(String path) {
     }
 
 

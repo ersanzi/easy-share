@@ -1056,9 +1056,12 @@ func (a *App) driveClient() (*drive.Client, string, error) {
 // 控制面不返回 contentType（S3 列举本就没有），按扩展名推断。
 func driveObjectToFile(object drive.Object) cloud.File {
 	contentType := cloud.ContentTypeForKey(object.Path)
+	// 目录标记对象的 Path 带尾斜杠（"photos/"）：Base 前先去掉，
+	// 否则不同平台上对尾斜杠的处理不一致，Name 可能带上斜杠
+	name := filepath.Base(strings.TrimRight(object.Path, "/"))
 	return cloud.File{
 		Key:          object.Path,
-		Name:         filepath.Base(object.Path),
+		Name:         name,
 		Size:         object.Size,
 		ContentType:  contentType,
 		LastModified: object.LastModified,
@@ -1075,7 +1078,9 @@ func (a *App) CloudList() ([]cloud.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	objects, err := client.Objects(a.ctx, token, drive.SpacePersonal)
+	// 带目录列举：网盘页要把空文件夹也显示出来（目录标记对象）。
+	// 其他出口（挂载盘 / WebDAV / 快搜）继续走不带目录的 Objects，行为不变。
+	objects, err := client.ObjectsWithDirs(a.ctx, token, drive.SpacePersonal)
 	if err != nil {
 		a.reportError("cloud list", err)
 		return nil, err
@@ -1534,6 +1539,47 @@ func (a *App) CloudUploadFolder(targetDir string) (string, error) {
 	}
 	go a.uploadDir(core, driveClient, token, drive.SpacePersonal, dir, targetDir)
 	return filepath.Base(dir), nil
+}
+
+// CloudMkdir 在网盘当前目录下新建文件夹。
+//
+// targetDir 语义与 CloudUploadPaths 一致：'' 或 '/' 表示根。目录在对象存储里
+// 没有实体，落地为「键以 / 结尾的 0 字节标记对象」，网盘页据此显示空文件夹；
+// 建完立即可见（CloudList 走带目录的列举），点进去可继续上传。
+//
+// 重复创建同名文件夹幂等成功，与本地文件系统行为对齐——用户为点第二次
+// 「新建文件夹」先手动删一次，是不可接受的交互。
+//
+// name 只接受单段名：与 CloudRename 同款校验，拒绝分隔符与 ..
+// （新建不该顺手把目录建到别处去）。
+func (a *App) CloudMkdir(targetDir, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("文件夹名不能为空")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return errors.New("文件夹名不能包含路径分隔符")
+	}
+	if name == "." || name == ".." {
+		return errors.New("文件夹名不合法")
+	}
+	dir := strings.Trim(strings.TrimSpace(targetDir), "/")
+	if dir == ".." || strings.HasPrefix(dir, "../") || strings.Contains(dir, "/../") {
+		return errors.New("目标目录不合法")
+	}
+	target := name
+	if dir != "" {
+		target = path.Join(dir, name)
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	if _, err := client.Mkdir(a.ctx, token, drive.SpacePersonal, target); err != nil {
+		a.reportError("cloud mkdir", err)
+		return err
+	}
+	return nil
 }
 
 func (a *App) CloudDownload(key string) error {

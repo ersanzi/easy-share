@@ -7,6 +7,7 @@ import org.dromara.common.core.exception.ServiceException;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.async.AsyncRequestBody;
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
@@ -138,6 +139,51 @@ public class DriveStorage {
     }
 
     /**
+     * 按前缀列举对象（含目录标记对象）。
+     *
+     * <p>与 {@link #listAt} 的唯一差别是不过滤尾斜杠对象。目录在对象存储里没有
+     * 实体，只有「键以 / 结尾的 0 字节标记对象」——{@link #listAt} 把它过滤掉，
+     * 于是空文件夹建了也看不见；本方法专供网盘页（/objects?includeDirs=true）
+     * 使用，让目录标记参与列表，由客户端按尾斜杠识别为文件夹。
+     *
+     * <p>其他出口（挂载盘 / WebDAV / 快搜 / 增量列举）继续走 {@link #listAt}：
+     * 它们各自有既定的目录语义，忽然多出一种 0 字节「文件」只会造成混乱。
+     *
+     * @param prefix 空间前缀
+     * @return 对象列表（路径为相对路径；目录对象路径带尾斜杠）
+     */
+    public List<DriveObject> listWithDirs(String prefix) {
+        ensureReady();
+        List<DriveObject> objects = new ArrayList<>();
+        eachObject(prefix, (key, size, modified) ->
+            objects.add(new DriveObject(key.substring(prefix.length()), size, modified)));
+        return objects;
+    }
+
+    /**
+     * 创建目录标记对象（0 字节、键以 / 结尾）。
+     *
+     * <p>S3 系存储没有目录实体，空目录靠标记对象占位；重复创建同一路径时
+     * PutObject 覆盖同内容，天然幂等，调用方无需先查存在性。
+     *
+     * <p>刻意不写 es_file 行：目录没有内容哈希、没有版本、没有上传者，
+     * 补一行 file_size=0 的「文件」只会污染秒传判定与回收站语义。
+     * 目录层的权威表示留待后续切片，这里只保证「建得起来、看得见」。
+     *
+     * @param prefix   空间前缀
+     * @param relative 目录的相对路径（规范化后不含首尾斜杠）
+     */
+    public void createDirectory(String prefix, String relative) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative) + "/";
+        join(client.putObject(b -> b
+            .bucket(properties.getBucket()).key(key)
+            .contentType("application/x-directory")
+            .contentLength(0L),
+            AsyncRequestBody.empty()));
+    }
+
+    /**
      * 创建 Multipart 上传会话（Upload Session 切片，2026-09-06）。
      *
      * @return S3 uploadId
@@ -211,6 +257,20 @@ public class DriveStorage {
     public void deleteAt(String prefix, String relative) {
         ensureReady();
         String key = DriveKeys.keyAt(prefix, relative);
+        join(client.deleteObject(b -> b.bucket(properties.getBucket()).key(key)));
+    }
+
+    /**
+     * 删除目录标记对象。与 {@link #createDirectory} 对称：键要拼回尾斜杠，
+     * 而 {@link DriveKeys#keyAt} 内部的 normalizeRelative 拒绝尾斜杠，
+     * 故这里不能复用 deleteAt，必须自己拼键。
+     *
+     * @param prefix   空间前缀
+     * @param relative 目录的相对路径（规范化后不含首尾斜杠）
+     */
+    public void deleteDirectory(String prefix, String relative) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative) + "/";
         join(client.deleteObject(b -> b.bucket(properties.getBucket()).key(key)));
     }
 
