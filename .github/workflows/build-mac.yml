@@ -163,6 +163,13 @@ jobs:
             # 于是「一半用户连不上」这种最坏情况会被判为通过。切片查把每个架构都验一遍，
             # 漏注入与半注入都会硬失败。
             #
+            # 为什么是 strings -a 而不是 strings：macOS 的 strings 默认只扫 initialized
+            # data section（__DATA 等），而 Go 的字符串常量在只读段（__TEXT/__cstring），
+            # 默认参数扫不到 → ldflags 明明注入成功（Wails 日志的 LDFlags 行可证）却报
+            # 「未找到」，纯假失败。-a 强制扫全文件。Windows 侧走 ReadAllBytes 字节级扫描，
+            # 没有段的概念，所以同一处检查在 Windows 上从未误报过——不是 Windows 注入了、
+            # macOS 没注入，是两边查法不同。
+            #
             # 失败时把排查线索一并打出来：这个地址在二进制里出现了几次、
             # 切片是否真的切出来了。裸一句「未找到」无法区分「没注入」与「查法不对」。
             verify_baked_url() {
@@ -171,14 +178,14 @@ jobs:
               archs="$(lipo -archs "$binary" 2>/dev/null || true)"
               if [ -z "$archs" ]; then
                 # 非 fat 二进制（单架构构建）直接扫；lipo 不可用时也走这里。
-                if strings "$binary" | grep -qF "${PLATFORM_URL}"; then
+                if strings -a "$binary" | grep -qF "${PLATFORM_URL}"; then
                   echo "OK: $binary 已烘焙 ${PLATFORM_URL}"
                 else
                   echo "::error::$binary 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
                   echo "  期望字节: ${PLATFORM_URL}"
-                  echo "  实际命中次数: $(strings "$binary" | grep -cF "${PLATFORM_URL}" || true)"
+                  echo "  实际命中次数: $(strings -a "$binary" | grep -cF "${PLATFORM_URL}" || true)"
                   echo "  文件大小: $(wc -c < "$binary" | tr -d ' ')"
-                  echo "  同类地址抽样: $(strings "$binary" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
+                  echo "  同类地址抽样: $(strings -a "$binary" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
                   return 1
                 fi
                 return 0
@@ -194,10 +201,10 @@ jobs:
                   echo "::error::无法从 $binary 抽出 $arch 切片"
                   return 1
                 fi
-                if ! strings "$slice" | grep -qF "${PLATFORM_URL}"; then
+                if ! strings -a "$slice" | grep -qF "${PLATFORM_URL}"; then
                   echo "::error::$binary ($arch) 中未找到 ${PLATFORM_URL}——ldflags 注入失败，产物不可发布"
                   echo "  切片大小: $(wc -c < "$slice" | tr -d ' ')"
-                  echo "  同类地址抽样: $(strings "$slice" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
+                  echo "  同类地址抽样: $(strings -a "$slice" | grep -oE 'https?://[0-9a-zA-Z.:_-]+' | sort -u | head -5 | tr '\n' ' ')"
                   return 1
                 fi
                 echo "OK: $binary ($arch) 已烘焙 ${PLATFORM_URL}"
