@@ -50,6 +50,16 @@ curl -X POST http://localhost:8090/auth/login -H "Content-Type: application/json
 
 返回 `code:200` 且带 `access_token` 即成功。
 
+## 长时间登录（2026-10-20）
+
+桌面端会把账号令牌落盘到 `%LOCALAPPDATA%\EasyShare\account-session.json`（用户级目录，0600；不存密码），重启后自动恢复。控制面 PC 客户端默认是 7 天绝对有效期、30 分钟空闲失效，关掉客户端半小时后仍会要求重登；执行 `easyshare-client-session.sql` 把该客户端改为 **30 天绝对有效期 + 30 天空闲有效期**：
+
+```powershell
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-client-session.sql
+```
+
+`scripts/ship-control-plane.ps1` 已把它加入自动投递的 SQL 列表，后续部署会自动重放；已有部署需手动执行一次或重跑投递脚本。如果控制面已缓存 PC 客户端（Redis `sys_client#30d`），执行后还需在后台「客户端管理」保存一次触发缓存失效，或清理对应缓存；否则仍按旧的 30 分钟空闲。
+
 ## 关键改动与本机坑（都已在配置/脚本里处理）
 
 1. **数据源改 PostgreSQL**：`platform/ruoyi-admin/src/main/resources/application-dev.yml` 主库 driver/url 改 PG（`jdbc:postgresql://localhost:5433/ryvue`）；`platform/ruoyi-admin/pom.xml` 解开 postgresql 驱动依赖、加 easyshare-drive 模块依赖；`platform/pom.xml` 注册 `<module>../platform-drive</module>`（克隆后需重新做这三处接线）。

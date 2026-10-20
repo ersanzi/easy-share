@@ -1,6 +1,6 @@
 ﻿# EasyShare 控制面投递脚本（开发机 → Linux 服务器）。
 # 控制面 fat jar 只能在开发机构建（platform/ RuoYi 源码树 gitignore），本脚本负责：
-#   构建 → scp jar + 建表 SQL → 远程换包重启 → 探活。快速迭代时约 1 分钟完成。
+#   构建 → scp jar + 建表 SQL → 远程换包重启 → 探活 → 官方插件上架。快速迭代时约 1 分钟完成。
 #
 # 前置（一次性）：
 #   1) 服务器已跑过 deploy/server-linux/deploy.sh（compose + rustfs.env 就位）；
@@ -10,12 +10,18 @@
 # 用法（仓库根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\ship-control-plane.ps1 -SshTarget root@192.168.1.10
 #   快速重发（不重新构建）：加 -SkipBuild
+#   跳过商城上架：加 -SkipMarketSeed；控制面账号非默认时传 -MarketUsername / -MarketPassword
+#   SshTarget 用的是 ssh 配置别名（开发机直连不到 IP）时，显式传 -MarketUrl http://<可达地址>:<端口>
 param(
     [Parameter(Mandatory = $true)][string]$SshTarget,   # user@host
     [string]$ServerDir = "/opt/easyshare",
     [string]$JavaHome = "D:\Develop\java21",            # RuoYi 6.0 需要 JDK 21
     [int]$ControlPort = 8090,                           # 宿主机暴露端口（容器内固定 8090；服务器 8090 被占时用 8091）
-    [switch]$SkipBuild
+    [string]$MarketUrl = "",                            # 上架用的控制面地址；留空按 SshTarget 主机 + ControlPort 推导
+    [string]$MarketUsername = "admin",
+    [string]$MarketPassword = "admin123",
+    [switch]$SkipBuild,
+    [switch]$SkipMarketSeed
 )
 
 $ErrorActionPreference = "Stop"
@@ -66,7 +72,8 @@ $easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-v
     "easyshare-space-member-type.sql", "easyshare-upload-session.sql",
     "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql",
     "easyshare-content-hash.sql", "easyshare-incremental-list.sql",
-    "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql")
+    "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql",
+    "easyshare-client-session.sql")
 foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }
@@ -132,6 +139,27 @@ if (-not $healthy) {
     exit 1
 }
 Write-Ok "控制面已上线：http://<服务器IP>:$ControlPort"
+
+# ── 6) 官方插件上架（商城默认有货）──
+# 新装用户打开「插件中心」不该看到空货架。控制面一起投递完，就把 plugins/ 下全部官方
+# 插件上架；发布只走 HTTP 管理接口 + 预签名直传，故在开发机执行，地址按 SshTarget 推导。
+if ($SkipMarketSeed) {
+    Write-Step "跳过官方插件上架（-SkipMarketSeed）"
+} else {
+    Write-Step "上架官方插件"
+    if ([string]::IsNullOrWhiteSpace($MarketUrl)) {
+        $MarketUrl = "http://$(($SshTarget -split '@')[-1]):$ControlPort"
+    }
+    & (Join-Path $PSScriptRoot "publish-official-plugins.ps1") -PlatformUrl $MarketUrl `
+        -Username $MarketUsername -Password $MarketPassword
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "控制面已上线，但官方插件未全部上架（新装用户看到的商城是空列表）。重试："
+        Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\publish-official-plugins.ps1 -PlatformUrl $MarketUrl -Username $MarketUsername"
+        exit 1
+    }
+    Write-Ok "官方插件已在架：$MarketUrl"
+}
+
 Write-Host ""
 Write-Host "==== 投递完成 ====" -ForegroundColor Green
 Write-Host " 回滚：ssh $SshTarget 然后 cp $cpRemote/ruoyi-admin.jar.bak $cpRemote/ruoyi-admin.jar && cd $ServerDir && docker compose up -d --no-deps ruoyi"

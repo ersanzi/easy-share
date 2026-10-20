@@ -257,6 +257,14 @@ export function useEasyShare() {
     updateAvailable.value = data?.latestVersion ?? ''
   }
 
+  // 启动恢复的账号令牌被控制面判定失效：清空登录态，App 自动回到登录页。
+  const handleAuthExpired = () => {
+    if (disposed) return
+    currentUser.value = { ...emptyUser }
+    error.value = '登录已过期，请重新登录'
+    errorSource = 'operation'
+  }
+
   onMounted(() => {
     disposed = false
     document.addEventListener('visibilitychange', handleVisibility)
@@ -266,6 +274,7 @@ export function useEasyShare() {
     EventsOn('core-event', handleCoreEvent)
     // 订阅升级可用通知（update:available）
     EventsOn('update:available', handleUpdateAvailable)
+    EventsOn('auth:expired', handleAuthExpired)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
@@ -288,6 +297,7 @@ export function useEasyShare() {
     stopPolling()
     EventsOff('core-event')
     EventsOff('update:available')
+    EventsOff('auth:expired')
     document.removeEventListener('visibilitychange', handleVisibility)
     OnFileDropOff()
   })

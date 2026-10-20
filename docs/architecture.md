@@ -50,7 +50,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/discovery` | UDP 设备广播与在线列表 |
 | `internal/transfer` | TCP 流式发送/接收、文件夹 zip 管线、速度计算 |
 | `internal/drive` | WebDAV 服务 + 控制面云盘客户端（预签名 URL 上传/下载/列表，`client.go`/`upload.go`） |
-| `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3） |
+| `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3）；会话落盘用户级 `account-session.json`（0600，不含密码），启动恢复并校验，401 时清空退回登录页 |
 | `internal/spacedav` | 空间 WebDAV 文件系统（P4 挂载的服务层）：建在 `internal/drive` 客户端之上，每个操作经控制面，配额与共享授权对资源管理器同样生效 |
 | `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
 | `spacemount.go` | 桌面端空间挂载（P4：登录后挂「此电脑」个人/共享盘、换账号重挂）与浮窗拖放目标 |
@@ -65,6 +65,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `frontend/src/composables/useEasyShare.ts` | 前端状态、实时事件订阅、轮询 fallback |
 | `frontend/src/components/` | 概览、设备、传输、网盘、设置 UI |
 | `knowledge/` | Python 知识平台服务（FastAPI，独立进程） |
+| `engine/` | **minutecraft**：转写文本 → 会议纪要的通用引擎（独立可安装包，`pip install -e engine`）。负责 LLM 结构化产出（纪要/要点/待办/章节/关键词/洞察/核心发言/可视化汇报卡）、导图 harness、钉钉版式 Word 导出；**不碰音频**。被知识服务（`app/meetings/*` 薄壳转发）与外部 Agent（CLI / Python 库）共同消费，详见 `engine/README.md` |
 | `platform-drive/` | RuoYi 控制面内的云盘存储授权模块（顶层独立 Maven 模块，父 POM 指向 gitignore 的 `platform/` RuoYi 源码工程） |
 
 `frontend/wailsjs` 是 Wails 自动生成代码，`wails build` 时自动重生成。
@@ -310,3 +311,4 @@ desktop eventStream (Go 协程，指数退避重连)
 - 生产检索编排（2026-09-01）：`/query` 由 `QueryOrchestrator`（`app/rag/orchestrator.py`）按 `QUERY_STRATEGY` 调度——`vector`（旧单路，embedding 故障自动降级 BM25）/ `hybrid`（默认；向量+BM25 RRF 融合）/ `hybrid_rerank`（融合池 ×3 后 Cross-Encoder 精排，未配置 rerank 等价 hybrid）/ `multi_hop`（分轮混合+LLM 充分性裁判，需 LLM，未配置自动降级 hybrid_rerank，响应 `degraded` 字段说明）；部署级配置不暴露给终端用户，非法值启动即报错；响应新增 `strategy`（实际执行策略）字段；生产查询/生成事件落 `QueryLog`（逐句忠实度仅驾驶舱审计计算，生产传 None）；向量库双后端实现 `count()`/`snapshot_records()` 协议供 BM25 懒构建与健康度聚合（修复 Milvus 后端无 `records` 属性导致的崩溃）
 - 目录监听自动入库（`WATCH_DIRS` 分号分隔，默认关闭）：轮询扫描（SMB 共享盘可靠）+ mtime 稳定性窗口 + 内容哈希版本去重 + 失败自动重试；与 lab 上传同链路（storage → job → pipeline）
 - WPS 加载项（`/wps/ribbon.xml`、`/wps/index.html`、`/wps/taskpane.html`）：知识服务自托管加载项页面，与 `/auth`、`/query` 同源免跨域；WPS 文字功能区「知识」页签一键查选中段落，任务窗格内登录（令牌存窗格 localStorage）。本机安装/卸载：`knowledge/scripts/install_wps_addon.ps1`（登记 `%APPDATA%\kingsoft\wps\jsaddons\jsplugins.xml`）
+- **会议纪要引擎外置（2026-10-18）**：`knowledge/app/meetings/{engine,summarizer,templates,mindmap_harness,docx_export}.py` 已变为**薄壳转发**，实现集中在仓库顶层 `engine/`（minutecraft 包，`pip install -e engine` 可独立安装）。分工：知识服务保留**采集与产品态**（FunASR 转写 + cam++ 说话人、声纹、热词、区块状态与任务队列、存储与权限），引擎只负责**文本 → 纪要**（LLM 结构化产出 + 导图 harness + 钉钉版式 Word）。同一份代码同时供外部 Agent 使用（`minutecraft run` CLI / Python 库 / `minutecraft schema` 自描述）。薄壳里用 `sys.path` 注入 `engine/`，因此知识服务无需把包装进 venv；若想隔离依赖，也可 `pip install -e engine` 后删掉注入。

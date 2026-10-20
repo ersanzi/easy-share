@@ -163,6 +163,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.clientLock.Unlock()
 	a.logger.Printf("connected to Core at %s", baseURL)
 
+	// 恢复上次登录的账号会话（令牌落盘、只存用户级 AppData）。失败/过期时静默回到登录页。
+	a.restoreAccountSession()
+
 	go a.watchdog()
 	go a.eventStream()
 	// 静默检查更新（24h 节流，发现新版本发 update:available 事件）
@@ -383,6 +386,7 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 	a.accountMu.Lock()
 	a.accountSession = session
 	a.accountMu.Unlock()
+	a.saveAccountSession(session)
 	a.logger.Printf("user logged in: %s", session.User.UserName)
 	a.publishTrayUser()
 	// 按该账号实际拥有的空间挂「此电脑」条目。异步：挂载要回控制面读空间，
@@ -395,8 +399,8 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 func (a *App) Logout() {
 	a.accountMu.Lock()
 	session := a.accountSession
-	a.accountSession = nil
 	a.accountMu.Unlock()
+	a.clearAccountSession()
 	// 先卸盘再通知控制面：会话已清空，挂着的盘此刻已经不可用，留着只会让用户点进去报错
 	a.unmountAllSpaces()
 	if session == nil {
@@ -411,6 +415,110 @@ func (a *App) Logout() {
 		}
 	}
 	a.publishTrayUser()
+}
+
+// accountSessionPath 返回账号会话落盘位置：与 config.json 同目录，按用户隔离。
+func (a *App) accountSessionPath() string {
+	if strings.TrimSpace(a.configPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(a.configPath), "account-session.json")
+}
+
+func (a *App) saveAccountSession(session *account.Session) {
+	path := a.accountSessionPath()
+	if path == "" {
+		return
+	}
+	if err := account.SaveSession(path, session); err != nil {
+		a.logger.Printf("persist account session: %v", err)
+	}
+}
+
+func (a *App) clearAccountSession() {
+	a.accountMu.Lock()
+	a.accountSession = nil
+	a.accountMu.Unlock()
+	path := a.accountSessionPath()
+	if path == "" {
+		return
+	}
+	if err := account.RemoveSession(path); err != nil {
+		a.logger.Printf("remove account session: %v", err)
+	}
+}
+
+// restoreAccountSession 启动时恢复落盘会话，再异步向控制面校验：
+// 网络不通时保留本地登录态供离线使用，只有明确 401 才清空并通知前端回登录页。
+func (a *App) restoreAccountSession() {
+	path := a.accountSessionPath()
+	if path == "" {
+		return
+	}
+	session, err := account.LoadSession(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			a.logger.Printf("load account session: %v", err)
+			_ = account.RemoveSession(path)
+		}
+		return
+	}
+	if session.Expired(time.Now()) {
+		a.logger.Printf("stored account session expired at %s", session.ExpiresAt.Format(time.RFC3339))
+		_ = account.RemoveSession(path)
+		return
+	}
+	a.accountMu.Lock()
+	a.accountSession = session
+	a.accountMu.Unlock()
+	a.logger.Printf("restored account session for %s", session.User.UserName)
+	a.publishTrayUser()
+	go a.refreshSpaceMounts()
+	go a.validateAccountSession()
+}
+
+func (a *App) validateAccountSession() {
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if session == nil || session.Token == "" || base == "" {
+		return
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	fresh, err := account.New(base).SessionInfo(ctx, session.Token)
+	if err == nil {
+		a.accountMu.Lock()
+		if a.accountSession != nil && a.accountSession.Token == session.Token {
+			a.accountSession.User = fresh.User
+			a.accountSession.Roles = fresh.Roles
+			a.accountSession.Permissions = fresh.Permissions
+		}
+		current := a.accountSession
+		a.accountMu.Unlock()
+		if current != nil {
+			a.saveAccountSession(current)
+		}
+		a.publishTrayUser()
+		return
+	}
+	if errors.Is(err, account.ErrUnauthorized) {
+		a.logger.Printf("restored account session rejected: %v", err)
+		a.clearAccountSession()
+		a.unmountAllSpaces()
+		a.publishTrayUser()
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "auth:expired")
+		}
+		return
+	}
+	// 控制面不可达时保留本地会话：离线仍可使用局域网传输与本地设置。
+	a.logger.Printf("validate restored account session (keep offline): %v", err)
 }
 
 // ServiceEndpoints 是登录后下发的服务拓扑：客户端只预知控制面一个地址，
@@ -1543,7 +1651,7 @@ func (a *App) CloudUploadFolder(targetDir string) (string, error) {
 
 // CloudMkdir 在网盘当前目录下新建文件夹。
 //
-// targetDir 语义与 CloudUploadPaths 一致：'' 或 '/' 表示根。目录在对象存储里
+// targetDir 语义与 CloudUploadPaths 一致：” 或 '/' 表示根。目录在对象存储里
 // 没有实体，落地为「键以 / 结尾的 0 字节标记对象」，网盘页据此显示空文件夹；
 // 建完立即可见（CloudList 走带目录的列举），点进去可继续上传。
 //
@@ -1601,8 +1709,16 @@ func (a *App) CloudDelete(key string) error {
 	if err != nil {
 		return err
 	}
-	// 软删（P1 回收站）：控制面置 state='recycled'，对象保留，可经回收站还原
-	err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
+	// 目录键（带尾斜杠）走递归：控制面把子树里每个文件各自软删进回收站，
+	// 目录标记一并清掉。非目录仍走单对象软删，语义与挂载盘/WebDAV 一致。
+	// 递归与否由键形决定，不再多加一个绑定参数——前端只有一个「删除」动作，
+	// 让它去区分两种后端语义只会把「以为删了其实没删」留在界面里。
+	if strings.HasSuffix(key, "/") {
+		err = client.DeleteTree(a.ctx, token, drive.SpacePersonal, key)
+	} else {
+		// 软删（P1 回收站）：控制面置 state='recycled'，对象保留，可经回收站还原
+		err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
+	}
 	a.reportError("cloud delete", err)
 	return err
 }
@@ -1641,7 +1757,7 @@ func (a *App) CloudRename(key, newName string) error {
 // 底层同为控制面 /move（服务端复制+删源，**fileId 不变**，分享链接与任务引用不失效），
 // 拆成两个导出方法只是为了「调用点能表达出用户到底想干什么」，避免一个方法混两种语义。
 //
-// targetDir 是空间内相对目录（'' 或 '/' 表示根）。
+// targetDir 是空间内相对目录（” 或 '/' 表示根）。
 func (a *App) CloudMove(key, targetDir string) error {
 	name := path.Base(key)
 	dir := strings.Trim(strings.TrimSpace(targetDir), "/")

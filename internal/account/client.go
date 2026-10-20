@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,10 @@ const (
 	allPermissions = "*:*:*"
 )
 
+// ErrUnauthorized 表示带令牌的请求被控制面拒绝（令牌过期、被吊销或账号停用）。
+// 启动恢复会话时据此删除落盘令牌并退回登录页；登录接口本身不带令牌，不受此哨兵影响。
+var ErrUnauthorized = errors.New("登录状态已失效")
+
 // User 是登录后展示所需的用户信息（P1 只用到昵称与头像）。
 // 注意 RuoYi 把 Long 型 ID 序列化为字符串（避免 JS 精度丢失），故 UserID 用 string。
 type User struct {
@@ -40,11 +45,17 @@ type User struct {
 // 真正的鉴权在控制面（ADR-0007 不变量 3：Core 不做权限裁决）。前端拿到 isAdmin=false
 // 只是看不到入口，即便伪造为 true，后台接口仍会按 Sa-Token 的真实角色拒绝。
 type Session struct {
-	Token       string   `json:"token"`
-	ExpireIn    int64    `json:"expireIn"`
-	User        User     `json:"user"`
-	Roles       []string `json:"roles"`
-	Permissions []string `json:"permissions"`
+	Token       string    `json:"token"`
+	ExpireIn    int64     `json:"expireIn"`
+	ExpiresAt   time.Time `json:"expiresAt,omitempty"`
+	User        User      `json:"user"`
+	Roles       []string  `json:"roles"`
+	Permissions []string  `json:"permissions"`
+}
+
+// Expired 判断本地记录的绝对到期时间是否已过。零值表示控制面未返回有效期，交给服务端裁决。
+func (s *Session) Expired(now time.Time) bool {
+	return s != nil && !s.ExpiresAt.IsZero() && !now.Before(s.ExpiresAt)
 }
 
 // IsAdmin 判断该会话是否具备管理员身份。
@@ -110,16 +121,39 @@ func (c *Client) Login(ctx context.Context, username, password string) (*Session
 	if loginData.AccessToken == "" {
 		return nil, fmt.Errorf("登录未返回令牌")
 	}
+	expiresAt := expiryFrom(loginData.ExpireIn)
 
 	info, err := c.userInfo(ctx, loginData.AccessToken)
 	if err != nil {
 		// 令牌拿到但取用户信息失败：仍返回会话，用户信息留空由上层降级展示。
 		// 此时 Roles/Permissions 也为空，IsAdmin() 为 false——宁可少给入口，不可多给。
-		return &Session{Token: loginData.AccessToken, ExpireIn: loginData.ExpireIn}, nil
+		return &Session{Token: loginData.AccessToken, ExpireIn: loginData.ExpireIn, ExpiresAt: expiresAt}, nil
 	}
 	return &Session{
 		Token:       loginData.AccessToken,
 		ExpireIn:    loginData.ExpireIn,
+		ExpiresAt:   expiresAt,
+		User:        info.User,
+		Roles:       info.Roles,
+		Permissions: info.Permissions,
+	}, nil
+}
+
+func expiryFrom(expireIn int64) time.Time {
+	if expireIn <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(expireIn) * time.Second)
+}
+
+// SessionInfo 用已有令牌重新读取用户信息，供启动时校验落盘会话是否仍有效。
+func (c *Client) SessionInfo(ctx context.Context, token string) (*Session, error) {
+	info, err := c.userInfo(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return &Session{
+		Token:       token,
 		User:        info.User,
 		Roles:       info.Roles,
 		Permissions: info.Permissions,
@@ -159,7 +193,7 @@ func (c *Client) postJSON(ctx context.Context, path, token string, body []byte, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req, token)
-	return c.do(req, out)
+	return c.do(req, token, out)
 }
 
 // postValue 把任意值序列化为 JSON 后 POST。
@@ -183,7 +217,7 @@ func (c *Client) putValue(ctx context.Context, path, token string, value, out an
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req, token)
-	return c.do(req, out)
+	return c.do(req, token, out)
 }
 
 // deleteJSON 发送 DELETE，解 RuoYi 包装。
@@ -193,7 +227,7 @@ func (c *Client) deleteJSON(ctx context.Context, path, token string) error {
 		return err
 	}
 	c.setAuth(req, token)
-	return c.do(req, nil)
+	return c.do(req, token, nil)
 }
 
 // getJSON 发送 GET，解 RuoYi 包装。
@@ -203,7 +237,7 @@ func (c *Client) getJSON(ctx context.Context, path, token string, out any) error
 		return err
 	}
 	c.setAuth(req, token)
-	return c.do(req, out)
+	return c.do(req, token, out)
 }
 
 // setAuth 设置鉴权头。RuoYi(Sa-Token) 接受 Authorization: Bearer；clientid 头用于客户端识别。
@@ -215,13 +249,17 @@ func (c *Client) setAuth(req *http.Request, token string) {
 }
 
 // do 执行请求并解析 RuoYi 统一响应；code != 200 视为业务错误，返回其 msg。
-func (c *Client) do(req *http.Request, out any) error {
+// token 非空时，401 会包装成 ErrUnauthorized，供启动恢复会话时区分「过期」与「网络不通」。
+func (c *Client) do(req *http.Request, token string, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// 带上服务器地址：员工看到英文 dial 错误时，至少知道客户端连的是谁、该找谁
 		return fmt.Errorf("无法连接账号服务 %s：%w（请确认已接入公司网络，仍失败请联系管理员）", c.baseURL, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && token != "" {
+		return fmt.Errorf("%w：账号服务未授权", ErrUnauthorized)
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return err
@@ -234,6 +272,9 @@ func (c *Client) do(req *http.Request, out any) error {
 		msg := wrapped.Msg
 		if msg == "" {
 			msg = fmt.Sprintf("账号服务返回 code=%d", wrapped.Code)
+		}
+		if token != "" && wrapped.Code == http.StatusUnauthorized {
+			return fmt.Errorf("%w：%s", ErrUnauthorized, msg)
 		}
 		return fmt.Errorf("%s", msg)
 	}
