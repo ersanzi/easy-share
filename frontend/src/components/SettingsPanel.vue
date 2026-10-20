@@ -288,34 +288,6 @@ onBeforeUnmount(() => {
 
     <div class="settings-columns">
       <div class="settings-column">
-      <!-- 账号资料 -->
-      <div class="card settings-card">
-        <div class="card-header">
-          <h2>账号</h2>
-        </div>
-        <div class="settings-body">
-          <div class="settings-account">
-            <span class="settings-account-avatar" aria-hidden="true">{{ accountInitial }}</span>
-            <div class="settings-account-meta">
-              <strong>{{ user?.nickName || user?.userName || '…' }}</strong>
-              <span class="setting-hint">@{{ user?.userName || '…' }}<template v-if="user?.isAdmin"> · 管理员</template></span>
-            </div>
-            <button class="secondary-button danger compact" type="button" @click="emit('logout')">退出登录</button>
-          </div>
-          <div v-if="spacesError" class="setting-row">
-            <p class="update-error">空间信息读取失败：{{ spacesError }}</p>
-          </div>
-          <div v-if="personalSpace" class="setting-row">
-            <label class="setting-label">个人网盘</label>
-            <p class="setting-hint">{{ personalUsage }} · 挂载在「此电脑」</p>
-          </div>
-          <div v-if="sharedSpace" class="setting-row">
-            <label class="setting-label">共享空间</label>
-            <p class="setting-hint">{{ sharedUsage }}</p>
-          </div>
-        </div>
-      </div>
-
       <!-- 通用设置 -->
       <div class="card settings-card">
         <div class="card-header">
@@ -409,6 +381,34 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="settings-column settings-column-side">
+      <!-- 账号资料 -->
+      <div class="card settings-card">
+        <div class="card-header">
+          <h2>账号</h2>
+        </div>
+        <div class="settings-body">
+          <div class="settings-account">
+            <span class="settings-account-avatar" aria-hidden="true">{{ accountInitial }}</span>
+            <div class="settings-account-meta">
+              <strong>{{ user?.nickName || user?.userName || '…' }}</strong>
+              <span class="setting-hint">@{{ user?.userName || '…' }}<template v-if="user?.isAdmin"> · 管理员</template></span>
+            </div>
+            <button class="secondary-button danger compact" type="button" @click="emit('logout')">退出登录</button>
+          </div>
+          <div v-if="spacesError" class="setting-row">
+            <p class="update-error">空间信息读取失败：{{ spacesError }}</p>
+          </div>
+          <div v-if="personalSpace" class="setting-row">
+            <label class="setting-label">个人网盘</label>
+            <p class="setting-hint">{{ personalUsage }} · 挂载在「此电脑」</p>
+          </div>
+          <div v-if="sharedSpace" class="setting-row">
+            <label class="setting-label">共享空间</label>
+            <p class="setting-hint">{{ sharedUsage }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- AI 工具连接（听记 MCP，只读） -->
       <div class="card settings-card">
         <div class="card-header">

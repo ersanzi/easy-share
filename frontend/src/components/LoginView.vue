@@ -1,27 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { core } from '../services/core'
 
 defineProps<{ loading: boolean; error: string }>()
 const emit = defineEmits<{ (e: 'submit', username: string, password: string): void }>()
 
 const username = ref('')
 const password = ref('')
-const platformUrl = ref('')
 const usernameInput = ref<HTMLInputElement | null>(null)
 const passwordInput = ref<HTMLInputElement | null>(null)
 
 // 不预填 admin：公司部署里每个同事用自己账号，预填管理员名等于诱导试默认口令
-onMounted(async () => {
+onMounted(() => {
   // 聚焦第一个空字段：账号为空聚焦账号，否则聚焦密码
   if (!username.value.trim()) usernameInput.value?.focus()
   else passwordInput.value?.focus()
-  // 常显公司服务器地址：登录失败电话支持时，员工一眼能报出连的是谁
-  try {
-    platformUrl.value = (await core.serviceEndpoints()).platformBaseUrl
-  } catch {
-    /* 拿不到就空着，不阻塞登录 */
-  }
 })
 
 const submit = () => {
@@ -45,27 +37,6 @@ const submit = () => {
         <h1>文件在这台电脑<br>与你的空间之间流动</h1>
         <p>局域网直传、云端网盘与公司知识库，用同一个账号进入。</p>
       </div>
-
-      <ul class="login-points">
-        <li>
-          <span class="login-point-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
-          </span>
-          <div><strong>点对点直传</strong><span>同一局域网内直接发送，不经过第三方服务器</span></div>
-        </li>
-        <li>
-          <span class="login-point-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
-          </span>
-          <div><strong>云端网盘</strong><span>文件在「此电脑」里直接访问，不用记地址</span></div>
-        </li>
-        <li>
-          <span class="login-point-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M12 4.5C10.5 3.5 8.5 3 6 3v15c2.5 0 4.5.5 6 1.5 1.5-1 3.5-1.5 6-1.5V3c-2.5 0-4.5.5-6 1.5Z"/><path d="M12 4.5v15"/></svg>
-          </span>
-          <div><strong>知识问答</strong><span>公司文档检索，答案带引用来源</span></div>
-        </li>
-      </ul>
 
       <p class="login-meta">本机服务 · 仅在局域网内可见</p>
     </section>
@@ -100,7 +71,6 @@ const submit = () => {
           <button class="login-btn" type="submit" :disabled="loading">
             {{ loading ? '登录中…' : '登录' }}
           </button>
-          <p v-if="platformUrl" class="login-server">公司服务器：{{ platformUrl }}</p>
         </form>
 
         <p class="login-hint">首次使用请联系管理员开通账号</p>
@@ -158,34 +128,18 @@ const submit = () => {
 .login-mark.small svg { width: 17px; height: 17px; }
 .login-wordmark { color: var(--ink); font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 
-.login-copy { margin-top: auto; margin-bottom: 34px; }
+.login-copy { margin: auto 0; }
 .login-copy h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 30px;
-  line-height: 1.32;
+  font-size: 32px;
+  line-height: 1.3;
   font-weight: 600;
   letter-spacing: -.025em;
 }
-.login-copy p { max-width: 420px; margin: 14px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.login-copy p { max-width: 460px; margin: 14px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
 
-.login-points { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
-.login-points li { display: flex; align-items: flex-start; gap: 11px; }
-.login-point-icon {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
-  color: var(--graphite);
-  background: white;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.login-point-icon svg { width: 17px; height: 17px; }
-.login-points strong { display: block; color: var(--ink); font-size: 13px; font-weight: 600; }
-.login-points span { display: block; max-width: 320px; margin-top: 2px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
-.login-meta { margin: auto 0 0; color: var(--muted); font-size: 11.5px; }
+.login-meta { margin: 0; color: var(--muted); font-size: 11.5px; }
 
 /* 右侧登录表单：白底、无卡片边框 */
 .login-form-panel {
@@ -243,7 +197,6 @@ const submit = () => {
 .login-btn:hover:not(:disabled) { background: var(--blue-dark); border-color: var(--blue-dark); }
 .login-btn:active:not(:disabled) { transform: scale(.99); }
 .login-btn:disabled { opacity: .55; cursor: default; }
-.login-server { margin: -2px 0 0; color: var(--muted); font-size: 11.5px; text-align: center; word-break: break-all; }
 .login-hint { margin: 20px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
 
 @keyframes login-enter {

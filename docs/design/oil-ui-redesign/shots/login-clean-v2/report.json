@@ -1,0 +1,57 @@
+[
+  {
+    "file": "page.png",
+    "target": "http://localhost:1421/?scene=login",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-2.png",
+    "target": "http://localhost:1421/?scene=settings",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [
+      "图片没加载出来：/plugins/notes/notes.png"
+    ],
+    "lint": []
+  },
+  {
+    "file": "sheet.png",
+    "width": 1344,
+    "height": 480,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

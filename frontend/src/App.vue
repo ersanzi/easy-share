@@ -237,7 +237,8 @@ const avatarText = computed(() => {
   <div class="window-chrome">
     <!-- 顶栏左端补产品名：原来整条 1900px 只有右端两个胶囊，中间全空，
          看着像没画完。产品标识从侧栏顶部移到这里，侧栏顶部让给图标轨 -->
-    <div class="chrome-brand">EasyShare</div>
+    <!-- 登录前不重复产品名：登录页左侧已有品牌标识，标题栏只保留窗口控制 -->
+    <div v-if="app.currentUser.value.loggedIn" class="chrome-brand">EasyShare</div>
     <div class="drag-region" @dblclick="toggleMaximise" />
     <div v-if="app.currentUser.value.loggedIn" class="window-quick-actions">
       <button
