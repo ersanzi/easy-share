@@ -65,3 +65,20 @@ platform-drive/target/
 # 用法见 scripts/reverse/README.md 与 docs/toolchain-rea.md §8.3
 # Ghidra 持久化工程（数百 MB，可重建，不进仓）
 output/
+
+# Python 引擎（minutecraft）测试与构建缓存
+.pytest_cache/
+engine/.pytest_cache/
+engine/*.egg-info/
+engine/build/
+engine/dist/
+
+# 本机运维凭据与 agent 临时文件（仅本地使用，不入库）
+.easyshare-local/
+.workbuddy/
+
+# 技能发布压缩包（由 skills/ 源目录生成）
+skills/**/*.zip
+
+# 项目使用 npm；pnpm 误生成的锁文件不入库
+frontend/pnpm-lock.yaml

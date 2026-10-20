@@ -1,0 +1,67 @@
+name: Quality Gates
+
+# 为什么单独开一个工作流：build-windows.yml / build-mac.yml 只跑 `go test ./...`，
+# 前端两套闸门（设计 token 守卫、vue-tsc 类型检查）和文档引用检查在 CI 里没人调用——
+# 只在本地构建脚本里跑，等于「纪律靠自觉」。
+#
+# 为什么不加 paths 过滤：文档引用会指向 Go / Java / Python / TS 四种语言的符号，
+# 按改动路径过滤恰恰会让「代码改了文档没改」这一类不触发检查——那正是本闸门要防的。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 安装 Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      # 守卫的守卫：先证明检查器本身会报错，再让它去检查仓库。
+      # 少了这一步，一次误改跳过规则就能让文档闸门悄悄变成空跑。
+      - name: 文档引用检查器自检
+        run: node scripts/diag/check-doc-refs.mjs --self-test
+
+      - name: 文档「文件 · 符号」证据全部可解析
+        run: node scripts/diag/check-doc-refs.mjs docs
+
+      # 内含 frontend/src/__tests__/designTokens.test.ts：裸色值、纯灰中性色、
+      # 文字档掉到 WCAG AA 以下，都会在这里变红（AGENTS 界面设计体系四条硬约束）
+      - name: 前端测试与设计 token 守卫
+        working-directory: frontend
+        run: npm test
+
+      - name: 前端类型检查（vue-tsc）
+        working-directory: frontend
+        run: npx vue-tsc --noEmit
+
+      - name: skill 发布副本与 engine/ 一致
+        # skills/minutes-from-transcript/scripts 是 engine/ 的复制版（给别人整目录复制走）。
+        # 两处并存必然漂移：改了引擎忘记同步，复制出去的那份就落后于产品行为。
+        run: python scripts/check_skill_sync.py
