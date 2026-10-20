@@ -1110,7 +1110,21 @@ const levelBars = computed(() => {
   return Array.from({ length: 5 }, (_, index) => index < active)
 })
 
+// Esc 退出详情（桌面端通用习惯；输入框聚焦时不抢键，交给输入框自己处理）
+const onDetailKeydown = (event: KeyboardEvent) => {
+  if (event.key !== 'Escape' || !selected.value) return
+  const target = event.target as HTMLElement | null
+  const tag = target?.tagName?.toLowerCase() || ''
+  if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return
+  if (moreMenuOpen.value) {
+    closeMoreMenu()
+    return
+  }
+  closeDetail()
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', onDetailKeydown)
   await refreshStatus()
   if (status.value.loggedIn) {
     await refreshList()
@@ -1124,6 +1138,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onDetailKeydown)
   // 只收页面自己的轮询、音频 URL 与本地计时器；录音在 meetingSession 单例里，切页不中断
   stopPolling()
   releaseAudio()
@@ -1341,9 +1356,16 @@ onBeforeUnmount(() => {
       <!-- 详情：标题 + 阅读区。刻意不再套一层 card：里面每块已经是卡片，
            卡片套卡片会让「一屏里有几层容器」变得数不清（钉钉听记这里也是无边框的。 -->
       <div v-if="selected" ref="detailAnchor" class="meeting-detail">
-        <!-- 标题行：左标题 / 右操作。操作只留「导出」与「更多」，其余进菜单，
-             不再让十个文字按钮横向铺满一行把标题挤到下面 -->
+        <!-- 标题行：左「返回 + 标题」/ 右操作。操作只留「导出」与「更多」，其余进菜单，
+             不再让十个文字按钮横向铺满一行把标题挤到下面。
+             返回按钮必须在明面上：详情占满阅读区且打开时会自动滚到标题，
+             用户一旦进来就看到一屏内容，没有可见的退出口就是「被困住」。
+             也兼容 Esc（见 onDetailKeydown）。 -->
         <header class="meeting-detail-head">
+          <button class="meeting-back-btn" type="button" title="返回听记列表（Esc）" @click="closeDetail">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg>
+            听记列表
+          </button>
           <div class="meeting-detail-title">
             <h2>{{ selected.title }}</h2>
             <p class="meeting-detail-meta">
@@ -1382,7 +1404,6 @@ onBeforeUnmount(() => {
                 <button type="button" role="menuitem" class="is-danger" @click="closeMoreMenu(); remove()">
                   {{ confirmingDelete ? '再点一次确认删除' : '删除这条听记' }}
                 </button>
-                <button type="button" role="menuitem" @click="closeMoreMenu(); closeDetail()">关闭</button>
               </div>
             </div>
           </div>
