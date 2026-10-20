@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>会议汇报卡 · 渲染器</title>
+<style>
+/* 配色与版式取自钉钉 AI 听记原生导出件（逐页实测复刻）：
+   01/05 玫红、02 蓝、03 青、04 琥珀、06 绿；卡片 = 色块标题 + 标签 + 要点 + 底色小结条。
+   与 EasyShare 前端 MeetingVisualReport.vue 是同一套规格的**第二实现**，
+   改版式时两处要一起改（见 ../SKILL.md 与 docs/iterations/2026-10-18-*.md）。 */
+:root {
+  --ink: #1f2329;
+  --ink-2: #3a3f47;
+  --muted: #7c828e;
+  --line: #e6e8ec;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px;
+  background: #eef0f3;
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  color: var(--ink);
+}
+.bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  max-width: 900px; margin: 0 auto 16px;
+}
+.bar textarea {
+  flex: 1 1 420px; min-height: 88px; padding: 10px 12px;
+  font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+  border: 1px solid #cdd2d9; border-radius: 8px; resize: vertical;
+}
+.bar button {
+  padding: 8px 16px; border: 0; border-radius: 8px; cursor: pointer;
+  font-size: 13px; font-weight: 600; background: #1f69e0; color: #fff;
+}
+.bar button.ghost { background: #fff; color: #1f2329; border: 1px solid #cdd2d9; }
+.bar .hint { font-size: 12px; color: var(--muted); }
+
+/* ── 汇报卡（A4 比例 794x1123 @96dpi）── */
+.paper {
+  width: 794px; min-height: 1123px; margin: 0 auto; padding: 44px 62px 40px;
+  background: #fff; box-shadow: 0 8px 32px rgba(15, 17, 26, .12);
+  display: flex; flex-direction: column;
+}
+.kicker { margin: 0 0 30px; font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: 2px; }
+.meta { margin: 0 0 22px; font-size: 13px; line-height: 1.6; }
+.meta i { display: inline-block; width: 22px; font-style: normal; }
+.title { margin: 0 0 6px; font-size: 21px; line-height: 1.35; font-weight: 700; }
+.sub { margin: 0 0 14px; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.rule { height: 1px; margin: 0 0 16px; background: var(--line); }
+.block { margin: 0 0 12px; }
+.block-title { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--line-color); }
+.block-num { font-size: 11px; letter-spacing: .5px; }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.cards.single { grid-template-columns: minmax(0, 1fr); }
+.card { min-width: 0; padding: 8px 10px 9px; background: var(--bg); border-radius: 3px; }
+.card-head { display: flex; align-items: center; gap: 5px; margin: 0 0 5px; }
+.dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 1px; background: var(--line-color); }
+.card-title { font-size: 11px; font-weight: 700; }
+.tag { flex-shrink: 0; padding: 0 5px; font-size: 9px; line-height: 1.5; color: var(--line-color); border: 1px solid var(--band); border-radius: 2px; }
+ul.bullets { margin: 0; padding: 0 0 0 2px; list-style: none; }
+ul.bullets li { position: relative; padding-left: 9px; font-size: 10.5px; line-height: 1.6; color: var(--ink-2); }
+ul.bullets li::before { content: '·'; position: absolute; left: 0; color: #9aa0aa; }
+.note { margin: 5px 0 0; padding: 4px 7px; font-size: 10px; line-height: 1.55; color: var(--ink-2); background: var(--band); border-radius: 2px; }
+.closing .note { margin: 0; padding: 9px 11px; font-size: 10.5px; }
+.flow { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px; }
+.flow-col { display: flex; flex-direction: column; gap: 6px; }
+.arrow { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 13px; font-weight: 700; color: var(--line-color); }
+.foot { margin-top: auto; padding-top: 18px; text-align: center; font-size: 9px; letter-spacing: 1px; color: #c9cdd4; }
+.empty { margin: 60px auto; color: var(--muted); font-size: 13px; }
+
+@media print {
+  body { background: #fff; padding: 0; }
+  .bar { display: none; }
+  .paper { box-shadow: none; width: auto; min-height: auto; margin: 0; padding: 12mm 16mm; }
+  @page { size: A4; margin: 0; }
+}
+</style>
+</head>
+<body>
+<div class="bar">
+  <textarea id="input" spellcheck="false" aria-label="visual.json 内容"></textarea>
+  <button id="render">渲染</button>
+  <button id="print" class="ghost">打印 / 存 PDF</button>
+  <span class="hint">粘贴 visual.json 后点渲染；或直接拖动 .json 文件到输入框</span>
+</div>
+<div class="paper" id="paper"><p class="empty">在上方粘贴 visual.json，或把 minutecraft 产出的 visual.json 拖进来</p></div>
+
+<script>
+// 钉钉报告六色带（与 minutecraft/docx/export.py 的 ACCENTS 同一套值）
+const ACCENTS = {
+  rose:  { line: '#e8557a', bg: '#fdf1f4', band: '#f9d5de' },
+  blue:  { line: '#3b78d8', bg: '#eff4fc', band: '#d5e3f7' },
+  teal:  { line: '#1e8e88', bg: '#e8f5f4', band: '#cfeae7' },
+  amber: { line: '#c98a1e', bg: '#fdf6e8', band: '#f5e3be' },
+  green: { line: '#1e8e62', bg: '#eaf6f0', band: '#cdebdc' },
+};
+const ORDER = ['rose', 'blue', 'teal', 'amber', 'rose', 'green'];
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function card(item) {
+  const head = (item.title || item.tag)
+    ? `<p class="card-head"><span class="dot"></span>${item.title ? `<span class="card-title">${esc(item.title)}</span>` : ''}${item.tag ? `<span class="tag">${esc(item.tag)}</span>` : ''}</p>`
+    : '';
+  const bullets = (item.bullets || []).length
+    ? `<ul class="bullets">${item.bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul>` : '';
+  const note = item.note ? `<p class="note">${esc(item.note)}</p>` : '';
+  return `<div class="card">${head}${bullets}${note}</div>`;
+}
+
+function section(sec, index) {
+  const accent = ACCENTS[sec.accent] || ACCENTS[ORDER[index % ORDER.length]];
+  const items = sec.items || [];
+  const style = `--line-color:${accent.line};--bg:${accent.bg};--band:${accent.band}`;
+  const head = `<p class="block-title"><span class="block-num">${String(index + 1).padStart(2, '0')}</span><span>${esc(sec.title)}</span></p>`;
+  let body;
+  if (sec.layout === 'closing') {
+    body = `<div class="closing">${items.map(i => `<p class="note">${esc(i.note || (i.bullets || []).join('；'))}</p>`).join('')}</div>`;
+  } else if (sec.layout === 'flow') {
+    const half = Math.ceil(items.length / 2);
+    const col = (arr) => `<div class="flow-col">${arr.map(card).join('')}</div>`;
+    body = `<div class="flow">${col(items.slice(0, half))}${col(items.slice(half))}${items.length > 1 ? '<span class="arrow">→</span>' : ''}</div>`;
+  } else {
+    const single = items.length === 1 ? ' single' : '';
+    body = `<div class="cards${single}">${items.map(card).join('')}</div>`;
+  }
+  return `<section class="block" style="${style}">${head}${body}</section>`;
+}
+
+function render(data) {
+  const paper = document.getElementById('paper');
+  if (!data || !(data.sections || []).length) {
+    paper.innerHTML = '<p class="empty">没有可渲染的 sections（检查 JSON 是否是 minutecraft 的 visual.json）</p>';
+    return;
+  }
+  const people = Object.values(data.speaker_names || {}).filter(n => n && !/^说话人 \d+$/.test(n));
+  const peopleLabel = [...new Set(people)].join('、') || '—';
+  const created = (data.created_at || '').replace('T', ' ').slice(0, 19) || '—';
+  paper.innerHTML = `
+    <p class="kicker">纪要</p>
+    <p class="meta">主题: ${esc(data.title || '会议纪要')}<i></i>时间: ${esc(created)}<i></i>参与人: ${esc(peopleLabel)}</p>
+    <h1 class="title">${esc(data.title || '会议纪要')}</h1>
+    ${data.summary ? `<p class="sub">${esc(data.summary)}</p>` : ''}
+    <div class="rule"></div>
+    ${(data.sections || []).map(section).join('')}
+    <p class="foot">内容由 EasyShare 会议听记生成</p>`;
+}
+
+document.getElementById('render').addEventListener('click', () => {
+  try {
+    render(JSON.parse(document.getElementById('input').value));
+  } catch (e) {
+    document.getElementById('paper').innerHTML = `<p class="empty">JSON 解析失败：${esc(e.message)}</p>`;
+  }
+});
+document.getElementById('print').addEventListener('click', () => window.print());
+document.getElementById('input').addEventListener('dragover', (e) => e.preventDefault());
+document.getElementById('input').addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  document.getElementById('input').value = await file.text();
+  document.getElementById('render').click();
+});
+</script>
+</body>
+</html>

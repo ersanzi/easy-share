@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>会议纪要报告</title>
+<style>
+/* 长网页报告版式：对标钉钉 AI 听记 2026-10 版可视化报告（逐像素从截图取色复刻）。
+   结构：渐变头图 → 概览（议题数/时长）→ 议题时间轴导航 → 每议题一卡
+        （时间戳 / 标题 / 一句话摘要 / 绿色下划线 / 讨论聚焦框 / 编号分节 / 双层要点 / 关键决策框）。
+   配色实测：头图 #f6f2ef→#cfb79b 暖米渐变；页面底 #fafafa；卡片纯白；聚焦框 #eef2ee；分节徽标 #4a7a5c。 */
+:root {
+  --page: #fafafa;
+  --card: #ffffff;
+  --ink: #1f2329;
+  --ink-2: #4a5059;
+  --muted: #8a9099;
+  --line: #ededed;
+  --focus-bg: #eef2ee;
+  --focus-ink: #2f3b34;
+  --accent: #4a7a5c;
+  --accent-soft: #dfe8e3;
+  --warm: #7a5c38;
+  --warm-bg: #f6f2ed;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  width: 1080px;
+  margin: 0 auto;
+  background: var(--page);
+  color: var(--ink);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 头图 ── */
+.hero {
+  position: relative;
+  padding: 56px 64px 40px;
+  background:
+    radial-gradient(120% 140% at 85% 15%, rgba(207,183,155,.55) 0%, rgba(207,183,155,0) 55%),
+    radial-gradient(90% 120% at 10% 80%, rgba(240,232,222,.9) 0%, rgba(250,250,250,0) 60%),
+    linear-gradient(135deg, #f7f4f0 0%, #f3ede6 45%, #e8dbcb 100%);
+  overflow: hidden;
+}
+.hero::after {
+  /* 右上角的同心圆装饰，钉钉原图有淡淡的圆环 */
+  content: '';
+  position: absolute; right: -140px; top: -180px;
+  width: 620px; height: 620px; border-radius: 50%;
+  border: 1px solid rgba(160,130,95,.16);
+  box-shadow: 0 0 0 60px rgba(160,130,95,.05), 0 0 0 130px rgba(160,130,95,.035);
+  pointer-events: none;
+}
+.hero-label { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #6f6455; margin-bottom: 18px; }
+.hero-label i { display: inline-block; width: 26px; height: 2px; background: #9c8a72; }
+.hero h1 { margin: 0 0 14px; font-size: 44px; line-height: 1.25; font-weight: 700; letter-spacing: 1px; color: #1d1a17; }
+.hero-sub { margin: 0 0 22px; font-size: 16px; color: #6f6455; }
+.chips { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 30px; }
+.chip { padding: 6px 16px; font-size: 14px; color: #5d5346; background: rgba(255,255,255,.62); border: 1px solid rgba(150,125,95,.28); border-radius: 999px; }
+.stats { display: flex; align-items: flex-start; gap: 64px; padding-top: 22px; border-top: 1px solid rgba(150,125,95,.18); }
+.stat-label { font-size: 13px; color: #8a7f70; margin: 0 0 8px; }
+.stat-value { margin: 0; font-size: 26px; font-weight: 700; color: #2b251e; }
+.stat-value small { font-size: 15px; font-weight: 500; margin-left: 4px; }
+
+/* ── 导航（议题时间轴）── */
+.nav { padding: 30px 64px 10px; }
+.nav-title { margin: 0 0 14px; font-size: 13px; color: var(--muted); letter-spacing: 1px; }
+.nav-item {
+  display: flex; align-items: center; gap: 14px;
+  padding: 16px 8px; border-bottom: 1px solid var(--line);
+}
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: #c9b79f; flex-shrink: 0; }
+.nav-main { flex: 1; min-width: 0; }
+.nav-name { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+.nav-time { font-size: 13px; color: var(--muted); margin: 0; font-variant-numeric: tabular-nums; }
+.nav-arrow { color: #c8ccd2; font-size: 20px; }
+
+/* ── 议题卡 ── */
+.topic { margin: 26px 0; padding: 40px 64px 46px; background: var(--page); }
+.topic-head { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 14px; }
+.topic-head .clock { font-size: 15px; }
+.topic-title { margin: 0 0 12px; font-size: 30px; font-weight: 700; letter-spacing: .5px; }
+.topic-summary { margin: 0 0 16px; font-size: 15px; line-height: 1.75; color: var(--ink-2); }
+.topic-rule { width: 46px; height: 3px; background: var(--accent); border-radius: 2px; margin-bottom: 26px; }
+
+/* 讨论聚焦框 */
+.focus {
+  padding: 22px 26px; margin-bottom: 34px;
+  background: var(--focus-bg); border-radius: 10px;
+  font-size: 15px; line-height: 1.85; color: var(--focus-ink);
+}
+.focus p { margin: 0 0 12px; }
+.focus p:last-child { margin-bottom: 0; }
+.focus .warm { background: var(--warm-bg); color: var(--warm); border-radius: 3px; padding: 0 4px; }
+.focus .hl { color: var(--accent); background: var(--accent-soft); border-radius: 3px; padding: 0 4px; }
+
+/* 分节 */
+.section { margin-bottom: 26px; }
+.section:last-child { margin-bottom: 0; }
+.section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.section-no {
+  display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0;
+  font-size: 13px; font-weight: 600; color: #fff; background: var(--accent); border-radius: 5px;
+}
+.section-title { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+.section-body { background: var(--card); border-radius: 12px; padding: 24px 28px; }
+
+/* 组：一个分节内有多组时，每组自带一张卡（参考钉钉听记，组与组之间能看清边界）。
+   卡片内的组去掉内外边距，由 .section-body 统一留白——否则一处要点会被两圈 padding 撑出大片空白。 */
+.section-body > .group { padding: 0; margin-bottom: 20px; background: none; border-radius: 0; }
+.group { background: var(--card); border-radius: 12px; padding: 22px 26px; margin-bottom: 14px; }
+.group:last-child { margin-bottom: 0; }
+.group-title { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; font-size: 17px; font-weight: 600; color: #2b3138; }
+.group-title::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; opacity: .55; }
+.group ul { margin: 0; padding-left: 24px; list-style: none; }
+.group ul li { position: relative; margin-bottom: 10px; font-size: 15px; line-height: 1.85; color: var(--ink-2); }
+.group ul li:last-child { margin-bottom: 0; }
+.group ul li::before { content: ''; position: absolute; left: -15px; top: 12px; width: 5px; height: 5px; border-radius: 50%; border: 1.5px solid #b8c6bd; }
+.group .tag { margin-left: 8px; padding: 1px 8px; font-size: 12px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 3px; vertical-align: 1px; }
+.group .note { margin: 8px 0 0; font-size: 14px; line-height: 1.7; color: var(--muted); }
+
+/* 单组分节：卡片承担分节，组标题落在卡头上，不再套两层卡 */
+.section.single .section-body { padding: 0; background: none; }
+.section.single .section-body > .group { padding: 24px 28px; margin-bottom: 0; background: var(--card); }
+.section.single .group .group-title { padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+
+/* 关键决策与共识 */
+.decisions { margin-top: 26px; }
+.decisions .group-title { color: #2b3138; }
+.confirm { display: inline-block; margin-right: 8px; padding: 1px 8px; font-size: 12px; color: var(--accent); background: var(--accent-soft); border-radius: 3px; vertical-align: 1px; }
+.action { display: inline-block; margin-right: 8px; padding: 1px 8px; font-size: 12px; color: #8a6a2f; background: #f6efe2; border-radius: 3px; vertical-align: 1px; }
+
+/* AI 洞察 */
+.insight { margin-top: 34px; padding: 24px 26px; background: var(--warm-bg); border-radius: 10px; }
+.insight h4 { margin: 0 0 12px; font-size: 15px; color: #6f6455; font-weight: 600; letter-spacing: 1px; }
+.insight p { margin: 0 0 10px; font-size: 15px; line-height: 1.85; color: #4a4038; }
+.insight p:last-child { margin-bottom: 0; }
+
+/* 待办 */
+.todos { margin-top: 34px; }
+.todo { display: flex; gap: 12px; padding: 14px 18px; margin-bottom: 10px; background: var(--card); border-radius: 10px; font-size: 15px; line-height: 1.7; }
+.todo .box { width: 16px; height: 16px; flex-shrink: 0; margin-top: 4px; border: 1.5px solid #c2c8cf; border-radius: 3px; }
+.todo .owner { margin-left: 8px; font-size: 13px; color: var(--accent); }
+.todo .due { margin-left: 6px; font-size: 13px; color: var(--muted); }
+
+.foot { padding: 30px 64px 48px; text-align: center; font-size: 12px; letter-spacing: 1px; color: #c3c8ce; }
+
+@media print {
+  body { width: auto; background: #fff; }
+  @page { size: 1080px auto; margin: 0; }
+}
+</style>
+</head>
+<body id="root"></body>
+
+<script>
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (sec) => {
+  const t = Number(sec) || 0;
+  return `${String(Math.floor(t / 3600)).padStart(2, '0')}:${String(Math.floor(t % 3600 / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+};
+
+/* 富文本白名单：focus/insights 允许 <span class="warm">/<span class="hl">/<b>/<strong>/<em>/<br> 用于标重点，
+ * 其余一律转义。别把这当通用 HTML 沙箱——它只为了让「模型标了重点的那几个词」显示出来。 */
+const rich = (s) => String(s ?? '')
+  .replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  .replace(/&lt;(\/?)(span|b|strong|em)&gt;/g, '<$1$2>')
+  .replace(/&lt;span class=&quot;(warm|hl)&quot;&gt;/g, '<span class="$1">')
+  .replace(/&lt;br\s*\/?&gt;/g, '<br>');
+
+function render(data) {
+  const topics = data.topics || [];
+  const total = data.duration_seconds || topics.reduce((m, t) => Math.max(m, t.end || 0), 0);
+  const minutes = Math.round(total / 60);
+
+  // 只有带时间轴的议题才画导航；时长未知时整格不画（不显示「—」占位）
+  const participants = data.participants || [];
+  const stats = [
+    `<div><p class="stat-label">议题数</p><p class="stat-value">${topics.length}<small>项</small></p></div>`,
+    minutes ? `<div><p class="stat-label">听记时长</p><p class="stat-value">${Math.floor(minutes / 60) ? `${Math.floor(minutes / 60)}小时` : ''}${minutes % 60 || !Math.floor(minutes / 60) ? `${minutes % 60}分钟` : ''}</p></div>` : '',
+    participants.length ? `<div><p class="stat-label">参与人</p><p class="stat-value">${participants.length}<small>人</small></p></div>` : '',
+  ].join('');
+
+  const hero = `
+  <header class="hero">
+    <div class="hero-label"><i></i>${esc(data.category || '会议纪要')}</div>
+    <h1>${esc(data.title || '会议纪要')}</h1>
+    ${data.subtitle ? `<p class="hero-sub">${esc(data.subtitle)}</p>` : ''}
+    ${(data.tags || []).length ? `<div class="chips">${data.tags.map(t => `<span class="chip">${esc(t)}</span>`).join('')}</div>` : '<div style="height:14px"></div>'}
+    <div class="stats">${stats}</div>
+  </header>`;
+
+  // 导航只列真正分过段的议题（单议题报告里它只是重复一遍标题，没有导航价值）
+  const nav = topics.length > 1 ? `
+  <nav class="nav">
+    <p class="nav-title">议题导航</p>
+    ${topics.map(t => `
+      <div class="nav-item">
+        <span class="nav-dot"></span>
+        <div class="nav-main">
+          <p class="nav-name">${esc(t.title)}</p>
+          <p class="nav-time">${fmt(t.start)} – ${fmt(t.end)}</p>
+        </div>
+        <span class="nav-arrow">›</span>
+      </div>`).join('')}
+  </nav>` : '';
+
+  // 分节：既支持引擎 visual 的 items 结构，也支持手工补的 groups（title + items）结构。
+  // 要点一并用富文本：模型会把关键数据/系统名标成 <span class="warm">，漏了就会原样显示标签。
+  const sectionBody = (sec) => {
+    if ((sec.groups || []).length) {
+      return sec.groups.map(g => `
+        <div class="group">
+          <p class="group-title">${esc(g.title)}</p>
+          <ul>${(g.items || []).map(it => `<li>${rich(it)}</li>`).join('')}</ul>
+        </div>`).join('');
+    }
+    return (sec.items || []).map(item => `
+      <div class="group">
+        ${item.title ? `<p class="group-title">${esc(item.title)}${item.tag ? `<span class="tag">${esc(item.tag)}</span>` : ''}</p>` : ''}
+        ${(item.bullets || []).length ? `<ul>${item.bullets.map(it => `<li>${rich(it)}</li>`).join('')}</ul>` : ''}
+        ${item.note ? `<p class="note">${rich(item.note)}</p>` : ''}
+      </div>`).join('');
+  };
+
+  // 分节里只有一组（且这组有标题）时，卡片直接由这一组承担：标题压在卡头上，不再套两层卡
+  const groupCount = (sec) => (sec.groups || []).length || (sec.items || []).length || 0;
+  const isSingle = (sec) => {
+    if (groupCount(sec) !== 1) return false;
+    const only = (sec.groups || [])[0] || (sec.items || [])[0] || {};
+    return Boolean(String(only.title || '').trim());
+  };
+
+  const topicHtml = topics.map(t => {
+    const sections = (t.sections || []).map((sec, i) => `
+      <div class="section${isSingle(sec) ? ' single' : ''}">
+        <div class="section-head">
+          <span class="section-no">${i + 1}</span>
+          <h3 class="section-title">${esc(sec.title)}</h3>
+        </div>
+        <div class="section-body">${sectionBody(sec)}</div>
+      </div>`).join('');
+
+    const decisions = (t.decisions || []).length ? `
+      <div class="section decisions">
+        <div class="section-head">
+          <span class="section-no">${(t.sections || []).length + 1}</span>
+          <h3 class="section-title">关键决策与共识</h3>
+        </div>
+        <div class="section-body">
+          ${t.decisions.map(d => `
+            <div class="group">
+              <p class="group-title">${esc(d.title)}</p>
+              <ul>${(d.items || []).map(it => `<li>${d.kind === 'action' ? '<span class="action">行动项</span>' : '<span class="confirm">已确认</span>'}${esc(it)}</li>`).join('')}</ul>
+            </div>`).join('')}
+        </div>
+      </div>` : '';
+
+    const insight = (t.insights || []).length ? `
+      <div class="insight">
+        <h4>AI 洞察</h4>
+        ${t.insights.map(i => `<p>${rich(i)}</p>`).join('')}
+      </div>` : '';
+
+    return `
+      <section class="topic">
+        <div class="topic-head"><span class="clock">🕐</span>${fmt(t.start)} – ${fmt(t.end)}</div>
+        <h2 class="topic-title">${esc(t.title)}</h2>
+        ${t.summary ? `<p class="topic-summary">${esc(t.summary)}</p>` : ''}
+        <div class="topic-rule"></div>
+        ${(t.focus || []).length ? `<div class="focus">${t.focus.map(p => `<p>${rich(p)}</p>`).join('')}</div>` : ''}
+        ${sections}
+        ${decisions}
+        ${insight}
+      </section>`;
+  }).join('');
+
+  const todos = (data.todos || []).length ? `
+    <section class="topic">
+      <div class="topic-head"><span class="clock">✓</span>待办清单</div>
+      <h2 class="topic-title">后续行动项</h2>
+      <div class="topic-rule"></div>
+      ${data.todos.map(td => `
+        <div class="todo">
+          <span class="box"></span>
+          <div>${esc(td.task)}${td.owner_hint ? `<span class="owner">${esc(td.owner_hint)}</span>` : ''}${td.due_hint ? `<span class="due">${esc(td.due_hint)}</span>` : ''}</div>
+        </div>`).join('')}
+    </section>` : '';
+
+  // 全场 AI 洞察放在最后（议题级的洞察在各自卡内）
+  const insights = (data.insights || []).length ? `
+    <section class="topic">
+      <div class="insight">
+        <h4>AI 洞察</h4>
+        ${data.insights.map(i => `<p>${rich(i)}</p>`).join('')}
+      </div>
+    </section>` : '';
+
+  document.getElementById('root').innerHTML = hero + nav + topicHtml + insights + todos +
+    '<div class="foot">内容由 EasyShare 会议听记生成</div>';
+}
+
+// 数据来源：window.__REPORT__（无头渲染时由 render.py 注入）
+const injected = window.__REPORT__;
+if (injected) {
+  render(injected);
+} else {
+  document.getElementById('root').innerHTML =
+    '<div style="padding:80px;text-align:center;color:#8a9099;font-size:15px;line-height:2">' +
+    '没有数据。<br>生成方式：<code>minutecraft render minutes.json -o report.png</code></div>';
+}
+</script>
+</body>
+</html>

@@ -503,8 +503,8 @@ def export_meeting_markdown(meeting_id: str, request: Request) -> Response:
 
 
 @router.get("/meetings/{meeting_id}/export/docx")
-def export_meeting_docx(meeting_id: str, request: Request) -> Response:
-    """备忘录 Word 导出（python-docx 生成，供没装客户端的同事）。"""
+def export_meeting_docx(meeting_id: str, request: Request, with_transcript: bool = False) -> Response:
+    """纪要 Word 导出（钉钉版式，python-docx 生成）；with_transcript=true 附转写全文附页。"""
     service = _meetings(request)
     try:
         meta = service.store.get(meeting_id)
@@ -512,7 +512,7 @@ def export_meeting_docx(meeting_id: str, request: Request) -> Response:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
     _ensure_visible(meta, _current_user(request))
     try:
-        filename, content = service.export_docx(meeting_id)
+        filename, content = service.export_docx(meeting_id, with_transcript=with_transcript)
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return _attachment_response(

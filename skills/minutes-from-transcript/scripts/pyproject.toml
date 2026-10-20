@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minutecraft"
+version = "0.1.0"
+description = "转写文本 → 会议纪要的通用引擎：纪要/要点/待办/章节/关键词/洞察/导图 + 钉钉版式 Word，供 EasyShare 听记与外部 Agent 共用"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "EasyShare" }]
+keywords = ["meeting", "minutes", "transcript", "llm", "agent", "docx"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business",
+]
+# 内核只依赖 LLM 客户端与 Word 生成；ASR 不在此列（见 optional-dependencies）
+dependencies = [
+    "openai>=1.30",
+    "httpx>=0.27",
+    "python-docx>=1.1",
+]
+
+[project.optional-dependencies]
+# 可选：长网页报告分段截图后要拼接（只有超过单次截图上限的长报告才会用到）
+render = ["pillow>=10"]
+# 可选：手上就是 wav 时顺带转写（FunASR）。内核本身不依赖它。
+asr = [
+    "torch>=2.2",
+    "torchaudio>=2.2",
+    "funasr>=1.1",
+    "modelscope>=1.17",
+    "numpy>=1.26",
+]
+dev = ["pytest>=8"]
+
+[project.scripts]
+minutecraft = "minutecraft.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["minutecraft*"]
+
+# report.html 是数据文件（不是 .py），不声明就不会被装进 wheel/sdist，
+# 装上之后 `minutecraft render` 会报「模板不存在」。
+[tool.setuptools.package-data]
+minutecraft = ["report/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

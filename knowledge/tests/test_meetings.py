@@ -8,7 +8,7 @@ import time
 import pytest
 import numpy as np
 
-from app.meetings import mindmap_harness
+from minutecraft import mindmap_harness  # 实现在通用引擎 engine/minutecraft，与 service 引用同一模块
 from app.meetings.service import MeetingService
 from app.meetings.store import MeetingStore, _ensure_schema
 from app.meetings.summarizer import MeetingSummarizer

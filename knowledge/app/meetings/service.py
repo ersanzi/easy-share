@@ -8,7 +8,11 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from app.meetings.engine import MeetingTranscriber, audio_duration, render_transcript
+from app.meetings.engine import (  # 薄壳：实现见 engine/minutecraft
+    MeetingTranscriber,
+    audio_duration,
+    render_transcript,
+)
 from app.meetings.templates import find_template
 from app.meetings.store import MeetingStore, _blank_blocks
 from app.meetings.summarizer import MeetingSummarizer
@@ -269,7 +273,7 @@ class MeetingService:
         self.store.set_block(meeting_id, "mindmap", "processing")
         mindmap = ""
         try:
-            from app.meetings.mindmap_harness import build_mindmap_harness
+            from minutecraft.mindmap_harness import build_mindmap_harness
 
             outline, log_lines = build_mindmap_harness(
                 self.summarizer.ask_json, segments, speaker_names,
@@ -474,74 +478,16 @@ class MeetingService:
 
     # --- 备忘录导出（Markdown 前端本地拼；docx 在这里用 python-docx 生成） ---
 
-    def export_docx(self, meeting_id: str) -> tuple[str, "object"]:
-        """生成备忘录 Word 文档，返回 (文件名, bytes)。依赖 python-docx（requirements 已含）。"""
-        import io
+    def export_docx(self, meeting_id: str, *, with_transcript: bool = False) -> tuple[str, "object"]:
+        """生成纪要 Word（钉钉版式：封面可视化报告 + 文档体 + AI洞察 + 待办 + 章节 + 汇报卡）。
 
-        from docx import Document
-        from docx.shared import Pt
+        版式实现见 `docx_export.py`；`with_transcript` 为 True 时附一张转写全文附页。
+        """
+        from app.meetings.docx_export import build_minutes_docx
 
         meta = self.store.get(meeting_id)
         if meta.get("status") != "completed":
             raise ValueError("仅已完成的会议可导出")
-        names = meta.get("speaker_names") or {}
-        document = Document()
-        document.add_heading(meta["title"], level=0)
+        content = build_minutes_docx(meta, with_transcript=with_transcript)
+        return f"{meta['title']} 纪要.docx", content
 
-        info = document.add_paragraph()
-        meta_line = f"会议时间：{meta['created_at']}"
-        if meta.get("duration_seconds"):
-            minutes, seconds = divmod(int(meta["duration_seconds"]), 60)
-            meta_line += f"　时长 {minutes:02d}:{seconds:02d}"
-        if meta.get("speaker_count"):
-            meta_line += f"　发言人 {meta['speaker_count']} 位"
-        info_run = info.add_run(meta_line)
-        info_run.font.size = Pt(9)
-
-        summary = meta.get("summary")
-        if summary:
-            if summary.get("minutes"):
-                document.add_heading("纪要", level=1)
-                document.add_paragraph(summary["minutes"])
-            if summary.get("key_points"):
-                document.add_heading("要点", level=1)
-                for point in summary["key_points"]:
-                    document.add_paragraph(point, style="List Bullet")
-        if meta.get("todos"):
-            document.add_heading("待办", level=1)
-            for todo in meta["todos"]:
-                mark = "✓ " if todo.get("done") else ""
-                document.add_paragraph(mark + self._todo_line(todo), style="List Number")
-        if meta.get("mindmap"):
-            document.add_heading("思维导图大纲", level=1)
-            for line in meta["mindmap"].splitlines():
-                if not line.strip():
-                    continue
-                indent = line[: len(line) - len(line.lstrip())]
-                depth = line.count("#", 0, len(line) - len(line.lstrip("#").lstrip())) if line.lstrip().startswith("#") else 0
-                text = line.strip()
-                if text.startswith("#"):
-                    text = text.lstrip("#").strip()
-                    paragraph = document.add_paragraph()
-                    run = paragraph.add_run(text)
-                    run.bold = True
-                    paragraph.paragraph_format.left_indent = Pt(6 + 12 * min(depth, 3))
-                elif text.startswith("- "):
-                    paragraph = document.add_paragraph()
-                    paragraph.paragraph_format.left_indent = Pt(12 + 12 * (len(indent) // 2))
-                    paragraph.add_run("• " + text[2:])
-                else:
-                    document.add_paragraph(text)
-
-        document.add_heading("转写全文", level=1)
-        for segment in meta.get("segments") or []:
-            who = names.get(segment["speaker"], f"说话人 {int(segment['speaker']) + 1}")
-            minutes, seconds = divmod(int(segment["start"]), 60)
-            paragraph = document.add_paragraph()
-            run = paragraph.add_run(f"{who} [{minutes:02d}:{seconds:02d}] ")
-            run.bold = True
-            paragraph.add_run(segment["text"])
-
-        buffer = io.BytesIO()
-        document.save(buffer)
-        return f"{meta['title']} 备忘录.docx", buffer.getvalue()

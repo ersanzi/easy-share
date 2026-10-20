@@ -1,0 +1,85 @@
+{
+  "summary": "确认部署与文档入库进度，明确演示准备与分工。",
+  "sections": [
+    {
+      "title": "部署与文档进度",
+      "layout": "cards",
+      "items": [
+        {
+          "title": "部署升级",
+          "tag": "已解决",
+          "bullets": [
+            "服务器和对象存储升级到最新版本",
+            "部署清单已复核"
+          ],
+          "note": "部署完成"
+        },
+        {
+          "title": "文档入库",
+          "tag": "待确认",
+          "bullets": [
+            "已入库约300份文档",
+            "产品手册与工艺文件为主",
+            "识别准确率不错"
+          ],
+          "note": "客户要求周五前看到完整知识库"
+        }
+      ],
+      "accent": "rose"
+    },
+    {
+      "title": "客户演示安排",
+      "layout": "flow",
+      "items": [
+        {
+          "title": "演示重点",
+          "tag": "已解决",
+          "bullets": [
+            "知识问答",
+            "会议纪要"
+          ],
+          "note": ""
+        },
+        {
+          "title": "脚本准备",
+          "tag": "待确认",
+          "bullets": [
+            "说话人1今天下班前发群",
+            "今晚邮件发送demo checklist"
+          ],
+          "note": "请大家把关"
+        }
+      ],
+      "accent": "blue"
+    },
+    {
+      "title": "会议听记功能",
+      "layout": "list",
+      "items": [
+        {
+          "title": "自动纪要",
+          "tag": "新规",
+          "bullets": [
+            "会议录音自动生成纪要",
+            "销售团队受益明显"
+          ],
+          "note": "尚未上线"
+        }
+      ],
+      "accent": "teal"
+    },
+    {
+      "title": "后续行动共识",
+      "layout": "closing",
+      "items": [
+        {
+          "title": "",
+          "tag": "",
+          "bullets": [],
+          "note": "周五前交付知识库，演示脚本今晚发送并共享"
+        }
+      ],
+      "accent": "amber"
+    }
+  ]
+}
