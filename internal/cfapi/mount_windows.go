@@ -61,6 +61,14 @@ type Mount struct {
 	// 而观察是旁路需求，不该改变它的签名。
 	observer func(FetchRequest)
 
+	// progress 是可选的进度观察钩子（测试与诊断用），见 SetProgressObserver。
+	// 只观察不替代——内核调用照常发生。
+	progress func(total, completed int64)
+	// progressFailures / lastProgressErr 记录进度回报被内核拒绝的次数与原因
+	// （见 ProgressFailures）。
+	progressFailures int64
+	lastProgressErr  error
+
 	// limiter 是读取节流器（切片 5 第 8 步）。
 	//
 	// 存在的理由：回调接上后**本机所有程序**读该目录都会触发下载，
@@ -289,7 +297,14 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 		defer rc.Close()
 
 		buf := make([]byte, length)
-		n, err := io.ReadFull(rc, buf)
+
+		// 只有到达内核会弹进度框的量级才回报：小文件根本不显示进度，
+		// 逐块回报只是纯开销（还会把回调线程占得更久）。
+		var report func(completed int64)
+		if length >= progressMinBytes {
+			report = func(completed int64) { m.reportProgress(req, length, completed) }
+		}
+		n, err := readProgressively(rc, buf, report)
 		if err != nil && err != io.ErrUnexpectedEOF {
 			return FetchResult{Err: fmt.Errorf("读取云端 %s 内容失败: %w", cloudPath, err)}
 		}
@@ -297,9 +312,101 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 			// 短读：如实回报实际字节数，让系统自己决定是否重试剩余区间。
 			// 这里不补零——补零会让上层读到静默损坏的数据。
 			buf = buf[:n]
+			if report != nil {
+				m.reportProgress(req, length, int64(n))
+			}
 		}
 		return FetchResult{Data: buf, Offset: offset}
 	}
+}
+
+// progressMinBytes 是开始回报进度的量级下限（8 MiB）。
+//
+// 依据不是猜测而是这条链路的成本结构：同步回调期间内核的进度框是唯一反馈，
+// 而 8 MiB 在正常内网/公网下已经足够长到让人怀疑卡死；再往下分段回报，
+// 换来的是每次多一轮内核调用。
+const progressMinBytes = 8 << 20
+
+// progressChunk 是每次回报的间隔（1 MiB）。
+const progressChunk = 1 << 20
+
+// readProgressively 分块读满 buf，并在每读满 progressChunk 时回报已完成字节。
+//
+// 为什么要自己分块：`io.ReadFull` 一口气读完，中间没有任何点可报，
+// 进度就只剩 0 和「完成」——那等于没报，而大文件恰恰是需要看得见进度的那一档。
+// 语义与 io.ReadFull 一致：读满返回 (len(buf), nil)，提前遇到 EOF
+// 返回 (已读字节数, err)，由调用方决定怎么处置短读。
+func readProgressively(r io.Reader, buf []byte, report func(completed int64)) (int, error) {
+	done := 0
+	next := progressChunk
+	for done < len(buf) {
+		n, err := r.Read(buf[done:])
+		done += n
+		// 先回报再判满：反过来会把「读满那一刻」的回报吞掉，
+		// 进度条就永远停在最后一格之前。
+		if report != nil && done >= next {
+			report(int64(done))
+			for next <= done {
+				next += progressChunk
+			}
+		}
+		// **读满了就算成功，哪怕 err == io.EOF**：HTTP 响应体这类 reader
+		// 会在交出最后一块字节的同时返回 EOF。`io.ReadFull` 对此返回 nil，
+		// 而早退成错误会让上面的取数路径整次失败——
+		// 真机回归就是这么抓到的（18 字节的小文件读不出来，回调一直等到内核超时）。
+		if done == len(buf) {
+			return done, nil
+		}
+		if err != nil {
+			return done, err
+		}
+	}
+	return done, nil
+}
+
+// reportProgress 把「总量 / 已完成」推给内核。
+//
+// 观察钩子（SetProgressObserver）是**旁路**而不是替代：内核调用照常发生。
+// 理由很实际——若挂上钩子就跳过真调用，「参数顺序对不对」这件事在测试里
+// 永远不会被执行到；而它错了的症状恰好是「进度一直 0%」且不报错，线上没人发现
+// （本包已经因为照抄二进制里的编号吃过一次亏）。
+//
+// 内核回报失败只累计计数、不打断读取：进度是锦上添花，数据仍在正常流动，
+// 因为一次回报失败就把用户的读取掐掉是本末倒置。
+func (m *Mount) reportProgress(req FetchRequest, total, completed int64) {
+	m.mu.RLock()
+	hook := m.progress
+	m.mu.RUnlock()
+	if hook != nil {
+		hook(total, completed)
+	}
+	if err := reportProviderProgress(req.ConnectionKey, req.TransferKey, total, completed); err != nil {
+		m.mu.Lock()
+		m.progressFailures++
+		m.lastProgressErr = err
+		m.mu.Unlock()
+	}
+}
+
+// ProgressFailures 返回进度回报失败的次数与最后一次的原因。
+//
+// 露出来只为一件事：让用例能断言「真调用被内核接受了」。
+// 参数顺序错、连接已断这类问题都不会让读取失败，只会让进度静默不动——
+// 计数为 0 才是「进度真的在动」的证据。
+func (m *Mount) ProgressFailures() (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.progressFailures, m.lastProgressErr
+}
+
+// SetProgressObserver 注册一个进度观察钩子（传 nil 注销）。
+//
+// 与 SetFetchObserver 同一理由：**回报是否真的在发生**只有在这里看得出来，
+// 而它一旦发生就再也回不到日志里（生产代码不关心观察，调试时却不能没有）。
+func (m *Mount) SetProgressObserver(fn func(total, completed int64)) {
+	m.mu.Lock()
+	m.progress = fn
+	m.mu.Unlock()
 }
 
 // ── 身份编码 ──────────────────────────────────────────────────

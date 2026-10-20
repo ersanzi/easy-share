@@ -350,6 +350,22 @@ func (c *Client) Delete(ctx context.Context, token, space, path string) error {
 	return c.call(ctx, http.MethodDelete, "/easyshare/drive/object", token, body, nil)
 }
 
+// DeleteTree 递归删除目录子树：目录内每个文件各自软删进回收站，
+// 内部目录标记对象一并清掉。path 必须是带尾斜杠的目录键（服务端只认这种形态）。
+//
+// 与 Delete 的分工：Delete 只动路径自身（对目录即只清标记对象，子文件不受影响），
+// 递归语义必须显式声明——否则「删一个文件夹」在两个调用方眼里含义不同，
+// 挂载盘/WebDAV 走的正是非递归那条路。
+func (c *Client) DeleteTree(ctx context.Context, token, space, path string) error {
+	body, err := json.Marshal(map[string]any{
+		"path": path, "space": normalizeSpace(space), "recursive": true,
+	})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodDelete, "/easyshare/drive/object", token, body, nil)
+}
+
 // DeleteByFileID 按稳定 fileId 删除（切片 1：写路径改走身份，不再以路径为主键）。
 //
 // 为什么优先用 fileId：路径只是属性，改名/移动后它变了而身份不变。

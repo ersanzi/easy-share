@@ -314,6 +314,58 @@ func TestLiveSpacedavRenameOntoExistingKeepsBoth(t *testing.T) {
 	t.Logf("✅ 目标占用改名保留双方：%s=%q，%s=%q", target, gotTarget, conflict, gotConflict)
 }
 
+// 目录是云端实体，不是本机便签：资源管理器里 Mkdir 必须在控制面留下目录标记，
+// RemoveAll 之后标记也要一并摘掉。单测里 Client 全是假实现，这条只能钉在活栈上——
+// 症状是「网盘页看不到我刚建的文件夹」和「删掉的空文件夹又长回来」。
+func TestLiveSpacedavDirectoryIsCloudEntity(t *testing.T) {
+	fs, client, token := liveSpace(t)
+	ctx := context.Background()
+	dir := fmt.Sprintf("/live-spacedav/cloud-dir-%d", time.Now().UnixNano())
+	rel := strings.TrimPrefix(dir, "/")
+
+	registerLiveCleanup(t, fs, client, token, dir)
+
+	if err := fs.Mkdir(ctx, dir, 0o755); err != nil {
+		t.Fatalf("WebDAV Mkdir 失败：%v", err)
+	}
+	if !liveHasObject(t, client, token, rel+"/") {
+		t.Errorf("控制面应看到目录标记 %s/（网盘页据此显示文件夹），实际没有", rel)
+	}
+
+	child := rel + "/a.txt"
+	if err := writeLiveFile(t, fs, "/"+child, "A"); err != nil {
+		t.Fatalf("写入子文件失败：%v", err)
+	}
+	if !liveHasObject(t, client, token, child) {
+		t.Fatalf("前置条件不成立：子文件 %s 没出现在服务端清单", child)
+	}
+
+	if err := fs.RemoveAll(ctx, dir); err != nil {
+		t.Fatalf("递归删目录失败：%v", err)
+	}
+	if liveHasObject(t, client, token, child) {
+		t.Errorf("删除后子文件 %s 仍在服务端在用清单", child)
+	}
+	if liveHasObject(t, client, token, rel+"/") {
+		t.Errorf("删除后服务端仍留着目录标记 %s/ ——网盘页会显示一个本机已删的空文件夹", rel)
+	}
+}
+
+// liveHasObject 在**含目录标记**的服务端清单里查一个路径是否存在。
+func liveHasObject(t *testing.T, client *drive.Client, token, path string) bool {
+	t.Helper()
+	objects, err := client.ObjectsWithDirs(context.Background(), token, drive.SpacePersonal)
+	if err != nil {
+		t.Fatalf("列举服务端对象失败：%v", err)
+	}
+	for _, o := range objects {
+		if o.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 func writeLiveFile(t *testing.T, fs *spacedav.FS, name, content string) error {
 	t.Helper()
 	w, err := fs.OpenFile(context.Background(), name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)

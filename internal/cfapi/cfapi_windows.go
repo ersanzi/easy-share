@@ -270,16 +270,36 @@ const (
 
 // ── 回调 ──────────────────────────────────────────────────────
 
-// CallbackType 是 CF_CALLBACK_TYPE。取值来自 WPS 取证 §2.1b 的实测表。
+// CallbackType 是 CF_CALLBACK_TYPE。
+//
+// **取值改按本机 Windows SDK 头**：
+// `Windows Kits\10\Include\10.0.26100.0\um\cfapi.h` 第 488–503 行——该枚举从 0 起顺序编号，
+// `CF_CALLBACK_TYPE_NONE = 0xFFFFFFFF` 是表终止项。
+//
+// ⚠️ 此前的取值抄自 WPS 取证 §2.1b 里**从 `ksyncengine.dll` 读出的回调表**（0/2/6/9/11）。
+// 数字本身没读错，错在**名字**：那批编号是 WPS 自己编译期 SDK 的枚举顺序，
+// 与本机这套不一致。按旧常量订阅会订到别的回调上——例如旧写法
+// `CallbackTypeNotifyDehydrate = 9`，而本机 9 是 `NOTIFY_DELETE`、释放空间的通知号是 **7**。
+// 目前订阅表只用到 FETCH_DATA(0) 与 CANCEL_FETCH_DATA(2)，两者新旧一致，
+// 所以这个错位**尚未造成故障**；写在这里是为了下一个加订阅的人不再踩。
+// 取证文档已同步更正（同文 §2.1b 的编号对照）。
 type CallbackType int32
 
 const (
-	CallbackTypeFetchData              CallbackType = 0
-	CallbackTypeCancelFetchData        CallbackType = 2
-	CallbackTypeNotifyDelete           CallbackType = 6
-	CallbackTypeNotifyDehydrate        CallbackType = 9
-	CallbackTypeNotifyDeleteCompletion CallbackType = 11
-	CallbackTypeNone                   CallbackType = -1 // 0xFFFFFFFF，表终止项
+	CallbackTypeFetchData                 CallbackType = 0  // CF_CALLBACK_TYPE_FETCH_DATA
+	CallbackTypeValidateData              CallbackType = 1  // CF_CALLBACK_TYPE_VALIDATE_DATA
+	CallbackTypeCancelFetchData           CallbackType = 2  // CF_CALLBACK_TYPE_CANCEL_FETCH_DATA
+	CallbackTypeFetchPlaceholders         CallbackType = 3  // CF_CALLBACK_TYPE_FETCH_PLACEHOLDERS
+	CallbackTypeCancelFetchPlaceholders   CallbackType = 4  // CF_CALLBACK_TYPE_CANCEL_FETCH_PLACEHOLDERS
+	CallbackTypeNotifyFileOpenCompletion  CallbackType = 5  // CF_CALLBACK_TYPE_NOTIFY_FILE_OPEN_COMPLETION
+	CallbackTypeNotifyFileCloseCompletion CallbackType = 6  // CF_CALLBACK_TYPE_NOTIFY_FILE_CLOSE_COMPLETION
+	CallbackTypeNotifyDehydrate           CallbackType = 7  // CF_CALLBACK_TYPE_NOTIFY_DEHYDRATE
+	CallbackTypeNotifyDehydrateCompletion CallbackType = 8  // CF_CALLBACK_TYPE_NOTIFY_DEHYDRATE_COMPLETION
+	CallbackTypeNotifyDelete              CallbackType = 9  // CF_CALLBACK_TYPE_NOTIFY_DELETE
+	CallbackTypeNotifyDeleteCompletion    CallbackType = 10 // CF_CALLBACK_TYPE_NOTIFY_DELETE_COMPLETION
+	CallbackTypeNotifyRename              CallbackType = 11 // CF_CALLBACK_TYPE_NOTIFY_RENAME
+	CallbackTypeNotifyRenameCompletion    CallbackType = 12 // CF_CALLBACK_TYPE_NOTIFY_RENAME_COMPLETION
+	CallbackTypeNone                      CallbackType = -1 // 0xFFFFFFFF，表终止项
 )
 
 // filetimeEpochDiff 是 1601→1970 的 100ns 差。
@@ -292,8 +312,14 @@ const filetimeEpochDiff = 116444736000000000
 //
 // 参数是秒而非 time.Time：调用方拿到的常是「元数据里 0 表示未知」这类哨兵值，
 // 走 time.Time 反而要多绕一层。0 原样返回（对应 1601 年），语义由调用方负责。
+//
+// **负值一律当未知处理**（真机踩出来的）：`time.Time{}` 的 Unix() 是 -62135596800，
+// 直接换算会得到**负的 FILETIME**，而 FILETIME 的定义就是从 1601 年起算的无符号 100ns 计数，
+// 内核因此用 `E_INVALIDARG (0x80070057)` 拒掉整条 `CfCreatePlaceholders` 项——
+// 症状是「云端新建的文件在本地建不出占位符」。增量事件流本来就允许只带身份不带时间，
+// 所以这不是假想场景。
 func TimeToFiletime(unixSeconds int64) int64 {
-	if unixSeconds == 0 {
+	if unixSeconds <= 0 {
 		return 0
 	}
 	return unixSeconds*10000000 + filetimeEpochDiff

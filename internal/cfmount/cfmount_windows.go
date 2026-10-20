@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -75,6 +76,21 @@ type Config struct {
 
 	// FetchTimeout 是单次拉取上限；0 用 cfapi 默认值。
 	FetchTimeout time.Duration
+	// State 是增量列举的跨调用状态；nil 表示每次走全量（旧行为）。
+	//
+	// 每个空间一个实例（个人 / 共享分开），见 ListState 的说明。
+	State *ListState
+}
+
+// modifiedUnixOf 把对象的修改时间换成 cfapi 的秒制哨兵：没有时间为 0（未知）。
+//
+// 不能直接 `.Unix()`：`time.Time{}` 会给出 -62135596800，换算 FILETIME 后是负数，
+// 内核会拒绝创建该占位符（真机 0x80070057）。
+func modifiedUnixOf(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // Entries 把控制面对象列表转成 cfapi 的清单条目。
@@ -112,9 +128,13 @@ func Entries(objects []drive.Object) []cfapi.CloudEntry {
 			})
 		}
 		out = append(out, cfapi.CloudEntry{
-			Path:         o.Path,
-			Size:         o.Size,
-			ModifiedUnix: o.LastModified.Unix(),
+			Path: o.Path,
+			Size: o.Size,
+			// 零时间要落成 0（cfapi 的「未知」哨兵），不能直接给 time.Time{}.Unix()：
+			// 那是 -62135596800，换算成 FILETIME 会变成负数，
+			// 内核直接拒绝建占位符（0x80070057）。增量事件流只带身份不带时间，
+			// 所以「没有修改时间」是常态而不是异常。
+			ModifiedUnix: modifiedUnixOf(o.LastModified),
 			IsDir:        false,
 			Identity:     fileIdentity(o),
 			// **整片只读**：cfapi 只注册 FETCH_DATA / CANCEL_FETCH_DATA，没有写回调——
@@ -131,8 +151,12 @@ func Entries(objects []drive.Object) []cfapi.CloudEntry {
 
 // List 产出 cfapi 需要的 ListFunc。
 //
-// 每次调用都问控制面要全量清单——对齐现状（控制面无增量接口），
-// 增量是路线图切片 2 的事。
+// 传了 `Config.State` 且客户端支持增量时走**增量列举**（路线图切片 2 的第二个生产落点）：
+// 占位符同步根每 5 分钟对一次账，若每次都要全量清单，万级空间就是一次全量列举。
+// 钉盘那套「空间版本 + 变更流水」的核心价值就在这里——第一次全量拿底，
+// 之后只问「那个号之后发生了啥」。
+//
+// 没传 State、或客户端/旧控制面不支持增量时，行为与引入增量之前完全一致（每次全量）。
 func List(cfg Config) cfapi.ListFunc {
 	return func(ctx context.Context) ([]cfapi.CloudEntry, error) {
 		token := cfg.Token()
@@ -140,28 +164,102 @@ func List(cfg Config) cfapi.ListFunc {
 			// 未登录不该让挂载点显示成空目录——返回错误让上层决定卸载
 			return nil, fmt.Errorf("cfmount: 未登录")
 		}
-		objects, err := cfg.Client.Objects(ctx, token, cfg.Space)
-		if err != nil {
-			return nil, fmt.Errorf("cfmount: 列举空间 %s 失败: %w", cfg.Space, err)
+
+		changes, canIncremental := cfg.Client.(ChangeLister)
+		if cfg.State == nil || !canIncremental {
+			objects, err := cfg.Client.Objects(ctx, token, cfg.Space)
+			if err != nil {
+				return nil, fmt.Errorf("cfmount: 列举空间 %s 失败: %w", cfg.Space, err)
+			}
+			return Entries(objects), nil
 		}
-		return Entries(objects), nil
+
+		base, since := cfg.State.snapshot()
+		var sincePtr *int64
+		// 只有**手里有底**（上一次的全量视图还在）时才允许走增量：
+		// 增量流只描述差异，没有底就拼不出完整视图，其余对象会**静默消失**
+		// ——这条判据是 internal/spacedav 在真机上踩出来的（见其 objects() 同处注释）。
+		if since > 0 && base != nil {
+			sincePtr = &since
+		}
+
+		result, err := changes.Changes(ctx, token, cfg.Space, sincePtr)
+		if err != nil {
+			// 增量失败不代表空间读不到：旧控制面可能还没有 /changes。
+			// 退回全量，并让 State 重新以全量为底，行为与未引入增量时一致。
+			objects, listErr := cfg.Client.Objects(ctx, token, cfg.Space)
+			if listErr != nil {
+				return nil, fmt.Errorf("cfmount: 列举空间 %s 失败: %w", cfg.Space, listErr)
+			}
+			cfg.State.set(objects, 0)
+			return Entries(objects), nil
+		}
+
+		view := result.Files
+		if sincePtr != nil {
+			view = drive.ApplyChanges(base, result.Changes)
+		}
+		cfg.State.set(view, result.NewestSpaceVersion.Int64())
+		return Entries(view), nil
 	}
 }
 
-// Open 产出 cfapi 需要的 OpenFunc。
+// ChangeLister 是**可选**能力：支持增量列举的客户端（`*drive.Client` 满足）。
 //
-// ⚠️ **当前实现每次都取整份对象、在内存里切区间**。原因：控制面的预签名 GET
-// 不带 Range 参数，而 CfApi 的回调要的是任意区间。
+// 与 Presigner 同一模式做成可选接口：单测里的假 Lister 不必被迫实现它，
+// 缺它也只是退回全量列举。
+type ChangeLister interface {
+	Changes(ctx context.Context, token, space string, sinceVersion *int64) (*drive.Changes, error)
+}
+
+// ListState 是增量列举的跨调用状态：上一次拿到的完整视图 + 读到的空间版本。
 //
-// 代价：读一个 1 GB 文件里的 1 字节，也要下载 1 GB。这对小文件无感，
-// 对常见文档（几 MB）可接受，**但对大文件是明确的性能缺陷**。
+// 为什么要显式传进来而不是包内全局：同一进程可能同时挂个人空间与共享空间，
+// 两者的清单与游标绝不能互相串。
 //
-// 正确的做法有两条（都留给后续切片）：
-//  1. 控制面支持签发**带 Range 的预签名 GET**（S3 的 presignGetObject 可以
-//     通过 getObjectRequest().range(...) 表达）——最直接；
-//  2. 或客户端直接对存储发 Range 请求（需要绕过预签名，不可行）。
+// 版本只存在内存里，刻意不落盘：跨进程重启后第一次必然是全量（底没了），
+// 落盘的版本号在那一刻用不上；而**与 WebDAV 挂载共用一个版本文件是危险的**——
+// 两个消费方各自维护视图，共用会让一方把另一方的游标推前，
+// 另一方再去要增量就漏掉中间的事件，症状是「云端有文件、占位符里没有」且不报错。
+type ListState struct {
+	mu      sync.Mutex
+	objects []drive.Object
+	version int64
+}
+
+// NewListState 建一个空的增量状态（第一次列举会走全量拿底）。
+func NewListState() *ListState { return &ListState{} }
+
+// snapshot 返回上一次的完整视图与空间版本；objects 为 nil 表示还没有底。
+func (s *ListState) snapshot() ([]drive.Object, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.objects, s.version
+}
+
+// set 用新的完整视图与空间版本覆盖状态。
 //
-// 所以这条缺陷的**根在控制面接口**，修的时候要从 platform-drive 改起。
+// version 传 0 表示「这次是全量兜底，没有可信的增量游标」——下次仍走全量拿底。
+func (s *ListState) set(objects []drive.Object, version int64) {
+	s.mu.Lock()
+	s.objects = objects
+	s.version = version
+	s.mu.Unlock()
+}
+
+// Open 产出 cfapi 需要的 OpenFunc：**只取被读的那段区间**。
+//
+// 为什么能做到：控制面签发的预签名 URL 只签 bucket + key
+// （`DriveStorage.presignGetAt` 没把任何请求头纳入签名），SigV4 的语义是
+// 「签名时未列出的头不参与校验」——所以客户端可以自由加 `Range` 头。
+// 2026-10-18 活栈实测（`scripts/diag/presign-range-probe.mjs`）：3 MB 对象请求
+// `bytes=1000000-1000010` 回 **206 / 11 字节**，`content-range` 与对象总长都对。
+//
+// 服务端忽略 Range 回 200 时不会出错：`httprange` 会整份读再切区间（只是慢），
+// 语义不变。没有 `Presigner` 的客户端（含单测假实现）直接走 `OpenWholeObject`。
+//
+// 历史：这里曾长期写着「每次取整份对象、缺陷根在控制面接口」——那是**修完之后
+// 没删的旧注释**，与下面五行代码矛盾。改注释前请先看 `internal/cfmount/README.md` §1。
 func Open(cfg Config) cfapi.OpenFunc {
 	// 若客户端支持预签名，走**带 Range 的直取**（只下需要的区间）。
 	if p, ok := cfg.Client.(Presigner); ok {

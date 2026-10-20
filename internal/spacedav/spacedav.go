@@ -255,14 +255,9 @@ func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
 			return result.Files, nil
 		}
 
-		// 把差异应用到上次缓存。这里必须**复制后修改**，
-		// 不能直接改 base：其他 goroutine 可能正持有旧 slice 在读。
-		merged := make([]drive.Object, len(base))
-		copy(merged, base)
-		_ = merged // base 可能为空（进程重启）；applyChange 会从 created 事件补出对象
-		for _, change := range result.Changes {
-			merged = applyChange(merged, change)
-		}
+		// 把差异应用到上次缓存。复制与逐条合并都在 drive.ApplyChanges 里做——
+		// 那段语义与占位符挂载共用一份实现（见 internal/drive/changes_apply.go）。
+		merged := drive.ApplyChanges(base, result.Changes)
 		f.mu.Lock()
 		f.cache, f.cachedAt = merged, time.Now()
 		f.lastVersion = result.NewestSpaceVersion.Int64()
@@ -279,63 +274,6 @@ func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
 	f.cache, f.cachedAt = list, time.Now()
 	f.mu.Unlock()
 	return list, nil
-}
-
-// applyChange 把一条生命周期事件应用到对象清单。
-//
-// 语义与客户端本地视图一致：created/updated/restored 保证路径存在；
-// deleted/moved/purged 从旧路径移除。事件流按版本升序到达，
-// 因此重复应用同一条流会得到相同结果。
-func applyChange(objects []drive.Object, change drive.Change) []drive.Object {
-	switch change.Event {
-	case drive.ChangeCreated, drive.ChangeUpdated, drive.ChangeRestored:
-		// 事件流只带身份不带大小/时间；这里不能用零值对象充当完整视图——
-		// 否则 Stat 会返回 0 字节（真实缺陷：用户看到文件“变小”）。
-		// 正确做法：先保留既有对象的元数据；没有元数据时**从全量视图查询**。
-		for i := range objects {
-			if objects[i].Path == change.Path {
-				return objects
-			}
-		}
-		return append(objects, drive.Object{
-			Path:         change.Path,
-			Size:         change.Size,
-			LastModified: change.LastModified(),
-			FileId:       change.FileId,
-		})
-	case drive.ChangeDeleted, drive.ChangePurged:
-		next := objects[:0]
-		for _, obj := range objects {
-			if obj.Path != change.Path {
-				next = append(next, obj)
-			}
-		}
-		return next
-	case drive.ChangeMoved:
-		next := make([]drive.Object, 0, len(objects))
-		for _, obj := range objects {
-			if obj.Path == change.OldPath {
-				continue
-			}
-			if obj.Path == change.Path {
-				continue
-			}
-			next = append(next, obj)
-		}
-		// moved 只改路径，size/lastModified 保留
-		for _, obj := range objects {
-			if obj.Path == change.OldPath {
-				moved := obj
-				moved.Path = change.Path
-				moved.FileId = change.FileId
-				next = append(next, moved)
-				break
-			}
-		}
-		return next
-	default:
-		return objects
-	}
 }
 
 // versionOf 返回上传前看到的版本号。
@@ -389,7 +327,16 @@ const uploadTimeout = 30 * time.Minute
 
 // --- webdav.FileSystem ---
 
-// Mkdir 记住一个空目录。对象存储无真目录，故只在本地维护（有 DirStore 时落盘）。
+// Mkdir 建一个目录：本机立刻可见，同时把目录标记送到控制面。
+//
+// 为什么必须送云端：目录只在本地 `dirs.json` 记着的话，「此电脑里新建的文件夹」
+// 只有这台机器看得见——网盘页没有、换台电脑没有、共享空间里的同事更没有。
+// 钉盘与 WPS 的目录都是云端实体，任何一端建了所有端一致，这里按同一口径补齐。
+//
+// 服务端失败**不拦本机创建**：未登录、旧控制面还没有 `/mkdir` 端点都是真实场景，
+// 那种情况下退化为「仅本机可见」（与 pendingDirs 的历史行为一致），
+// 而不是让资源管理器弹「拒绝访问」。代价是这台机器上的目录在别的端临时不可见，
+// 控制面部署到位后新建的目录即恢复一致。
 func (f *FS) Mkdir(_ context.Context, name string, _ os.FileMode) error {
 	if f.readOnly {
 		return errReadOnly
@@ -408,7 +355,28 @@ func (f *FS) Mkdir(_ context.Context, name string, _ os.FileMode) error {
 		// 这点取舍与 pendingDirs 的历史行为一致，不该因为写盘失败就报错
 		_ = store.Add(f.space, key, created)
 	}
+
+	if mc, ok := f.client.(mkdirClient); ok {
+		if token, err := f.tokenOrErr(); err == nil {
+			// 用独立 context：与上传同理，WebDAV 请求 context 可能被资源管理器提前掐断，
+			// 而「目录已建」这件事不该因为客户端断开就丢。
+			ctx, cancel := context.WithTimeout(context.Background(), dirOpTimeout)
+			defer cancel()
+			_, _ = mc.Mkdir(ctx, token, f.space, key)
+		}
+	}
 	return nil
+}
+
+// dirOpTimeout 是目录标记同步的上限——标记对象是 0 字节写入，慢就是网络不通。
+const dirOpTimeout = 10 * time.Second
+
+// mkdirClient 是可选能力：能在控制面建目录标记的客户端。
+//
+// 与 changeClient/fileIDDeleter 同一模式：假实现与旧装配不必为编译补空方法。
+// 生产 `*drive.Client` 已实现（POST /easyshare/drive/mkdir，幂等）。
+type mkdirClient interface {
+	Mkdir(ctx context.Context, token, space, path string) (string, error)
 }
 
 // OpenFile 打开文件读，或返回一个写缓冲。
@@ -480,6 +448,10 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 	}
 
 	prefix := key + "/"
+	isDir, err := f.isDirFrom(list, key)
+	if err != nil {
+		return err
+	}
 	var targets []string
 	for _, obj := range list {
 		if obj.Path == key || strings.HasPrefix(obj.Path, prefix) {
@@ -507,22 +479,27 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 		}
 	}
 
-	if len(targets) == 0 {
-		// 只是个空目录：内存记录已清，无对象可删
-		return nil
-	}
-	// 删除优先走 fileId（切片 1：写路径按身份而非路径）。
-	// 路径在「列出 → 删除」之间可能已被别人改名占用；按身份删不会误伤。
-	// fileId 从本次列举结果里取；取不到（目录层未登记/脏数据）退回按路径删。
-	fileIDs := make(map[string]int64, len(list))
-	for _, obj := range list {
-		fileIDs[obj.Path] = obj.FileId.Int64()
-	}
-	for _, target := range targets {
-		if err := f.deleteObject(ctx, token, target, fileIDs[target]); err != nil {
-			f.invalidate()
-			return err
+	if len(targets) > 0 {
+		// 删除优先走 fileId（切片 1：写路径按身份而非路径）。
+		// 路径在「列出 → 删除」之间可能已被别人改名占用；按身份删不会误伤。
+		// fileId 从本次列举结果里取；取不到（目录层未登记/脏数据）退回按路径删。
+		fileIDs := make(map[string]int64, len(list))
+		for _, obj := range list {
+			fileIDs[obj.Path] = obj.FileId.Int64()
 		}
+		for _, target := range targets {
+			if err := f.deleteObject(ctx, token, target, fileIDs[target]); err != nil {
+				f.invalidate()
+				return err
+			}
+		}
+	}
+	// 目录标记同样要摘：本机记录清了而服务端标记还在，网盘页会继续显示一个
+	// 「这台电脑上已经删掉」的空文件夹——两个入口对同一个目录的认知就此分叉。
+	// 带尾斜杠的删除只摘标记、不动子对象（控制面对无 active 行的对象直接删标记）。
+	// 失败不报错：旧控制面不认识尾斜杠路径时会 400，此时本机删除已经完成。
+	if isDir {
+		_ = f.client.Delete(ctx, token, f.space, prefix)
 	}
 	f.invalidate()
 	return nil

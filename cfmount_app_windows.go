@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,9 @@ type cfapiMounts struct {
 	personal *cfapi.Mount
 	// root 记录同步根本地路径（卸载时即使 Mount 已损也要能注销根目录）。
 	personalRoot string
+	// listState 是增量列举的跨调用状态：挂载与每轮定期同步**共用一个**，
+	// 否则每轮都从「没底」开始、每次全量，增量就白做了。
+	listState *cfmount.ListState
 	// syncStop 停掉定期同步循环。
 	syncStop chan struct{}
 	// mounting 标记「正在挂载中」——单飞闸门。
@@ -106,6 +110,9 @@ func (a *App) mountCfapiSpaces() {
 		return
 	}
 
+	// 增量状态挂在挂载上：首轮全量拿底，之后每轮只问「那个版本之后发生了啥」
+	listState := cfmount.NewListState()
+
 	cfg := cfmount.Config{
 		RootPath:     root,
 		Space:        drive.SpacePersonal,
@@ -113,6 +120,7 @@ func (a *App) mountCfapiSpaces() {
 		Token:        cfmount.TokenFunc(a.sessionToken()),
 		ProviderName: "EasyShare 网盘",
 		ProviderID:   cfapiPersonalProviderID,
+		State:        listState,
 	}
 
 	mount, err := cfapi.MountSpace(cfapi.MountOptions{
@@ -137,6 +145,7 @@ func (a *App) mountCfapiSpaces() {
 	}
 	a.cfapi.personal = mount
 	a.cfapi.personalRoot = root
+	a.cfapi.listState = listState
 	stop := make(chan struct{})
 	a.cfapi.syncStop = stop
 	clientRef := client
@@ -161,6 +170,7 @@ func (a *App) cfapiSyncLoop(stop chan struct{}, client *drive.Client) {
 			a.cfapi.mu.Lock()
 			mount := a.cfapi.personal
 			root := a.cfapi.personalRoot
+			state := a.cfapi.listState
 			a.cfapi.mu.Unlock()
 			if mount == nil {
 				return
@@ -175,6 +185,7 @@ func (a *App) cfapiSyncLoop(stop chan struct{}, client *drive.Client) {
 				Token:        cfmount.TokenFunc(a.sessionToken()),
 				ProviderName: "EasyShare 网盘",
 				ProviderID:   cfapiPersonalProviderID,
+				State:        state,
 			})); err != nil {
 				a.logger.Printf("cfapi mount: 定期同步失败（下轮重试）: %v", err)
 			}
@@ -190,6 +201,9 @@ func (a *App) unmountCfapiSpaces() {
 	stop := a.cfapi.syncStop
 	a.cfapi.personal = nil
 	a.cfapi.personalRoot = ""
+	// 增量状态一并丢掉：换账号后不能沿用上一个账号的清单与空间游标，
+	// 否则会拿别人的版本号去要自己的差异。
+	a.cfapi.listState = nil
 	a.cfapi.syncStop = nil
 	a.cfapi.mu.Unlock()
 
@@ -234,4 +248,80 @@ func (a *App) OpenCfapiFolder() error {
 		return err
 	}
 	return nil
+}
+
+// CloudKeepOnDevice 「始终保留在这台电脑上」——钉住并立刻取回内容。
+//
+// 对标钉盘/WPS 的桌面标配（WPS 取证 §3.5 `freeUpPlaceholder` 的同族动作）。
+// 只钉不取是不够的：SDK 明说钉住后平台是**异步**通知提供方拉数据，
+// 用户点这个按钮的期望是「现在就在这台电脑上」，所以钉完再 Hydrate 一次。
+func (a *App) CloudKeepOnDevice(key string) error {
+	path, err := a.placeholderLocalPath(key)
+	if err != nil {
+		return err
+	}
+	if err := cfapi.SetPinState(path, cfapi.PinStatePinned, cfapi.SetPinFlagNone); err != nil {
+		a.reportError("cfapi keep on device", err)
+		return err
+	}
+	if err := cfapi.Hydrate(path); err != nil {
+		a.reportError("cfapi hydrate", err)
+		return err
+	}
+	return nil
+}
+
+// CloudFreeUpSpace 「释放空间」——解除钉住后把本地内容退回空壳。
+//
+// 先解除钉住是刻意的：平台**拒绝**对已钉占位符脱水（真机实测 `0x80070188`，
+// 见 state_ops_windows_test.go），若直接 Dehydrate，用户点了「释放空间」只会拿到一个
+// 看不懂的错误。云上的文件不受影响，重新点开会自动拉回来。
+func (a *App) CloudFreeUpSpace(key string) error {
+	path, err := a.placeholderLocalPath(key)
+	if err != nil {
+		return err
+	}
+	if err := cfapi.SetPinState(path, cfapi.PinStateUnspecified, cfapi.SetPinFlagNone); err != nil {
+		a.reportError("cfapi unpin", err)
+		return err
+	}
+	if err := cfapi.Dehydrate(path); err != nil {
+		a.reportError("cfapi dehydrate", err)
+		return err
+	}
+	return nil
+}
+
+// placeholderLocalPath 把云端相对路径映射到同步根下的本地路径。
+//
+// 三道闸：同步根必须已挂载；路径不能是绝对路径、不能含 `..` 段；
+// 拼接后的结果必须仍在同步根内。占位符操作是对真实文件系统下手，
+// 一个越界的路径就是删/钉用户磁盘上的别的文件。
+func (a *App) placeholderLocalPath(key string) (string, error) {
+	root := a.CfapiMountPath()
+	if root == "" {
+		return "", fmt.Errorf("本地挂载未启用")
+	}
+	if key == "" || strings.HasPrefix(key, "/") || filepath.IsAbs(key) {
+		return "", fmt.Errorf("非法路径：%s", key)
+	}
+	for _, seg := range strings.Split(key, "/") {
+		if seg == ".." {
+			return "", fmt.Errorf("非法路径：%s", key)
+		}
+	}
+	path := filepath.Join(root, filepath.FromSlash(key))
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("路径越过同步根：%s", key)
+	}
+	return absPath, nil
 }

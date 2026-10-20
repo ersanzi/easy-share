@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -280,13 +281,17 @@ func TestRemoveAllDeletesWholeSubtree(t *testing.T) {
 	if err := fs.RemoveAll(context.Background(), "/docs"); err != nil {
 		t.Fatalf("RemoveAll 出错：%v", err)
 	}
-	if len(client.deleted) != 2 {
-		t.Fatalf("应删掉 docs 下 2 个对象，实删 %v", client.deleted)
+	if len(client.deleted) != 3 {
+		t.Fatalf("应删掉 docs 下 2 个对象与目录标记，实删 %v", client.deleted)
 	}
 	for _, path := range client.deleted {
 		if !strings.HasPrefix(path, "docs/") {
 			t.Errorf("删到了 docs 之外的对象：%s", path)
 		}
+	}
+	// 目录标记必须一起摘：留着网盘页会显示一个「本机已删」的空文件夹
+	if !slices.Contains(client.deleted, "docs/") {
+		t.Errorf("应包含服务端目录标记删除 docs/，实删 %v", client.deleted)
 	}
 }
 

@@ -226,6 +226,35 @@ func TestDeleteSendsPath(t *testing.T) {
 	if !strings.Contains(gotBody, `"path":"a.txt"`) {
 		t.Errorf("请求体错误：%s", gotBody)
 	}
+	if strings.Contains(gotBody, "recursive") {
+		t.Errorf("单对象删除不应带 recursive：%s", gotBody)
+	}
+}
+
+// DeleteTree 是「删整棵子树」的唯一入口：recursive 必须显式为 true，
+// 且路径保留尾斜杠（服务端只认这种形态才走目录分支）。
+func TestDeleteTreeSendsRecursiveFlag(t *testing.T) {
+	var method, gotBody string
+	client, closeFn := newTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Write([]byte(`{"code":200,"msg":"ok","data":null}`))
+	}))
+	defer closeFn()
+
+	if err := client.DeleteTree(context.Background(), "tok", SpacePersonal, "photos/"); err != nil {
+		t.Fatalf("DeleteTree 出错：%v", err)
+	}
+	if method != http.MethodDelete {
+		t.Errorf("应为 DELETE，实际 %s", method)
+	}
+	if !strings.Contains(gotBody, `"recursive":true`) {
+		t.Errorf("缺少 recursive 标记：%s", gotBody)
+	}
+	if !strings.Contains(gotBody, `"path":"photos/"`) {
+		t.Errorf("目录尾斜杠被吃掉：%s", gotBody)
+	}
 }
 
 func TestNewTrimsTrailingSlash(t *testing.T) {

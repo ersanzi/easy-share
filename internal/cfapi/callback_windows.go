@@ -47,6 +47,14 @@ type FetchRequest struct {
 	OptionalLength int64
 	// PriorityHint 越小越优先（0 = 最高）。
 	PriorityHint uint8
+	// ConnectionKey / TransferKey 是回报下载进度用的一对内核标识
+	// （`CF_CONNECTION_KEY` / `CF_TRANSFER_KEY`，见 progress_windows.go）。
+	//
+	// 大文件按需取数要持续告诉内核「已经拉了多少」，否则用户面对的是
+	// 一个不报错也不动的窗口；WPS 正是靠这条把「点开才下载」做成可感知进度
+	// （取证 §6 的 `CfReportProviderProgress`）。
+	ConnectionKey connectionKey
+	TransferKey   int64
 	// ProcessName 是**发起这次读取的进程名**（不含路径），如 "explorer.exe"。
 	//
 	// 来自 CF_CALLBACK_INFO.ProcessInfo，需要连接时置
@@ -382,6 +390,8 @@ func (s *Session) onFetchData(infoPtr, paramsPtr uintptr) uintptr {
 		OptionalOffset: params.OptionalFileOffset,
 		OptionalLength: params.OptionalLength,
 		PriorityHint:   info.PriorityHint,
+		ConnectionKey:  info.ConnectionKey,
+		TransferKey:    info.TransferKey,
 		ProcessName:    procName,
 		ProcessId:      procID,
 	}

@@ -23,9 +23,13 @@ func TestDriveClientSatisfiesInterfaces(t *testing.T) {
 
 	var _ Lister = c
 	var _ Presigner = c
+	var _ ChangeLister = c
 
 	// 运行期再确认一次类型断言与编译期一致
 	if _, ok := any(c).(Presigner); !ok {
 		t.Fatal("*drive.Client 不满足 Presigner——Range 路径会静默退化为整份读取")
+	}
+	if _, ok := any(c).(ChangeLister); !ok {
+		t.Fatal("*drive.Client 不满足 ChangeLister——占位符挂载会静默退回每次全量列举")
 	}
 }
