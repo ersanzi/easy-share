@@ -196,6 +196,33 @@ class JobStore:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    def list_documents(self, *, limit: int = 200) -> list[list[ProcessingJob]]:
+        """按 file_id 聚合任务历史，返回最近更新的若干文档。
+
+        每个文档返回其全部任务（updated_at 倒序），路由据此取「最近一次任务」
+        与「最近一次成功版本」——两者分开，才能在更新失败时继续读上一版。
+        """
+        bounded = max(1, min(limit, 2000))
+        with self.lock:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM processing_jobs
+                WHERE file_id IN (
+                    SELECT file_id FROM processing_jobs
+                    GROUP BY file_id
+                    ORDER BY MAX(updated_at) DESC
+                    LIMIT ?
+                )
+                ORDER BY updated_at DESC, id DESC
+                """,
+                (bounded,),
+            ).fetchall()
+        groups: dict[str, list[ProcessingJob]] = {}
+        for row in rows:
+            job = self._from_row(row)
+            groups.setdefault(job.file_id, []).append(job)
+        return list(groups.values())
+
     def claim(self, job_id: str) -> ProcessingJob | None:
         now = _now()
         with self.lock, self.connection:

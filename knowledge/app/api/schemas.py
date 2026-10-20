@@ -91,6 +91,34 @@ class ProcessingJobResponse(BaseModel):
     finished_at: str | None = None
 
 
+class DocumentSummary(BaseModel):
+    """知识库清单一行：最新任务状态 + 最近一次成功版本。"""
+
+    job_id: str
+    file_id: str
+    version_id: str
+    filename: str
+    status: Literal["queued", "processing", "completed", "failed"]
+    stage: str
+    progress: int
+    error_code: str | None = None
+    error_message: str | None = None
+    owner: str | None = None
+    updated_at: str
+    # ready 看的是“有没有成功版本”，不是“最新任务是否成功”：
+    # 更新失败时仍可读上一版，清单必须把这两件事分开表达。
+    ready: bool
+    read_version_id: str | None = None
+    chunks: int = 0
+    characters: int = 0
+    processed_at: str | None = None
+    source_bytes: int = 0
+
+
+class DocumentListResponse(BaseModel):
+    documents: list[DocumentSummary] = Field(default_factory=list)
+
+
 class ArtifactManifestResponse(BaseModel):
     schema_version: int
     pipeline_version: str

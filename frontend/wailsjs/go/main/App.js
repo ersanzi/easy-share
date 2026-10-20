@@ -234,6 +234,18 @@ export function KnowledgeAsk(arg1) {
   return window['go']['main']['App']['KnowledgeAsk'](arg1);
 }
 
+export function KnowledgeDocument(arg1, arg2) {
+  return window['go']['main']['App']['KnowledgeDocument'](arg1, arg2);
+}
+
+export function KnowledgeDocuments(arg1) {
+  return window['go']['main']['App']['KnowledgeDocuments'](arg1);
+}
+
+export function KnowledgeDownload(arg1, arg2, arg3) {
+  return window['go']['main']['App']['KnowledgeDownload'](arg1, arg2, arg3);
+}
+
 export function KnowledgeHealth() {
   return window['go']['main']['App']['KnowledgeHealth']();
 }
@@ -302,8 +314,16 @@ export function MeetingKeywordsRegenerate(arg1) {
   return window['go']['main']['App']['MeetingKeywordsRegenerate'](arg1);
 }
 
+export function MeetingLiveCheck(arg1) {
+  return window['go']['main']['App']['MeetingLiveCheck'](arg1);
+}
+
 export function MeetingLivePoints(arg1) {
   return window['go']['main']['App']['MeetingLivePoints'](arg1);
+}
+
+export function MeetingLiveSession(arg1) {
+  return window['go']['main']['App']['MeetingLiveSession'](arg1);
 }
 
 export function MeetingMindmapRegenerate(arg1) {
@@ -316,6 +336,14 @@ export function MeetingRemove(arg1) {
 
 export function MeetingRetranscribe(arg1) {
   return window['go']['main']['App']['MeetingRetranscribe'](arg1);
+}
+
+export function MeetingSegmentUpdate(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MeetingSegmentUpdate'](arg1, arg2, arg3);
+}
+
+export function MeetingSpeakerMerge(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MeetingSpeakerMerge'](arg1, arg2, arg3);
 }
 
 export function MeetingSpeakerRename(arg1, arg2, arg3) {

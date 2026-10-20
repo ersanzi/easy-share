@@ -112,23 +112,30 @@ Authorization: Bearer <apiToken>
 | `GET` | `/api/knowledge/status` | 知识服务登录态（本地，无网络探测） |
 | `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话） |
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
-| `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档规模/LLM 状态） |
+| `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档数/索引块数/LLM 状态；`documents` 与 `records` 分开） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
+| `GET` | `/api/knowledge/documents` | 知识库文档清单（按 `file_id` 聚合：最新任务状态 + 最近成功版本；按文档归属/部门过滤） |
+| `GET` | `/api/knowledge/documents/{file_id}/versions/{version_id}/view` | 知识文档阅读页数据（manifest + `document.json` 结构化正文；按文档归属/部门校验，与 `/query` 同口径） |
+| `GET` | `/api/knowledge/documents/{file_id}/versions/{version_id}/source` | 知识文档原件下载（流式透传；与阅读页同一可见性判据） |
 | `POST` | `/api/knowledge/meetings/transcribe` | 会议音频上传代理（multipart 流式透传，远端异步转写，202 回受理记录；带 `meeting_id` 时复用实时会话那条记录，不新建） |
 | `GET` | `/api/knowledge/meetings` | 会议听记列表（不含分段全文） |
 | `GET` | `/api/knowledge/meetings/{id}` | 会议详情（分段/发言人/总结/关键词/待办/区块状态；受理后前端轮询） |
 | `GET` | `/api/knowledge/meetings/{id}/audio` | 会议音频回放代理（流式透传） |
 | `GET` | `/api/knowledge/meetings/{id}/export/{format}` | 备忘录导出（`markdown`\|`docx`，流式透传） |
-| `PATCH` | `/api/knowledge/meetings/{id}/speakers` | 发言人改名 |
+| `PATCH` | `/api/knowledge/meetings/{id}/speakers` | 发言人改名（单次一个） |
+| `POST` | `/api/knowledge/meetings/{id}/speakers/merge` | 合并发言人（把 `from_speaker` 的全部轮次并进 `into_speaker`，对标钉钉「合并发言人」） |
+| `PATCH` | `/api/knowledge/meetings/{id}/segments/{index}` | 修改转写正文中某一句（逐字稿可编辑；改过的下标记入 `edited_segments`） |
 | `POST` | `/api/knowledge/meetings/{id}/archive` | 会议纪要归档入知识库 |
 | `POST` | `/api/knowledge/meetings/{id}/mindmap` | 重新生成思维导图区块（LLM 慢链路） |
 | `POST` | `/api/knowledge/meetings/{id}/summary` | 按模板重生成总结区块（可选 `template_id`；刷新 AI 待办，保留手工待办） |
 | `POST` | `/api/knowledge/meetings/{id}/keywords` | 补跑关键词区块（LLM 慢链路） |
-| `POST` | `/api/knowledge/meetings/stream/warm` | 后台预热流式 ASR 模型（进听记页即调；首次加载约 70s，不预热首片会卡住） |
+| `POST` | `/api/knowledge/meetings/stream/warm` | 后台预热流式 ASR 模型（进听记页即调；2026-10-20 在活栈实测首次加载 14~88s，不预热首片会卡住） |
 | `POST` | `/api/knowledge/meetings/stream/session` | 开实时录制会话（先落一条 `status=recording` 记录，其 id 即推流会话 id） |
 | `POST` | `/api/knowledge/meetings/{id}/stream` | 推一片 PCM16/16kHz/单声道（600ms=19200B，`application/octet-stream` 原样转发），回当前已上屏字幕 |
 | `POST` | `/api/knowledge/meetings/{id}/stream/stop` | 结束推流会话（冲尾包），回完整实时字幕行 |
+| `GET` | `/api/knowledge/meetings/{id}/stream/live` | 录制会话状态快照（不推音频也能刷新上屏内容；`recording=false` 表示会话已不存在，前端改为只等离线重跑） |
 | `POST` | `/api/knowledge/meetings/{id}/live-points` | 会中要点（LLM 归纳已上屏内容，对标钉钉实时摘要树） |
+| `POST` | `/api/knowledge/meetings/{id}/live-check` | 会中快检（只喂最近 4 行，核对数字/期限/人名口径；结果 `ok\\|attention\\|unclear`，LLM 不可用降级为 `unavailable`） |
 | `GET` / `POST` | `/api/knowledge/meetings/hotwords` | 读 / 批量新增当前用户个性化热词（seaco 模型级上下文增强；校验字符合法性与每人上限） |
 | `DELETE` | `/api/knowledge/meetings/hotwords/{word}` | 删除一条热词 |
 | `POST` | `/api/knowledge/meetings/{id}/retranscribe` | 重新转写整场（区块状态复位后重跑转写+总结+关键词+导图，热词在此生效；原始音频缺失则拒绝） |
@@ -273,6 +280,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
 - **会议听记大文件通道（2026-10-12）**：音频上传/回放不经 Wails 绑定（绑定是 JSON 通道，塞不下上百 MB），前端同源 `fetch /kapi/meetings/*` → 桌面进程 `pluginAssetMiddleware` 接管（`appmeetings.go`；dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截）→ desktop.Client 流式转发 → Core 上述 meetings 路由 → 知识服务 `/meetings`。列表/详情/管理/归档走常规 Wails 绑定。
 - **听记实时上屏（2026-10-13，刻意不用 WebSocket）**：录音时按 600ms 定长分片（16kHz 单声道 s16le = 19200 字节）经 Wails 绑定（base64）→ Core → 知识服务 `POST /meetings/{id}/stream`，**请求即回当前字幕快照**——推流方向是采集端主动供数，请求-响应天然带背压，避开 WebView 跨源与 apiToken 不能进前端两件事。稳态单片往返实测 176ms（RTF 0.303）。流式会话只活在知识服务内存（闲置 30min 回收），**实时文本是预览**：停止后整段离线重跑（同一条记录，`transcribe` 带 `meeting_id` 复用）给出终态分段/标点/说话人。听记页挂载即调 `stream/warm`，否则首片承担约 70s 的模型冷加载。
+- **听记实时上屏的韧性（2026-10-20，用户报「切页就中止」「不出流式字」）**：三条约束落到代码上——① 推流**必须**走 Wails 绑定（`appmeetings.go` · `MeetingStreamChunk`），因为它不挂在组件生命周期上；`fetch` 在组件卸载时会被打断。② 单片 12s 超时（`frontend/src/services/meetingSession.ts` · `withTimeout`），失败先 `GET /meetings/{id}/stream/live` 续快照再推下一片，**连续 3 次才降级为 3 秒轮询**，录音全程不受影响。③ 服务端推理锁在**会话自己**身上（`knowledge/app/meetings/stream.py` · `feed`），会话表锁只保护容器，多场并发不再互相堵死。断行按「句末/逗号/24 字」（`knowledge/app/meetings/livenow.py` · `should_break`），上屏不再是憋一整句才出。流式模型同样吃热词（`hotword` 参数，与离线同口径）。
 ## 9. 跨平台抽象
 
 | 能力 | Windows | macOS |

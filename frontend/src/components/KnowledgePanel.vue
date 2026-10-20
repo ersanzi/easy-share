@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
-import type { KnowledgeContext, KnowledgeHealth, KnowledgeStatus } from '../types/core'
+import KnowledgeDocumentList from './KnowledgeDocumentList.vue'
+import KnowledgeReader from './KnowledgeReader.vue'
+import type {
+  KnowledgeContext,
+  KnowledgeDocumentSummary,
+  KnowledgeDocumentView,
+  KnowledgeHealth,
+  KnowledgeStatus,
+} from '../types/core'
 
 // 知识问答面板：Core 作网关，令牌不进前端。
 // 状态自包含（同 SettingsPanel 模式）：登录态/健康度/会话消息均为本视图私有。
@@ -32,6 +40,30 @@ const draft = ref('')
 const asking = ref(false)
 const listRef = ref<HTMLElement | null>(null)
 const inputRef = ref<HTMLInputElement | null>(null)
+
+// 阅读页：引用点击后按 file_id/version_id 取结构化正文，命中块用 block_ids 高亮
+const readerOpen = ref(false)
+const readerLoading = ref(false)
+const readerError = ref('')
+const readerView = ref<KnowledgeDocumentView | null>(null)
+const readerFocus = ref<string[]>([])
+const readerDownloading = ref(false)
+const readerNotice = ref('')
+// 连续点两条引用时，只让最后一次请求的结果落地
+let readerRequest = 0
+
+// 知识库清单：问答与文档两个视图共用同一个登录态
+type KnowledgeTab = 'chat' | 'documents'
+const activeTab = ref<KnowledgeTab>('chat')
+const documents = ref<KnowledgeDocumentSummary[]>([])
+const documentsLoading = ref(false)
+const documentsError = ref('')
+const documentsQuery = ref('')
+let documentsTimer: ReturnType<typeof setTimeout> | null = null
+const filteredDocuments = computed(() => {
+  const query = documentsQuery.value.trim().toLowerCase()
+  return query ? documents.value.filter(doc => doc.filename.toLowerCase().includes(query)) : documents.value
+})
 
 const suggestions = [
   '出差住宿标准是多少？',
@@ -74,7 +106,15 @@ watch(() => status.value.serverUrl, value => {
 
 // 登录态被 Core 清掉（令牌失效/主动退出）时清空会话消息
 watch(() => status.value.loggedIn, value => {
-  if (!value) messages.value = []
+  if (!value) {
+    messages.value = []
+    readerOpen.value = false
+    documents.value = []
+    documentsError.value = ''
+    clearDocumentPoll()
+  } else if (activeTab.value === 'documents') {
+    void loadDocuments()
+  }
 })
 
 const submitLogin = async () => {
@@ -141,6 +181,64 @@ const ask = async () => {
   await scrollToBottom()
 }
 
+const openReader = async (fileID: string, versionID: string, blockIds: string[] = []) => {
+  readerOpen.value = true
+  readerLoading.value = true
+  readerError.value = ''
+  readerView.value = null
+  readerFocus.value = blockIds
+  readerNotice.value = ''
+  const requestId = ++readerRequest
+  try {
+    const result = await core.knowledgeDocument(fileID, versionID)
+    if (requestId !== readerRequest) return
+    readerView.value = result
+  } catch (e) {
+    if (requestId !== readerRequest) return
+    readerError.value = e instanceof Error ? e.message : '读取原文失败，请稍后重试。'
+    // 令牌失效时 Core 已清会话；刷新登录态会关闭阅读页并回到登录表单
+    void refreshStatus()
+  } finally {
+    if (requestId === readerRequest) readerLoading.value = false
+  }
+}
+
+const openSource = (context: KnowledgeContext) => {
+  if (!context.file_id || !context.version_id) return
+  void openReader(context.file_id, context.version_id, context.block_ids ?? [])
+}
+
+const closeReader = () => {
+  readerRequest += 1
+  readerOpen.value = false
+  readerView.value = null
+  readerError.value = ''
+  readerFocus.value = []
+  readerNotice.value = ''
+}
+
+const downloadSource = async () => {
+  const view = readerView.value
+  if (!view) return
+  const fileID = view.manifest.file_id || view.document.file_id
+  const versionID = view.manifest.version_id || view.document.version_id
+  if (!fileID || !versionID) return
+  readerDownloading.value = true
+  readerNotice.value = ''
+  try {
+    const saved = await core.knowledgeDownload(
+      fileID,
+      versionID,
+      view.manifest.filename || view.document.filename || '文档',
+    )
+    if (saved) readerNotice.value = `已保存到 ${saved}`
+  } catch (e) {
+    readerNotice.value = e instanceof Error ? e.message : '保存失败，请稍后重试。'
+  } finally {
+    readerDownloading.value = false
+  }
+}
+
 const formatDate = (value?: string | null) => {
   if (!value) return ''
   return value.replace('T', ' ').slice(0, 16)
@@ -149,6 +247,56 @@ const formatDate = (value?: string | null) => {
 const snippet = (text: string) => (text.length > 160 ? text.slice(0, 160) + '…' : text)
 
 const scorePercent = (score?: number | null) => (score == null ? '' : `${Math.round(score * 100)}%`)
+
+function clearDocumentPoll() {
+  if (documentsTimer !== null) {
+    clearTimeout(documentsTimer)
+    documentsTimer = null
+  }
+}
+
+async function loadDocuments(quiet = false) {
+  if (!status.value.loggedIn) return
+  if (!quiet) {
+    documentsLoading.value = true
+    documentsError.value = ''
+  }
+  try {
+    const result = await core.knowledgeDocuments(200)
+    documents.value = result.documents
+    scheduleDocumentPoll()
+  } catch (e) {
+    if (!quiet) documentsError.value = e instanceof Error ? e.message : '读取文档清单失败，请稍后重试。'
+    clearDocumentPoll()
+    void refreshStatus()
+  } finally {
+    if (!quiet) documentsLoading.value = false
+  }
+}
+
+function scheduleDocumentPoll() {
+  clearDocumentPoll()
+  if (activeTab.value !== 'documents' || !status.value.loggedIn) return
+  if (!documents.value.some(doc => doc.status === 'queued' || doc.status === 'processing')) return
+  documentsTimer = setTimeout(() => { void loadDocuments(true) }, 3000)
+}
+
+const switchTab = (tab: KnowledgeTab) => {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  if (tab === 'documents') {
+    void loadDocuments()
+  } else {
+    clearDocumentPoll()
+  }
+}
+
+const openDocument = (doc: KnowledgeDocumentSummary) => {
+  if (!doc.ready || !doc.read_version_id) return
+  void openReader(doc.file_id, doc.read_version_id)
+}
+
+onBeforeUnmount(clearDocumentPoll)
 
 const onMountedPrefill = async () => {
   await refreshStatus()
@@ -173,8 +321,8 @@ onMounted(onMountedPrefill)
     <header class="workspace-header">
       <div>
         <span class="section-label">知识</span>
-        <h1>知识问答</h1>
-        <p>向公司知识库提问，答案附带引用来源，文件放进去就能被检索。</p>
+        <h1>知识库</h1>
+        <p>向公司知识库提问，或浏览已入库文档与引用原文。</p>
       </div>
     </header>
 
@@ -230,20 +378,38 @@ onMounted(onMountedPrefill)
       </form>
     </div>
 
-    <!-- 问答区：已登录 -->
-    <div v-else-if="status.loggedIn" class="card knowledge-chat-card">
-      <div class="knowledge-chat-header">
+    <!-- 已登录：问答 / 文档 -->
+    <template v-else-if="status.loggedIn">
+      <div class="knowledge-session-bar">
         <div class="knowledge-chat-meta">
           <strong>{{ status.username }}</strong>
           <span class="knowledge-chat-server">{{ status.serverUrl }}</span>
         </div>
         <div class="knowledge-chat-badges">
-          <span v-if="health" class="knowledge-badge">{{ health.records }} 份文档</span>
+          <span v-if="health" class="knowledge-badge" :title="`${health.records} 个索引块`">{{ health.documents ?? '—' }} 份文档</span>
           <span v-if="llmLabel" class="knowledge-badge">{{ llmLabel }}</span>
           <button class="text-button" type="button" @click="logout">退出登录</button>
         </div>
       </div>
 
+      <div class="knowledge-tabs" role="tablist" aria-label="知识库视图">
+        <button
+          :class="{ active: activeTab === 'chat' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'chat'"
+          @click="switchTab('chat')"
+        >问答</button>
+        <button
+          :class="{ active: activeTab === 'documents' }"
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'documents'"
+          @click="switchTab('documents')"
+        >文档</button>
+      </div>
+
+      <div v-if="activeTab === 'chat'" class="card knowledge-chat-card">
       <div ref="listRef" class="knowledge-message-list" role="log" aria-live="polite">
         <div v-if="!messages.length" class="knowledge-empty">
           <span class="knowledge-empty-glyph" aria-hidden="true">
@@ -267,12 +433,21 @@ onMounted(onMountedPrefill)
                 <summary>引用 {{ message.contexts.length }} 条来源</summary>
                 <ul>
                   <li v-for="(context, i) in message.contexts" :key="i">
-                    <div class="knowledge-source-head">
-                      <strong>{{ context.filename || context.doc_id || '未命名文档' }}</strong>
-                      <span v-if="scorePercent(context.score)" class="knowledge-source-score">{{ scorePercent(context.score) }}</span>
-                      <span v-if="formatDate(context.ingested_at)" class="knowledge-source-date">{{ formatDate(context.ingested_at) }}</span>
-                    </div>
-                    <p class="knowledge-source-snippet">{{ snippet(context.text) }}</p>
+                    <button
+                      class="knowledge-source"
+                      type="button"
+                      :disabled="!context.file_id || !context.version_id"
+                      :title="context.file_id && context.version_id ? '打开原文并定位到引用位置' : '这条引用没有关联原文件'"
+                      @click="openSource(context)"
+                    >
+                      <span class="knowledge-source-head">
+                        <strong>{{ context.filename || context.doc_id || '未命名文档' }}</strong>
+                        <span v-if="scorePercent(context.score)" class="knowledge-source-score">{{ scorePercent(context.score) }}</span>
+                        <span v-if="formatDate(context.ingested_at)" class="knowledge-source-date">{{ formatDate(context.ingested_at) }}</span>
+                      </span>
+                      <span class="knowledge-source-snippet">{{ snippet(context.text) }}</span>
+                      <span v-if="context.file_id && context.version_id" class="knowledge-source-open">查看原文 →</span>
+                    </button>
                   </li>
                 </ul>
               </details>
@@ -296,9 +471,37 @@ onMounted(onMountedPrefill)
           {{ asking ? '思考中…' : '提问' }}
         </button>
       </form>
-    </div>
+      </div>
+
+      <KnowledgeDocumentList
+        v-else
+        :documents="filteredDocuments"
+        :total="documents.length"
+        :query="documentsQuery"
+        :loading="documentsLoading"
+        :error="documentsError"
+        @update:query="documentsQuery = $event"
+        @refresh="loadDocuments()"
+        @open="openDocument"
+        @clear-error="documentsError = ''"
+      />
+    </template>
 
     <!-- 状态加载中 -->
     <div v-else class="knowledge-loading">正在获取登录状态…</div>
+
+    <Teleport to="body">
+      <KnowledgeReader
+        v-if="readerOpen"
+        :view="readerView"
+        :loading="readerLoading"
+        :error="readerError"
+        :focus-block-ids="readerFocus"
+        :downloading="readerDownloading"
+        :notice="readerNotice"
+        @close="closeReader"
+        @download="downloadSource"
+      />
+    </Teleport>
   </div>
 </template>

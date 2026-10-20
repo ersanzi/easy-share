@@ -670,6 +670,265 @@ export namespace knowledge {
 	    }
 	}
 	
+	export class DocumentSourceLocation {
+	    page?: number;
+	    sheet?: string;
+	    slide?: number;
+	    paragraph?: number;
+	    table?: number;
+	    row?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentSourceLocation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.page = source["page"];
+	        this.sheet = source["sheet"];
+	        this.slide = source["slide"];
+	        this.paragraph = source["paragraph"];
+	        this.table = source["table"];
+	        this.row = source["row"];
+	    }
+	}
+	export class DocumentBlock {
+	    id: string;
+	    type: string;
+	    text?: string;
+	    level?: number;
+	    rows?: string[][];
+	    source: DocumentSourceLocation;
+	    metadata?: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentBlock(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.text = source["text"];
+	        this.level = source["level"];
+	        this.rows = source["rows"];
+	        this.source = this.convertValues(source["source"], DocumentSourceLocation);
+	        this.metadata = source["metadata"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Document {
+	    schema_version: number;
+	    file_id: string;
+	    version_id: string;
+	    object_key: string;
+	    filename: string;
+	    media_type: string;
+	    metadata: Record<string, any>;
+	    warnings: string[];
+	    blocks: DocumentBlock[];
+	    source_sha256: string;
+	    pipeline_version: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Document(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.schema_version = source["schema_version"];
+	        this.file_id = source["file_id"];
+	        this.version_id = source["version_id"];
+	        this.object_key = source["object_key"];
+	        this.filename = source["filename"];
+	        this.media_type = source["media_type"];
+	        this.metadata = source["metadata"];
+	        this.warnings = source["warnings"];
+	        this.blocks = this.convertValues(source["blocks"], DocumentBlock);
+	        this.source_sha256 = source["source_sha256"];
+	        this.pipeline_version = source["pipeline_version"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class DocumentSummary {
+	    job_id: string;
+	    file_id: string;
+	    version_id: string;
+	    filename: string;
+	    status: string;
+	    stage: string;
+	    progress: number;
+	    error_code?: string;
+	    error_message?: string;
+	    owner?: string;
+	    updated_at: string;
+	    ready: boolean;
+	    read_version_id?: string;
+	    chunks: number;
+	    characters: number;
+	    processed_at?: string;
+	    source_bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.job_id = source["job_id"];
+	        this.file_id = source["file_id"];
+	        this.version_id = source["version_id"];
+	        this.filename = source["filename"];
+	        this.status = source["status"];
+	        this.stage = source["stage"];
+	        this.progress = source["progress"];
+	        this.error_code = source["error_code"];
+	        this.error_message = source["error_message"];
+	        this.owner = source["owner"];
+	        this.updated_at = source["updated_at"];
+	        this.ready = source["ready"];
+	        this.read_version_id = source["read_version_id"];
+	        this.chunks = source["chunks"];
+	        this.characters = source["characters"];
+	        this.processed_at = source["processed_at"];
+	        this.source_bytes = source["source_bytes"];
+	    }
+	}
+	export class DocumentList {
+	    documents: DocumentSummary[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentList(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.documents = this.convertValues(source["documents"], DocumentSummary);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DocumentManifest {
+	    file_id: string;
+	    version_id: string;
+	    filename: string;
+	    object_key: string;
+	    media_type: string;
+	    owner?: string;
+	    visible_depts: string;
+	    source_bytes: number;
+	    blocks: number;
+	    characters: number;
+	    chunks: number;
+	    warnings: string[];
+	    processed_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentManifest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file_id = source["file_id"];
+	        this.version_id = source["version_id"];
+	        this.filename = source["filename"];
+	        this.object_key = source["object_key"];
+	        this.media_type = source["media_type"];
+	        this.owner = source["owner"];
+	        this.visible_depts = source["visible_depts"];
+	        this.source_bytes = source["source_bytes"];
+	        this.blocks = source["blocks"];
+	        this.characters = source["characters"];
+	        this.chunks = source["chunks"];
+	        this.warnings = source["warnings"];
+	        this.processed_at = source["processed_at"];
+	    }
+	}
+	
+	
+	export class DocumentView {
+	    manifest: DocumentManifest;
+	    document: Document;
+	
+	    static createFrom(source: any = {}) {
+	        return new DocumentView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.manifest = this.convertValues(source["manifest"], DocumentManifest);
+	        this.document = this.convertValues(source["document"], Document);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class GenerationQuality {
 	    total: number;
 	    avg_faithfulness?: number;
@@ -688,6 +947,7 @@ export namespace knowledge {
 	}
 	export class Health {
 	    records: number;
+	    documents: number;
 	    llm: string;
 	    watch_dirs: number;
 	
@@ -698,6 +958,7 @@ export namespace knowledge {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.records = source["records"];
+	        this.documents = source["documents"];
 	        this.llm = source["llm"];
 	        this.watch_dirs = source["watch_dirs"];
 	    }
@@ -881,6 +1142,7 @@ export namespace knowledge {
 	    speaker_count: number;
 	    speaker_names: Record<string, string>;
 	    segments: MeetingSegment[];
+	    edited_segments: number[];
 	    summary?: MeetingSummary;
 	    keywords: string[];
 	    todos: MeetingTodo[];
@@ -906,6 +1168,7 @@ export namespace knowledge {
 	        this.speaker_count = source["speaker_count"];
 	        this.speaker_names = source["speaker_names"];
 	        this.segments = this.convertValues(source["segments"], MeetingSegment);
+	        this.edited_segments = source["edited_segments"];
 	        this.summary = this.convertValues(source["summary"], MeetingSummary);
 	        this.keywords = source["keywords"];
 	        this.todos = this.convertValues(source["todos"], MeetingTodo);
@@ -961,6 +1224,26 @@ export namespace knowledge {
 	        this.content = source["content"];
 	    }
 	}
+	export class MeetingLiveCheck {
+	    verdict: string;
+	    note: string;
+	    points: string[];
+	    last_line_at: number;
+	    checked_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingLiveCheck(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.verdict = source["verdict"];
+	        this.note = source["note"];
+	        this.points = source["points"];
+	        this.last_line_at = source["last_line_at"];
+	        this.checked_at = source["checked_at"];
+	    }
+	}
 	export class MeetingLiveLine {
 	    text: string;
 	    at: number;
@@ -975,10 +1258,48 @@ export namespace knowledge {
 	        this.at = source["at"];
 	    }
 	}
+	export class MeetingLiveSession {
+	    recording: boolean;
+	    lines: MeetingLiveLine[];
+	    current: string;
+	    elapsed_seconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeetingLiveSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recording = source["recording"];
+	        this.lines = this.convertValues(source["lines"], MeetingLiveLine);
+	        this.current = source["current"];
+	        this.elapsed_seconds = source["elapsed_seconds"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MeetingLiveView {
 	    lines: MeetingLiveLine[];
 	    current: string;
 	    elapsed_seconds: number;
+	    last_line_at: number;
+	    active_seconds: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new MeetingLiveView(source);
@@ -989,6 +1310,8 @@ export namespace knowledge {
 	        this.lines = this.convertValues(source["lines"], MeetingLiveLine);
 	        this.current = source["current"];
 	        this.elapsed_seconds = source["elapsed_seconds"];
+	        this.last_line_at = source["last_line_at"];
+	        this.active_seconds = source["active_seconds"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -183,6 +183,7 @@ export interface ServiceEndpoints {
 
 export interface KnowledgeHealth {
   records: number
+  documents: number
   llm: string
   watch_dirs: number
 }
@@ -208,6 +209,86 @@ export interface KnowledgeAnswer {
   answer: string
   sources: KnowledgeSourceRef[]
   contexts: KnowledgeContext[]
+}
+
+// 阅读页：知识服务 document.json 的结构化块；source 用于页码/工作表/幻灯片定位
+export interface KnowledgeSourceLocation {
+  page?: number
+  sheet?: string
+  slide?: number
+  paragraph?: number
+  table?: number
+  row?: number
+}
+
+export interface KnowledgeDocumentBlock {
+  id: string
+  type: string
+  text?: string
+  level?: number
+  rows?: string[][]
+  source?: KnowledgeSourceLocation
+  metadata?: Record<string, unknown>
+}
+
+export interface KnowledgeDocument {
+  schema_version?: number
+  file_id?: string
+  version_id?: string
+  object_key?: string
+  filename?: string
+  media_type?: string
+  metadata?: Record<string, unknown>
+  warnings?: string[]
+  blocks: KnowledgeDocumentBlock[]
+  source_sha256?: string
+  pipeline_version?: string
+}
+
+export interface KnowledgeDocumentManifest {
+  file_id?: string
+  version_id?: string
+  filename?: string
+  object_key?: string
+  media_type?: string
+  owner?: string | null
+  visible_depts?: string | null
+  source_bytes?: number
+  blocks?: number
+  characters?: number
+  chunks?: number
+  warnings?: string[]
+  processed_at?: string
+}
+
+export interface KnowledgeDocumentView {
+  manifest: KnowledgeDocumentManifest
+  document: KnowledgeDocument
+}
+
+// 知识库清单：最新任务状态与“最近一次成功版本”分开表达
+export interface KnowledgeDocumentSummary {
+  job_id: string
+  file_id: string
+  version_id: string
+  filename: string
+  status: 'queued' | 'processing' | 'completed' | 'failed'
+  stage: string
+  progress: number
+  error_code?: string | null
+  error_message?: string | null
+  owner?: string | null
+  updated_at: string
+  ready: boolean
+  read_version_id?: string | null
+  chunks: number
+  characters: number
+  processed_at?: string | null
+  source_bytes: number
+}
+
+export interface KnowledgeDocumentList {
+  documents: KnowledgeDocumentSummary[]
 }
 
 // ─── 会议听记（知识服务 /meetings；音频大文件走 /kapi 同源网关）───
@@ -303,6 +384,8 @@ export interface MeetingRecord {
   speaker_count: number
   speaker_names: Record<string, string>
   segments: MeetingSegment[]
+  // 用户手工改过的句子下标（重新转写前提示「会被覆盖」的依据）
+  edited_segments?: number[]
   summary: MeetingSummary | null
   keywords: string[]
   todos: MeetingTodo[]
@@ -349,7 +432,31 @@ export interface MeetingLiveLine {
   at: number
 }
 
+// last_line_at：最后一行上屏时的录音秒数（0=还没出过字），用于「N 秒前出过字」的等待提示；
+// active_seconds：这一片音频里确实有声音，静音片段不算卡住
 export interface MeetingLiveView {
+  lines: MeetingLiveLine[]
+  current: string
+  elapsed_seconds: number
+  last_line_at?: number
+  active_seconds?: boolean
+}
+
+// 会中快检（只看刚上屏的最近几行）：
+// attention=发现可核对的问题 ok=没问题 unclear=内容不足 unavailable=AI 不可用
+export type MeetingLiveVerdict = 'attention' | 'ok' | 'unclear' | 'unavailable'
+
+export interface MeetingLiveCheck {
+  verdict: MeetingLiveVerdict
+  note: string
+  points: string[]
+  last_line_at: number
+  checked_at: string
+}
+
+// 录制会话状态（轮询兜底：推流断了字也不会停在半路）
+export interface MeetingLiveSession {
+  recording: boolean
   lines: MeetingLiveLine[]
   current: string
   elapsed_seconds: number

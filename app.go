@@ -2281,6 +2281,77 @@ func (a *App) KnowledgeAsk(question string) (knowledge.Answer, error) {
 	return result, err
 }
 
+// KnowledgeDocuments 拉知识库文档清单（最近更新排序）。
+func (a *App) KnowledgeDocuments(limit int) (knowledge.DocumentList, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.DocumentList{}, err
+	}
+	result, err := client.KnowledgeDocuments(a.ctx, limit)
+	a.reportError("knowledge documents", err)
+	return result, err
+}
+
+// KnowledgeDocument 读取知识文档阅读页数据（结构化正文 + 元数据）。
+func (a *App) KnowledgeDocument(fileID, versionID string) (knowledge.DocumentView, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.DocumentView{}, err
+	}
+	result, err := client.KnowledgeDocument(a.ctx, fileID, versionID)
+	a.reportError("knowledge document", err)
+	return result, err
+}
+
+// KnowledgeDownload 下载知识文档原件到用户选择的位置；返回保存路径（取消时为空）。
+func (a *App) KnowledgeDownload(fileID, versionID, filename string) (string, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return "", err
+	}
+
+	// 先让用户选保存位置，取消时不发起下载；避免保存框停留期间占着远端流
+	defaultName := filepath.Base(strings.TrimSpace(filename))
+	if defaultName == "." || defaultName == "" {
+		defaultName = "文档"
+	}
+	target, dialogErr := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "保存文档原件",
+		DefaultFilename: defaultName,
+	})
+	if dialogErr != nil {
+		a.reportError("knowledge download dialog", dialogErr)
+		return "", dialogErr
+	}
+	if target == "" {
+		return "", nil
+	}
+
+	response, err := client.KnowledgeDocumentSource(a.ctx, fileID, versionID)
+	if err != nil {
+		a.reportError("knowledge download", err)
+		return "", err
+	}
+	defer response.Body.Close()
+
+	file, err := os.Create(target)
+	if err != nil {
+		a.reportError("knowledge download create", err)
+		return "", err
+	}
+	if _, err := io.Copy(file, response.Body); err != nil {
+		_ = file.Close()
+		_ = os.Remove(target)
+		a.reportError("knowledge download write", err)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		a.reportError("knowledge download close", err)
+		return "", err
+	}
+	return target, nil
+}
+
 // --- Local file browser (我的电脑) ---
 
 func (a *App) ListDrives() ([]fsutil.DriveInfo, error) {

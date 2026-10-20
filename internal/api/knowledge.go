@@ -218,6 +218,103 @@ func writeKnowledgeError(writer http.ResponseWriter, operation string, err error
 	}
 }
 
+// writeKnowledgeDocumentError 阅读页/原件下载的错误映射：
+// 403/404/413 是文档级语义，直接透传；401 清掉本地会话，让前端回到登录页；
+// 其余仍走通用网关错误。
+func (server *Server) writeKnowledgeDocumentError(writer http.ResponseWriter, operation string, err error) {
+	var remote *knowledge.RemoteError
+	if errors.As(err, &remote) {
+		switch remote.Status {
+		case http.StatusUnauthorized:
+			if signErr := server.knowledge.SignOut(); signErr != nil {
+				log.Printf("knowledge sign out on expired token: %v", signErr)
+			}
+			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_auth_expired", Message: "登录已失效，请重新登录"})
+			return
+		case http.StatusForbidden, http.StatusNotFound, http.StatusRequestEntityTooLarge:
+			writeJSON(writer, remote.Status, ErrorResponse{Code: "knowledge_document_error", Message: remote.Detail})
+			return
+		}
+	}
+	writeKnowledgeError(writer, operation, err)
+}
+
+// knowledgeDocuments 代理知识库文档清单（最新任务状态 + 最近成功版本）。
+func (server *Server) knowledgeDocuments(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session := server.knowledge.Current()
+	if session.Token == "" {
+		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_not_logged_in", Message: "请先登录知识服务"})
+		return
+	}
+	limit := 200
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil {
+			limit = value
+		}
+	}
+	list, err := knowledge.NewClient(session.ServerURL).Documents(request.Context(), session.Token, limit)
+	if err != nil {
+		server.writeKnowledgeDocumentError(writer, "documents", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, list)
+}
+
+// knowledgeDocumentView 代理远端文档阅读页数据（manifest + 结构化正文）。
+func (server *Server) knowledgeDocumentView(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session := server.knowledge.Current()
+	if session.Token == "" {
+		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_not_logged_in", Message: "请先登录知识服务"})
+		return
+	}
+	view, err := knowledge.NewClient(session.ServerURL).DocumentView(
+		request.Context(), session.Token, request.PathValue("file_id"), request.PathValue("version_id"),
+	)
+	if err != nil {
+		server.writeKnowledgeDocumentError(writer, "document view", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// knowledgeDocumentSource 代理原件下载（流式透传，解除 Core 30s 写超时）。
+func (server *Server) knowledgeDocumentSource(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session := server.knowledge.Current()
+	if session.Token == "" {
+		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_not_logged_in", Message: "请先登录知识服务"})
+		return
+	}
+	response, err := knowledge.NewClient(session.ServerURL).OpenDocumentSource(
+		request.Context(), session.Token, request.PathValue("file_id"), request.PathValue("version_id"),
+	)
+	if err != nil {
+		server.writeKnowledgeDocumentError(writer, "document source", err)
+		return
+	}
+	defer response.Body.Close()
+
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	for _, header := range []string{"Content-Type", "Content-Length", "Content-Disposition"} {
+		if value := response.Header.Get(header); value != "" {
+			writer.Header().Set(header, value)
+		}
+	}
+	writer.WriteHeader(response.StatusCode)
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		log.Printf("knowledge document source stream: %v", err)
+	}
+}
+
 // --- 会议听记（/api/knowledge/meetings/*，代理远端 /meetings） ---
 
 // knowledgeMeetingCreate 代理会议音频上传（multipart 流式透传，不落内存）。
@@ -671,6 +768,106 @@ func (server *Server) knowledgeMeetingLivePoints(writer http.ResponseWriter, req
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"points": points})
+}
+
+// knowledgeMeetingLiveCheck 会中快检（只看最近几行，LLM 快链路）。
+func (server *Server) knowledgeMeetingLiveCheck(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	defer cancel()
+	result, err := knowledge.NewClient(session.ServerURL).MeetingLiveCheck(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting live check", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+// knowledgeMeetingLiveSession 取录制会话当前状态（前端轮询兜底：推流断了字也不停在半路）。
+func (server *Server) knowledgeMeetingLiveSession(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	view, err := knowledge.NewClient(session.ServerURL).MeetingLiveSession(ctx, session.Token, knowledgeMeetingByID(request))
+	if err != nil {
+		writeKnowledgeError(writer, "meeting live session", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// knowledgeMeetingSpeakerMerge 合并两位发言人（快链路）。
+func (server *Server) knowledgeMeetingSpeakerMerge(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	var input struct {
+		FromSpeaker string `json:"from_speaker"`
+		IntoSpeaker string `json:"into_speaker"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.FromSpeaker == "" || input.IntoSpeaker == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "from_speaker and into_speaker required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).MergeMeetingSpeakers(
+		ctx, session.Token, knowledgeMeetingByID(request), input.FromSpeaker, input.IntoSpeaker)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting speaker merge", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
+}
+
+// knowledgeMeetingSegmentUpdate 改一句转写正文（快链路）。
+func (server *Server) knowledgeMeetingSegmentUpdate(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	index, convErr := strconv.Atoi(request.PathValue("index"))
+	if convErr != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid segment index"})
+		return
+	}
+	var input struct {
+		Text string `json:"text"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid body"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
+	defer cancel()
+	meeting, err := knowledge.NewClient(session.ServerURL).UpdateMeetingSegment(
+		ctx, session.Token, knowledgeMeetingByID(request), index, input.Text)
+	if err != nil {
+		writeKnowledgeError(writer, "meeting segment update", err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, meeting)
 }
 
 // --- 个性化热词与重新转写（对标钉钉 hotwords / retranscribe） ---

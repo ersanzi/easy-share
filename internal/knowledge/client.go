@@ -70,6 +70,92 @@ type Answer struct {
 	Contexts []Context   `json:"contexts"`
 }
 
+// DocumentSourceLocation 块在原件中的位置，用于阅读页定位与引用高亮。
+type DocumentSourceLocation struct {
+	Page      *int    `json:"page,omitempty"`
+	Sheet     *string `json:"sheet,omitempty"`
+	Slide     *int    `json:"slide,omitempty"`
+	Paragraph *int    `json:"paragraph,omitempty"`
+	Table     *int    `json:"table,omitempty"`
+	Row       *int    `json:"row,omitempty"`
+}
+
+// DocumentBlock 结构化正文块；Rows 仅表格块有值。
+type DocumentBlock struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Text     string                 `json:"text,omitempty"`
+	Level    *int                   `json:"level,omitempty"`
+	Rows     [][]string             `json:"rows,omitempty"`
+	Source   DocumentSourceLocation `json:"source"`
+	Metadata map[string]any         `json:"metadata,omitempty"`
+}
+
+// Document 知识服务保存的 document.json（阅读页正文）。
+type Document struct {
+	SchemaVersion   int             `json:"schema_version"`
+	FileID          string          `json:"file_id"`
+	VersionID       string          `json:"version_id"`
+	ObjectKey       string          `json:"object_key"`
+	Filename        string          `json:"filename"`
+	MediaType       string          `json:"media_type"`
+	Metadata        map[string]any  `json:"metadata"`
+	Warnings        []string        `json:"warnings"`
+	Blocks          []DocumentBlock `json:"blocks"`
+	SourceSHA256    string          `json:"source_sha256"`
+	PipelineVersion string          `json:"pipeline_version"`
+}
+
+// DocumentManifest 阅读页需要的文档级元数据子集。
+type DocumentManifest struct {
+	FileID    string  `json:"file_id"`
+	VersionID string  `json:"version_id"`
+	Filename  string  `json:"filename"`
+	ObjectKey string  `json:"object_key"`
+	MediaType string  `json:"media_type"`
+	Owner     *string `json:"owner"`
+	// 知识服务 manifest 存的是 CSV（与 es_file 同表示），不是 JSON 数组
+	VisibleDepts string   `json:"visible_depts"`
+	SourceBytes  int64    `json:"source_bytes"`
+	Blocks       int      `json:"blocks"`
+	Characters   int      `json:"characters"`
+	Chunks       int      `json:"chunks"`
+	Warnings     []string `json:"warnings"`
+	ProcessedAt  string   `json:"processed_at"`
+}
+
+// DocumentView 阅读页一次取齐：元数据 + 结构化正文。
+type DocumentView struct {
+	Manifest DocumentManifest `json:"manifest"`
+	Document Document         `json:"document"`
+}
+
+// DocumentSummary 知识库清单一行：最新任务状态 + 最近一次成功版本。
+type DocumentSummary struct {
+	JobID         string  `json:"job_id"`
+	FileID        string  `json:"file_id"`
+	VersionID     string  `json:"version_id"`
+	Filename      string  `json:"filename"`
+	Status        string  `json:"status"`
+	Stage         string  `json:"stage"`
+	Progress      int     `json:"progress"`
+	ErrorCode     *string `json:"error_code"`
+	ErrorMessage  *string `json:"error_message"`
+	Owner         *string `json:"owner"`
+	UpdatedAt     string  `json:"updated_at"`
+	Ready         bool    `json:"ready"`
+	ReadVersionID *string `json:"read_version_id"`
+	Chunks        int     `json:"chunks"`
+	Characters    int     `json:"characters"`
+	ProcessedAt   *string `json:"processed_at"`
+	SourceBytes   int64   `json:"source_bytes"`
+}
+
+// DocumentList 清单响应。
+type DocumentList struct {
+	Documents []DocumentSummary `json:"documents"`
+}
+
 // GenerationQuality 生成质量聚合（命名类型：Wails 绑定生成器不支持匿名嵌套结构）。
 type GenerationQuality struct {
 	Total               int      `json:"total"`
@@ -105,6 +191,7 @@ func (client *Client) Stats(ctx context.Context, token string, days int) (Knowle
 // Health 远端 /health 中面板关心的子集。
 type Health struct {
 	Records   int    `json:"records"`
+	Documents int    `json:"documents"`
 	LLM       string `json:"llm"`
 	WatchDirs int    `json:"watch_dirs"`
 }
@@ -231,6 +318,46 @@ func (client *Client) Query(ctx context.Context, token, question string) (Answer
 }
 
 // Search 仅检索不生成（全局快搜面板用）：mode=search 时远端跳过 LLM，响应即时。
+// Documents 拉知识库文档清单（按最近更新排序，最多 limit 份）。
+func (client *Client) Documents(ctx context.Context, token string, limit int) (DocumentList, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	var result DocumentList
+	err := client.call(ctx, http.MethodGet, fmt.Sprintf("/documents?limit=%d", limit), token, nil, &result)
+	return result, err
+}
+
+// DocumentView 读取已入库文档的阅读页数据（元数据 + 结构化正文）。
+func (client *Client) DocumentView(ctx context.Context, token, fileID, versionID string) (DocumentView, error) {
+	var result DocumentView
+	path := fmt.Sprintf("/documents/%s/versions/%s/view", url.PathEscape(fileID), url.PathEscape(versionID))
+	err := client.call(ctx, http.MethodGet, path, token, nil, &result)
+	return result, err
+}
+
+// OpenDocumentSource 打开原件下载流；调用方负责关闭 Body。
+func (client *Client) OpenDocumentSource(ctx context.Context, token, fileID, versionID string) (*http.Response, error) {
+	path := fmt.Sprintf("/documents/%s/versions/%s/source", url.PathEscape(fileID), url.PathEscape(versionID))
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("connect knowledge server: %w", err)
+	}
+	if response.StatusCode >= 300 {
+		defer response.Body.Close()
+		return nil, &RemoteError{Status: response.StatusCode, Detail: remoteDetail(response.Body)}
+	}
+	return response, nil
+}
+
 func (client *Client) Search(ctx context.Context, token, question string) (Answer, error) {
 	var answer Answer
 	err := client.call(ctx, http.MethodPost, "/query", token, map[string]string{
@@ -309,6 +436,7 @@ type Meeting struct {
 	SpeakerCount    int               `json:"speaker_count"`
 	SpeakerNames    map[string]string `json:"speaker_names"`
 	Segments        []MeetingSegment  `json:"segments"`
+	EditedSegments  []int             `json:"edited_segments"`
 	Summary         *MeetingSummary   `json:"summary"`
 	Keywords        []string          `json:"keywords"`
 	Todos           []MeetingTodo     `json:"todos"`
@@ -326,10 +454,33 @@ type MeetingLiveLine struct {
 }
 
 // MeetingLiveView 推流会话的当前上屏状态（预览，终态以离线重跑为准）。
+// LastLineAt 是最后一行上屏时的录音秒数（0=还没出过字），前端据此显示「N 秒前」；
+// ActiveSeconds 表示这一片音频里确实有声音（静音片段还在等，不算卡住）。
 type MeetingLiveView struct {
 	Lines          []MeetingLiveLine `json:"lines"`
 	Current        string            `json:"current"`
 	ElapsedSeconds float64           `json:"elapsed_seconds"`
+	LastLineAt     float64           `json:"last_line_at"`
+	ActiveSeconds  bool              `json:"active_seconds"`
+}
+
+// MeetingLiveCheck 会中快检结果（只核对刚上屏的最近几行）。
+// Verdict：attention=发现可核对的问题，ok=没问题，unclear=内容不足，
+// unavailable=LLM 未配置/调用失败。
+type MeetingLiveCheck struct {
+	Verdict    string   `json:"verdict"`
+	Note       string   `json:"note"`
+	Points     []string `json:"points"`
+	LastLineAt float64  `json:"last_line_at"`
+	CheckedAt  string   `json:"checked_at"`
+}
+
+// MeetingLiveSession 录制会话状态（前端轮询兜底：推流断了字也不会停在半路）。
+type MeetingLiveSession struct {
+	Recording bool              `json:"recording"`
+	Lines     []MeetingLiveLine `json:"lines"`
+	Current   string            `json:"current"`
+	Elapsed   float64           `json:"elapsed_seconds"`
 }
 
 // postForm 发 x-www-form-urlencoded（FastAPI 的 Form 字段口径），返回解码后的 JSON。
@@ -417,6 +568,36 @@ func (client *Client) MeetingLivePoints(ctx context.Context, token, id string) (
 	}
 	err := client.postForm(ctx, "/meetings/"+url.PathEscape(id)+"/live-points", token, url.Values{}, &payload)
 	return payload.Points, err
+}
+
+// MeetingLiveCheck 会中快检：只核对刚上屏的最近几行（秒级 LLM 调用）。
+func (client *Client) MeetingLiveCheck(ctx context.Context, token, id string) (MeetingLiveCheck, error) {
+	var result MeetingLiveCheck
+	err := client.postForm(ctx, "/meetings/"+url.PathEscape(id)+"/live-check", token, url.Values{}, &result)
+	return result, err
+}
+
+// MeetingLiveSession 取录制会话当前状态（不推音频也能刷新上屏内容）。
+func (client *Client) MeetingLiveSession(ctx context.Context, token, id string) (MeetingLiveSession, error) {
+	var view MeetingLiveSession
+	err := client.call(ctx, http.MethodGet, "/meetings/"+url.PathEscape(id)+"/stream/live", token, nil, &view)
+	return view, err
+}
+
+// MergeMeetingSpeakers 合并两位发言人（同一人被拆成两簇时一键并回）。
+func (client *Client) MergeMeetingSpeakers(ctx context.Context, token, id, fromSpeaker, intoSpeaker string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPost, "/meetings/"+url.PathEscape(id)+"/speakers/merge", token,
+		map[string]string{"from_speaker": fromSpeaker, "into_speaker": intoSpeaker}, &meeting)
+	return meeting, err
+}
+
+// UpdateMeetingSegment 改一句转写正文（句索引以当前 segments 顺序为准）。
+func (client *Client) UpdateMeetingSegment(ctx context.Context, token, id string, index int, text string) (Meeting, error) {
+	var meeting Meeting
+	err := client.call(ctx, http.MethodPatch, "/meetings/"+url.PathEscape(id)+"/segments/"+strconv.Itoa(index), token,
+		map[string]string{"text": text}, &meeting)
+	return meeting, err
 }
 
 // HotwordsResult 热词读写返回（max 为服务端每人上限，供前端显示 N/max）。

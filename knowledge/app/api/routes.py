@@ -1,15 +1,18 @@
 """知识服务 API：异步文档处理、产物读取、兼容入库和检索。"""
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from pathlib import PurePosixPath
+from urllib.parse import quote
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.api.schemas import (
     ArtifactManifestResponse,
+    DocumentListResponse,
     IngestRequest,
     IngestResponse,
     ProcessDocumentRequest,
@@ -21,7 +24,7 @@ from app.api.schemas import (
 from app.kb.chunker import chunk_text
 from app.parsing.extractor import extract_text
 from app.parsing.rules import load_rules
-from app.rag.permissions import effective_doc_ids, visible_doc_ids
+from app.rag.permissions import can_view_document, effective_doc_ids, visible_doc_ids
 from app.services import AppServices
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,26 @@ def _job_response(job) -> ProcessingJobResponse:
 def _is_missing_object(exc: ClientError) -> bool:
     code = str(exc.response.get("Error", {}).get("Code", ""))
     return code in {"404", "NoSuchKey", "NoSuchObject", "NotFound"}
+
+
+def _visible_manifest(request: Request, file_id: str, version_id: str) -> dict:
+    """读取 manifest 并校验当前登录用户的文档可见性。
+
+    产物体与检索走同一套归属/部门语义；未登录（本地 lab、auth 关闭）保持
+    历史行为不过滤。
+    """
+    services = _services(request)
+    try:
+        manifest = services.pipeline.read_manifest(file_id, version_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
+    except ClientError as exc:
+        if _is_missing_object(exc):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
+        raise
+    if not can_view_document(manifest, getattr(request.state, "user", None)):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权查看该文档")
+    return manifest
 
 
 @router.get("/stats")
@@ -76,6 +99,8 @@ def health(request: Request) -> dict:
         "ocr": services.ocr.capability().to_dict() if services.ocr else {"available": False, "provider": "unknown", "reason": "OCR 服务未配置"},
         "asr": asr_capability,
         "records": services.vector_store.count(),
+        # 文档数与索引块数分开：面板上的“多少份文档”过去误用了 records（块数）
+        "documents": len(services.vector_store.doc_owners()),
         "jobs": services.job_store.counts(),
     }
 
@@ -89,6 +114,43 @@ def _asr_capability(services: AppServices) -> dict:
     if not funasr_importable():
         return {"available": False, "provider": "funasr", "reason": "funasr 未安装（requirements-asr.txt）"}
     return {"available": True, "provider": "funasr", "reason": ""}
+
+
+@router.get("/documents", response_model=DocumentListResponse)
+def list_documents(request: Request, limit: int = 200) -> dict:
+    """知识库文档清单：最新任务状态 + 最近一次成功版本。
+
+    与 /query 同一套可见性判据；ready 与 status 分开，更新失败时仍能读上一版。
+    """
+    services = _services(request)
+    user = getattr(request.state, "user", None)
+    documents = []
+    for jobs in services.job_store.list_documents(limit=limit):
+        latest = jobs[0]
+        if not can_view_document({"owner": latest.owner, "visible_depts": latest.visible_depts}, user):
+            continue
+        last_completed = next((job for job in jobs if job.status == "completed"), None)
+        result = (last_completed.result if last_completed else None) or {}
+        documents.append({
+            "job_id": latest.id,
+            "file_id": latest.file_id,
+            "version_id": latest.version_id,
+            "filename": latest.filename,
+            "status": latest.status,
+            "stage": latest.stage,
+            "progress": latest.progress,
+            "error_code": latest.error_code,
+            "error_message": latest.error_message,
+            "owner": latest.owner,
+            "updated_at": latest.updated_at,
+            "ready": last_completed is not None,
+            "read_version_id": last_completed.version_id if last_completed else None,
+            "chunks": int(result.get("chunks") or 0),
+            "characters": int(result.get("characters") or 0),
+            "processed_at": result.get("processed_at"),
+            "source_bytes": int(result.get("source_bytes") or 0),
+        })
+    return {"documents": documents}
 
 
 @router.post(
@@ -152,18 +214,59 @@ def retry_job(job_id: str, request: Request) -> ProcessingJobResponse:
     response_model=ArtifactManifestResponse,
 )
 def get_artifact_manifest(file_id: str, version_id: str, request: Request) -> dict:
+    return _visible_manifest(request, file_id, version_id)
+
+
+@router.get("/documents/{file_id}/versions/{version_id}/view")
+def get_document_view(file_id: str, version_id: str, request: Request) -> dict:
+    """阅读页数据：manifest + 结构化正文（document.json）。
+
+    正文按块返回，块内自带 source（页码/工作表/幻灯片/段落），前端据此做
+    引用定位与高亮，不需要再解析 Markdown。
+    """
+    manifest = _visible_manifest(request, file_id, version_id)
     try:
-        return _services(request).pipeline.read_manifest(file_id, version_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
+        content, _ = _services(request).pipeline.read_artifact(file_id, version_id, "document.json")
+    except (KeyError, FileNotFoundError) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "正文产物不存在") from exc
     except ClientError as exc:
         if _is_missing_object(exc):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "正文产物不存在") from exc
         raise
+    return {"manifest": manifest, "document": json.loads(content.decode("utf-8"))}
+
+
+@router.get("/documents/{file_id}/versions/{version_id}/source")
+def get_document_source(file_id: str, version_id: str, request: Request) -> Response:
+    """下载入库原件；可见性判据与阅读页一致。"""
+    services = _services(request)
+    manifest = _visible_manifest(request, file_id, version_id)
+    object_key = manifest.get("object_key")
+    if not object_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "原件不存在")
+    try:
+        content = services.storage.read(object_key, max_bytes=services.config.max_source_bytes)
+    except FileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "原件不存在") from exc
+    except ValueError as exc:
+        # max_source_bytes 超限（RustFSStorage/FakeStorage 都抛 ValueError）
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
+    except ClientError as exc:
+        if _is_missing_object(exc):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "原件不存在") from exc
+        raise
+    filename = manifest.get("filename") or f"{file_id}.bin"
+    media_type = manifest.get("media_type") or "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}"},
+    )
 
 
 @router.get("/documents/{file_id}/versions/{version_id}/artifacts/{name}")
 def get_artifact(file_id: str, version_id: str, name: str, request: Request) -> Response:
+    _visible_manifest(request, file_id, version_id)
     try:
         content, content_type = _services(request).pipeline.read_artifact(file_id, version_id, name)
     except KeyError as exc:

@@ -115,6 +115,10 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/knowledge/logout", server.auth(http.HandlerFunc(server.knowledgeLogout)))
 	mux.Handle("POST /api/knowledge/health", server.auth(http.HandlerFunc(server.knowledgeHealth)))
 	mux.Handle("POST /api/knowledge/query", server.auth(http.HandlerFunc(server.knowledgeQuery)))
+	// 知识阅读页：清单/视图走 JSON 代理，原件下载走流式透传
+	mux.Handle("GET /api/knowledge/documents", server.auth(http.HandlerFunc(server.knowledgeDocuments)))
+	mux.Handle("GET /api/knowledge/documents/{file_id}/versions/{version_id}/view", server.auth(http.HandlerFunc(server.knowledgeDocumentView)))
+	mux.Handle("GET /api/knowledge/documents/{file_id}/versions/{version_id}/source", server.auth(http.HandlerFunc(server.knowledgeDocumentSource)))
 	// 会议听记：列表/详情/管理走 JSON 代理，上传与音频回放走流式透传
 	mux.Handle("POST /api/knowledge/meetings/transcribe", server.auth(http.HandlerFunc(server.knowledgeMeetingCreate)))
 	mux.Handle("GET /api/knowledge/meetings", server.auth(http.HandlerFunc(server.knowledgeMeetings)))
@@ -133,6 +137,11 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/knowledge/meetings/{id}/stream", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamChunk)))
 	mux.Handle("POST /api/knowledge/meetings/{id}/stream/stop", server.auth(http.HandlerFunc(server.knowledgeMeetingStreamStop)))
 	mux.Handle("POST /api/knowledge/meetings/{id}/live-points", server.auth(http.HandlerFunc(server.knowledgeMeetingLivePoints)))
+	mux.Handle("POST /api/knowledge/meetings/{id}/live-check", server.auth(http.HandlerFunc(server.knowledgeMeetingLiveCheck)))
+	mux.Handle("GET /api/knowledge/meetings/{id}/stream/live", server.auth(http.HandlerFunc(server.knowledgeMeetingLiveSession)))
+	// 发言人合并与逐字稿编辑（对标钉钉合并发言人 / 逐字稿可编辑）
+	mux.Handle("POST /api/knowledge/meetings/{id}/speakers/merge", server.auth(http.HandlerFunc(server.knowledgeMeetingSpeakerMerge)))
+	mux.Handle("PATCH /api/knowledge/meetings/{id}/segments/{index}", server.auth(http.HandlerFunc(server.knowledgeMeetingSegmentUpdate)))
 	// 个性化热词与重新转写（字面量段优先于 {id} 通配，不会被误当成会议 id）
 	mux.Handle("GET /api/knowledge/meetings/hotwords", server.auth(http.HandlerFunc(server.knowledgeMeetingHotwords)))
 	mux.Handle("POST /api/knowledge/meetings/hotwords", server.auth(http.HandlerFunc(server.knowledgeMeetingHotwordsAdd)))
@@ -224,6 +233,7 @@ func (server *Server) ConfigureDiscovery(service *discovery.Service) {
 func (server *Server) ConfigureTransfer(receiver *transfer.Receiver) {
 	server.receiver = receiver
 }
+
 // ConfigureKnowledge 注入知识网关运行态（会话由 knowledge.json 持久化）。
 func (server *Server) ConfigureKnowledge(service *knowledge.Service) {
 	server.knowledge = service

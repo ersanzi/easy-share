@@ -127,6 +127,12 @@ export function Greet(arg1:string):Promise<string>;
 
 export function KnowledgeAsk(arg1:string):Promise<knowledge.Answer>;
 
+export function KnowledgeDocument(arg1:string,arg2:string):Promise<knowledge.DocumentView>;
+
+export function KnowledgeDocuments(arg1:number):Promise<knowledge.DocumentList>;
+
+export function KnowledgeDownload(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function KnowledgeHealth():Promise<knowledge.Health>;
 
 export function KnowledgeLogin(arg1:string,arg2:string,arg3:string):Promise<knowledge.StatusView>;
@@ -161,13 +167,21 @@ export function MeetingHotwordsGet():Promise<knowledge.HotwordsResult>;
 
 export function MeetingKeywordsRegenerate(arg1:string):Promise<knowledge.Meeting>;
 
+export function MeetingLiveCheck(arg1:string):Promise<knowledge.MeetingLiveCheck>;
+
 export function MeetingLivePoints(arg1:string):Promise<Array<string>>;
+
+export function MeetingLiveSession(arg1:string):Promise<knowledge.MeetingLiveSession>;
 
 export function MeetingMindmapRegenerate(arg1:string):Promise<knowledge.Meeting>;
 
 export function MeetingRemove(arg1:string):Promise<void>;
 
 export function MeetingRetranscribe(arg1:string):Promise<knowledge.Meeting>;
+
+export function MeetingSegmentUpdate(arg1:string,arg2:number,arg3:string):Promise<knowledge.Meeting>;
+
+export function MeetingSpeakerMerge(arg1:string,arg2:string,arg3:string):Promise<knowledge.Meeting>;
 
 export function MeetingSpeakerRename(arg1:string,arg2:string,arg3:string):Promise<knowledge.Meeting>;
 

@@ -54,6 +54,9 @@ import {
   GetSettings,
   GetSnapshot,
   KnowledgeAsk,
+  KnowledgeDocument,
+  KnowledgeDocuments,
+  KnowledgeDownload,
   KnowledgeHealth,
   KnowledgeLogin,
   KnowledgeLogout,
@@ -75,6 +78,8 @@ import {
   MeetingTodoRemove,
   MeetingTodoUpdate,
   MeetingsList,
+  MeetingSpeakerMerge,
+  MeetingSegmentUpdate,
   MeetingSpeakerRename,
   MeetingStreamChunk,
   MeetingStreamOpen,
@@ -82,7 +87,9 @@ import {
   MeetingStreamWarm,
   MeetingVoiceprintRemove,
   MeetingVoiceprintsGet,
+  MeetingLiveCheck,
   MeetingLivePoints,
+  MeetingLiveSession,
   McpConnectionGet,
   McpConnectionRegenerate,
   MySpaces,
@@ -128,6 +135,8 @@ import type {
   AdminSharedMember,
   KnowledgeStats,
   KnowledgeAnswer,
+  KnowledgeDocumentList,
+  KnowledgeDocumentView,
   KnowledgeHealth as KnowledgeHealthData,
   KnowledgeStatus as KnowledgeStatusData,
   ManagedUserPage,
@@ -136,6 +145,8 @@ import type {
   MeetingArchiveResult,  MeetingAskResult,
   MeetingChatTurn,
   MeetingLiveView,
+  MeetingLiveCheck as MeetingLiveCheckData,
+  MeetingLiveSession as MeetingLiveSessionData,
   MeetingHotwords,
   MeetingVoiceprint,
   McpConnection,
@@ -228,12 +239,24 @@ export const core = {
   knowledgeLogout: KnowledgeLogout,
   knowledgeHealth: () => KnowledgeHealth() as Promise<KnowledgeHealthData>,
   knowledgeAsk: (question: string) => KnowledgeAsk(question) as Promise<KnowledgeAnswer>,
+  // 知识库清单：最近更新排序；ready 与 status 分开（更新失败仍可读上一版）
+  knowledgeDocuments: (limit = 200) => KnowledgeDocuments(limit) as Promise<KnowledgeDocumentList>,
+  // 阅读页：视图走 JSON；原件由 Go 侧弹保存框并流式落盘，返回保存路径
+  knowledgeDocument: (fileID: string, versionID: string) =>
+    KnowledgeDocument(fileID, versionID) as Promise<KnowledgeDocumentView>,
+  knowledgeDownload: (fileID: string, versionID: string, filename: string) =>
+    KnowledgeDownload(fileID, versionID, filename),
   // 会议听记：小请求走绑定；上传/音频回放走同源 /kapi 网关（大文件不进绑定 JSON 通道）
   meetingsList: (limit = 50) => MeetingsList(limit) as Promise<MeetingRecord[]>,
   meetingDetail: (id: string) => MeetingDetail(id) as Promise<MeetingRecord>,
   meetingRemove: MeetingRemove,
   meetingSpeakerRename: (id: string, speaker: string, name: string) =>
     MeetingSpeakerRename(id, speaker, name) as Promise<MeetingRecord>,
+  // 合并发言人 / 改一句转写（对标钉钉「合并发言人」「逐字稿可编辑」）
+  meetingSpeakerMerge: (id: string, fromSpeaker: string, intoSpeaker: string) =>
+    MeetingSpeakerMerge(id, fromSpeaker, intoSpeaker) as Promise<MeetingRecord>,
+  meetingSegmentUpdate: (id: string, index: number, text: string) =>
+    MeetingSegmentUpdate(id, index, text) as Promise<MeetingRecord>,
   meetingArchive: (id: string) => MeetingArchiveToKnowledge(id) as Promise<MeetingArchiveResult>,
   meetingMindmapRegenerate: (id: string) => MeetingMindmapRegenerate(id) as Promise<MeetingRecord>,
   meetingSummaryRegenerate: (id: string, templateId = '') =>
@@ -252,7 +275,11 @@ export const core = {
   meetingStreamOpen: (title: string, templateId = '') => MeetingStreamOpen(title, templateId) as Promise<MeetingRecord>,
   meetingStreamChunk: (id: string, pcmBase64: string) => MeetingStreamChunk(id, pcmBase64) as Promise<MeetingLiveView>,
   meetingStreamStop: (id: string) => MeetingStreamStop(id) as Promise<MeetingLiveView>,
+  // 推流中断后的兜底：不推音频也能取回服务端已上屏的内容
+  meetingLiveSession: (id: string) => MeetingLiveSession(id) as Promise<MeetingLiveSessionData>,
   meetingLivePoints: (id: string) => MeetingLivePoints(id) as Promise<string[]>,
+  // 会中快检：只核对刚上屏的最近几行（事实/数字口径）
+  meetingLiveCheck: (id: string) => MeetingLiveCheck(id) as Promise<MeetingLiveCheckData>,
   // 个性化热词与重新转写（加了热词后让老记录重跑）
   meetingHotwordsGet: () => MeetingHotwordsGet() as Promise<MeetingHotwords>,
   meetingHotwordsAdd: (words: string[]) => MeetingHotwordsAdd(words) as Promise<MeetingHotwords>,

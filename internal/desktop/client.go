@@ -190,6 +190,45 @@ func (client *Client) KnowledgeAsk(ctx context.Context, question string) (knowle
 	return result, err
 }
 
+// KnowledgeDocuments 拉知识库文档清单（最近更新排序）。
+func (client *Client) KnowledgeDocuments(ctx context.Context, limit int) (knowledge.DocumentList, error) {
+	var result knowledge.DocumentList
+	err := client.request(ctx, http.MethodGet, fmt.Sprintf("/api/knowledge/documents?limit=%d", limit), nil, &result)
+	return result, err
+}
+
+// KnowledgeDocument 读取知识文档阅读页数据（元数据 + 结构化正文）。
+func (client *Client) KnowledgeDocument(ctx context.Context, fileID, versionID string) (knowledge.DocumentView, error) {
+	var result knowledge.DocumentView
+	path := fmt.Sprintf("/api/knowledge/documents/%s/versions/%s/view", url.PathEscape(fileID), url.PathEscape(versionID))
+	err := client.request(ctx, http.MethodGet, path, nil, &result)
+	return result, err
+}
+
+// KnowledgeDocumentSource 打开原件下载流（Core 流式透传）；调用方负责关闭 Body。
+func (client *Client) KnowledgeDocumentSource(ctx context.Context, fileID, versionID string) (*http.Response, error) {
+	path := fmt.Sprintf("/api/knowledge/documents/%s/versions/%s/source", url.PathEscape(fileID), url.PathEscape(versionID))
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.token)
+	response, err := client.slowHTTP.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode >= 300 {
+		defer response.Body.Close()
+		var apiError api.ErrorResponse
+		_ = json.NewDecoder(response.Body).Decode(&apiError)
+		if apiError.Message != "" {
+			return nil, fmt.Errorf("%s", apiError.Message)
+		}
+		return nil, fmt.Errorf("core 返回状态 %d", response.StatusCode)
+	}
+	return response, nil
+}
+
 // KnowledgeStats 知识聚合统计（管理员汇总页；days 为观察窗口天数）。
 func (client *Client) KnowledgeStats(ctx context.Context, days int) (knowledge.KnowledgeStats, error) {
 	var result knowledge.KnowledgeStats
@@ -348,6 +387,38 @@ func (client *Client) MeetingLivePoints(ctx context.Context, id string) ([]strin
 	err := client.slowRequest(ctx, http.MethodPost,
 		"/api/knowledge/meetings/"+url.PathEscape(id)+"/live-points", map[string]any{}, &payload)
 	return payload.Points, err
+}
+
+// MeetingLiveCheck 会中快检（只核对最近几行，LLM 快链路）。
+func (client *Client) MeetingLiveCheck(ctx context.Context, id string) (knowledge.MeetingLiveCheck, error) {
+	var result knowledge.MeetingLiveCheck
+	err := client.slowRequest(ctx, http.MethodPost,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/live-check", map[string]any{}, &result)
+	return result, err
+}
+
+// MeetingLiveSession 取录制会话当前状态（轮询兜底）。
+func (client *Client) MeetingLiveSession(ctx context.Context, id string) (knowledge.MeetingLiveSession, error) {
+	var result knowledge.MeetingLiveSession
+	err := client.request(ctx, http.MethodGet,
+		"/api/knowledge/meetings/"+url.PathEscape(id)+"/stream/live", nil, &result)
+	return result, err
+}
+
+// MergeMeetingSpeakers 合并两位发言人（快链路）。
+func (client *Client) MergeMeetingSpeakers(ctx context.Context, id, fromSpeaker, intoSpeaker string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	input := map[string]string{"from_speaker": fromSpeaker, "into_speaker": intoSpeaker}
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/meetings/"+url.PathEscape(id)+"/speakers/merge", input, &result)
+	return result, err
+}
+
+// UpdateMeetingSegment 改一句转写正文（快链路）。
+func (client *Client) UpdateMeetingSegment(ctx context.Context, id string, index int, text string) (knowledge.Meeting, error) {
+	var result knowledge.Meeting
+	path := "/api/knowledge/meetings/" + url.PathEscape(id) + "/segments/" + strconv.Itoa(index)
+	err := client.request(ctx, http.MethodPatch, path, map[string]string{"text": text}, &result)
+	return result, err
 }
 
 // --- 个性化热词与重新转写 ---
