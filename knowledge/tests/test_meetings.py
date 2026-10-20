@@ -400,12 +400,39 @@ def test_stream_sessions_do_not_block_each_other(monkeypatch) -> None:
     worker.join(5)
 
 
+def test_stream_line_timestamp_is_sentence_start_not_break_moment(monkeypatch) -> None:
+    """落行时间戳必须是这一句「开始说」的时刻。
+
+    桌面端点验实测：同一段 0:03 开始的话，旧实现给的是被标点触发那一刻
+    （[7s] / [16s]），看起来每句话都在说完整整一声才被打上时间；与离线逐字稿时间轴也对不上。
+    """
+    from app.meetings.stream import CHUNK_SAMPLES, StreamingTranscriber
+
+    streamer = StreamingTranscriber()
+    pieces = iter(["第一句话先说", "完，", "第二句又来了"])
+    monkeypatch.setattr(streamer, "_ensure_model", lambda: object())
+    monkeypatch.setattr(
+        streamer, "_recognize", lambda model, session, piece, is_final=False, hotword="": next(pieces, "")
+    )
+    streamer.start("ts")
+    streamer.feed("ts", _pcm(CHUNK_SAMPLES))      # 1.8s：开头喂进「第一句话先说」
+    streamer.feed("ts", _pcm(CHUNK_SAMPLES * 2))  # 3.6s 时第二片补齐，此时才凑够逗号
+    view = streamer.feed("ts", _pcm(CHUNK_SAMPLES))  # 5.4s：第三句起头
+    assert view["lines"][0]["text"] == "第一句话先说完"
+    assert view["lines"][0]["at"] == 0  # 句子从第 0 秒开始，不是 3.6 秒被断句的时刻
+    assert view["current"] == "第二句又来了"
+
+
 def test_live_check_normalises_verdict(monkeypatch) -> None:
     summarizer = MeetingSummarizer(base_url="http://x/v1", api_key="k", model="m")
     monkeypatch.setattr(
         summarizer,
         "ask_json",
-        lambda system, user, max_tokens=8192: {"verdict": "ATTENTION", "note": "期限前后不一", "points": ["前面说周四", "后面说周五", ""]},
+        lambda system, user, max_tokens=8192, max_attempts=None: {
+            "verdict": "ATTENTION",
+            "note": "期限前后不一",
+            "points": ["前面说周四", "后面说周五", ""],
+        },
     )
     result = summarizer.live_check("刚才说周五之前给排期，后面又说周四")
     assert result == {"verdict": "attention", "note": "期限前后不一", "points": ["前面说周四", "后面说周五"]}
@@ -913,6 +940,46 @@ def test_api_stream_live_reports_sessions_and_check_degrades(tmp_path) -> None:
 
             # 未知会议 id：404，不是 500
             assert client.get("/meetings/nope/stream/live").status_code == 404
+    finally:
+        service.shutdown()
+
+
+def test_api_live_check_returns_before_upstream_retry_chain(monkeypatch, tmp_path) -> None:
+    """上游 LLM 卡住时，live-check 必须在 Core 超时之前返回 unavailable。
+
+    实测：上游 503 时 summarizer 指数退避重试能拖到 120s+，正好撞上 Core 的
+    knowledgeQueryTimeout，前端看到的是「连接被关闭」而不是设计好的降级结果。
+    """
+    import app.meetings.routes as routes
+
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+    meta = service.store.create(title="周会", owner=None)
+
+    class SlowStreamer:
+        def start(self, meeting_id, owner=None):
+            return {}
+
+        def recent_text(self, meeting_id, count=4):
+            return "刚才说周五之前给排期，后面又说周四", 6.0
+
+    service.streamer = SlowStreamer()
+
+    def _hang(_material: str) -> dict:
+        import time as _time
+
+        _time.sleep(5)
+        return {"verdict": "ok", "note": "", "points": []}
+
+    monkeypatch.setattr(service.summarizer, "live_check", _hang, raising=False)
+    monkeypatch.setattr(routes, "_live_check_timeout_seconds", lambda: 0.3, raising=False)
+    try:
+        with _api_client(tmp_path, service) as client:
+            started = time.monotonic()
+            response = client.post(f"/meetings/{meta['id']}/live-check")
+            elapsed = time.monotonic() - started
+        assert response.status_code == 200
+        assert response.json()["verdict"] == "unavailable"
+        assert elapsed < 3, f"应在上游重试链之前返回，实际 {elapsed:.1f}s"
     finally:
         service.shutdown()
 

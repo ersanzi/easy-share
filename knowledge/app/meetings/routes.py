@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, Response
@@ -187,12 +190,53 @@ def live_points(meeting_id: str, request: Request) -> dict:
     return {"points": service.live_points(meeting_id)}
 
 
+def _live_check_timeout_seconds() -> float:
+    """会中快检的硬上限（秒）。单列成函数，便于用例把等待时间压到毫秒级。"""
+    return 25.0
+
+
 @router.post("/meetings/{meeting_id}/live-check")
 def live_check(meeting_id: str, request: Request) -> dict:
-    """会中快检：只看刚上屏的最近几行，核对数字/期限/人名等事实口径（秒级 LLM 调用）。"""
+    """会中快检：只看刚上屏的最近几行，核对数字/期限/人名等事实口径（秒级 LLM 调用）。
+
+    **必须在工作线程里跑**：``def``（非 ``async def``）路由由 FastAPI 丢进线程池，
+    推理线程不阻塞事件循环；若写成 ``async def`` 又去调同步 LLM，整场会议的推流分片
+    会一起排队等人家的 token。
+
+    **上游不可用时要在 Core 的超时之前就返回**：实测上游网关 503 时 summarizer 会按
+    0.5/1/2/4/8/16s 指数退避重试，一次 live-check 能拖到 120s+，正好撞上 Core 的
+    ``knowledgeQueryTimeout``，前端拿到的是「服务器关闭了本应保持活动状态的连接」，
+    而不是设计好的 ``verdict=unavailable``。所以这里再兜一层硬上限，
+    超时即返回「AI 暂时不可用」——快检本来就该是秒级的。
+    """
     service = _meetings(request)
     _stream_meeting_or_404(service, meeting_id, request)
-    return service.live_check(meeting_id)
+    timeout_seconds = _live_check_timeout_seconds()
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-check")
+    try:
+        future = pool.submit(service.live_check, meeting_id)
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeout:
+        logger.warning("会中快检超时（%ds），按不可用返回: meeting=%s", timeout_seconds, meeting_id)
+        return {
+            "verdict": "unavailable",
+            "note": "AI 快检响应超时（上游模型不可用），稍后再试",
+            "points": [],
+            "last_line_at": 0.0,
+            "checked_at": time.strftime("%H:%M:%S"),
+        }
+    except Exception:  # noqa: BLE001 - 快检失败绝不能影响录音会话
+        logger.warning("会中快检失败: meeting=%s", meeting_id, exc_info=True)
+        return {
+            "verdict": "unavailable",
+            "note": "AI 快检失败，稍后再试",
+            "points": [],
+            "last_line_at": 0.0,
+            "checked_at": time.strftime("%H:%M:%S"),
+        }
+    finally:
+        # 超时后不 join：让卡住的那次调用在后台自己结束，不要连累这次响应
+        pool.shutdown(wait=False)
 
 
 # --- 个性化热词（必须先于 /meetings/{meeting_id} 注册，否则 "hotwords" 会被当成会议 id） ---

@@ -770,7 +770,12 @@ func (server *Server) knowledgeMeetingLivePoints(writer http.ResponseWriter, req
 	writeJSON(writer, http.StatusOK, map[string]any{"points": points})
 }
 
-// knowledgeMeetingLiveCheck 会中快检（只看最近几行，LLM 快链路）。
+// knowledgeLiveCheckTimeout 会中快检上限：它必须比知识服务自己的硬上限（25s）再短一截，
+// 否则上游 LLM 卡住时会两边同时到点——实测 Core 先断开连接，前端只看到「连接被关闭」，
+// 拿不到知识服务准备好的 verdict=unavailable。留 5s 让降级结果走得回来。
+const knowledgeLiveCheckTimeout = 20 * time.Second
+
+// knowledgeMeetingLiveCheck 会中快检（只看最近几行，LLM 快链路；上游不可用时降级返回）。
 func (server *Server) knowledgeMeetingLiveCheck(writer http.ResponseWriter, request *http.Request) {
 	if server.knowledgeUnavailable(writer) {
 		return
@@ -781,7 +786,7 @@ func (server *Server) knowledgeMeetingLiveCheck(writer http.ResponseWriter, requ
 	}
 	controller := http.NewResponseController(writer)
 	_ = controller.SetWriteDeadline(time.Time{})
-	ctx, cancel := context.WithTimeout(request.Context(), knowledgeQueryTimeout)
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeLiveCheckTimeout)
 	defer cancel()
 	result, err := knowledge.NewClient(session.ServerURL).MeetingLiveCheck(ctx, session.Token, knowledgeMeetingByID(request))
 	if err != nil {

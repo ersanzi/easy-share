@@ -67,6 +67,11 @@ class LiveSession:
     current: str = ""
     lines: list[dict] = field(default_factory=list)
     samples: int = 0
+    # 当前这句开始时的采样位置：落行时用它算「这句话从第几秒开始说」。
+    # 以前直接用 elapsed_seconds()（= 此刻总共喂了多少音频），于是每行时间戳都是
+    # 「被标点触发的那一刻」，实测同一段 0:03 开始的话被标成了 [7s]/[16s]——
+    # 桌面端点验时一眼就能看出来，与离线逐字稿的时间轴也对不上。
+    current_start_samples: int = 0
     # 上屏时刻（墙钟，秒）：前端据此显示「刷新于 N 秒前」，不必分片时间对齐
     updated_at: float = field(default_factory=time.time)
     # 本会话串行推理用（同一会话的两片绝不能被两个线程同时喂进模型）
@@ -237,16 +242,20 @@ class StreamingTranscriber:
     def _absorb(self, session: LiveSession, text: str) -> None:
         if not text:
             return
+        # 空句被写上第一个字时，记下这句的起点（此刻的采样位置）
+        if not session.current:
+            session.current_start_samples = session.samples
         session.current += text
         if should_break(session.current):
             self._flush(session)
 
     def _flush(self, session: LiveSession) -> None:
         text = strip_line(session.current)
+        started = int(session.current_start_samples / TARGET_RATE)
         session.current = ""
         if not text:
             return
-        session.lines.append({"text": text, "at": session.elapsed_seconds()})
+        session.lines.append({"text": text, "at": started})
         if len(session.lines) > 600:  # 兜底：极长会议只保留最近 600 行预览
             session.lines = session.lines[-600:]
 

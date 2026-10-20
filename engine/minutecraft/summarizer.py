@@ -469,9 +469,14 @@ def _create_with_retry(client, **kwargs):
     `reasoning_effort` 做**能力探测**：不同中转/方言对这个字段的支持不一致，
     端点明确抗议时剥掉它重试一次（退回模型默认思考档），而不是让整份纪要挂掉——
     提速是锦上添花，不能因为省 3 分钟而把一次本该成功的生成打成失败。
+
+    调用方可用 `_max_attempts` 参数收紧重试次数：会中快检这类**秒级**路径不能跟着整份纪要的退避链走——
+    实测上游 503 时 0.5/1/2/4/8/16s 的退避能把一次快检拖到 120s+，远超调用方等待上限。
     """
+    max_attempts = kwargs.pop("_max_attempts", None) or _RETRY_ATTEMPTS
+    max_attempts = max(1, int(max_attempts))
     last: Exception | None = None
-    for attempt in range(max(_RETRY_ATTEMPTS, 1)):
+    for attempt in range(max_attempts):
         try:
             return client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - 分类在下面判定
@@ -480,11 +485,11 @@ def _create_with_retry(client, **kwargs):
                 logger.info("端点不接受 reasoning_effort（%s），退回默认思考档重试", type(exc).__name__)
                 kwargs = {key: value for key, value in kwargs.items() if key != "reasoning_effort"}
                 continue
-            if not _is_retryable(exc) or attempt >= _RETRY_ATTEMPTS - 1:
+            if not _is_retryable(exc) or attempt >= max_attempts - 1:
                 raise
             delay = _RETRY_BASE_SECONDS * (2**attempt)
             logger.warning("LLM 调用失败（可重试）：%s，%.1fs 后重试（%d/%d）",
-                           type(exc).__name__, delay, attempt + 1, _RETRY_ATTEMPTS - 1)
+                           type(exc).__name__, delay, attempt + 1, max_attempts - 1)
             time.sleep(delay)
     assert last is not None
     raise last
@@ -545,12 +550,14 @@ class MeetingSummarizer:
     def configured(self) -> bool:
         return bool(self._base_url and self._api_key and self._model)
 
-    def ask_json(self, system: str, user: str, max_tokens: int = 8192) -> dict | None:
+    def ask_json(self, system: str, user: str, max_tokens: int = 8192, max_attempts: int | None = None) -> dict | None:
         """通用 LLM JSON 询问器（供导图 harness 等多阶段管线复用）。失败返回 None。
 
         `max_tokens` 可调：推理型模型（如 deepseek-v4-flash）有思考 token 与输出 token 共享
         同一个上限，要求产出特别长时（议题 × 分节 × 分组）必须放宽，否则会得到
         `finish_reason=length` 且 `content` 为空——**看起来像限流，实际是预算耗尽**。
+
+        `max_attempts` 可调：会中快检这类秒级路径只给 1~2 次，别让退避链把一次快检拖成两分钟。
         """
         if not self.configured:
             return None
@@ -565,6 +572,7 @@ class MeetingSummarizer:
                 ],
                 temperature=0.2,
                 max_tokens=max_tokens,
+                _max_attempts=max_attempts,
                 **self._level(user),
             )
             raw = (response.choices[0].message.content or "").strip()
@@ -656,7 +664,11 @@ class MeetingSummarizer:
         """对刚上屏的一段话做事实快检；LLM 未配置/失败返回 None（调用方按「暂不可用」展示）。"""
         if not self.configured or len(material.strip()) < 8:
             return None
-        parsed = self.ask_json(self._LIVE_CHECK_SYSTEM, "刚上屏的片段如下：\n" + material[-1200:], max_tokens=800)
+        # 只给 1 次：快检要的是「几秒内有答案」，上游挂了就该立刻说不可用，
+        # 不能跟着整份纪要的退避链一起等（实测能把 1 次快检拖到两分钟以上）。
+        parsed = self.ask_json(
+            self._LIVE_CHECK_SYSTEM, "刚上屏的片段如下：\n" + material[-1200:], max_tokens=800, max_attempts=1
+        )
         if not isinstance(parsed, dict):
             return None
         verdict = str(parsed.get("verdict") or "").strip().lower()
