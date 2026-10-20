@@ -1,0 +1,4 @@
+# 预览壳与截图工具的本地缓存，不入库
+.debug/
+preview/.vite/
+preview/node_modules

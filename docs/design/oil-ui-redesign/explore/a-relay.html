@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 A · 设备中继台</title>
+<style>
+  :root {
+    --bg: #ffffff; --chrome: #f8f9fb; --line: #e5e6e8; --line-strong: #d7d9de;
+    --ink: #0c0f17; --text: #262e3e; --muted: #5a6478; --faint: #8b95a8;
+    --blue: #1f69e0; --blue-soft: #edf4ff; --green: #109968; --graphite: #0f1115;
+    --r: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; width: 1440px; height: 900px; overflow: hidden;
+    font-family: -apple-system, "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; color: var(--text); background: var(--bg);
+    font-variant-numeric: tabular-nums;
+  }
+  svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  .chrome { height: 36px; display: flex; align-items: center; background: var(--chrome); border-bottom: 1px solid var(--line); }
+  .chrome .brand { padding: 0 16px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .01em; }
+  .chrome .spacer { flex: 1; }
+  .chrome .actions { display: flex; align-items: center; gap: 10px; padding-right: 8px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 13px; background: #fff; font-size: 12px; color: var(--text); }
+  .pill b { display: grid; place-items: center; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 600; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--graphite); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600; }
+  .username { font-size: 12.5px; font-weight: 500; }
+  .winctl { display: flex; gap: 2px; padding-left: 8px; color: var(--muted); }
+  .winctl span { width: 30px; height: 26px; display: grid; place-items: center; border-radius: 6px; }
+  .winctl svg { width: 12px; height: 12px; stroke-width: 2; }
+
+  .body { display: grid; grid-template-columns: 60px 216px minmax(0, 1fr); height: 864px; }
+  .rail { background: var(--chrome); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0; }
+  .rail .logo { width: 34px; height: 34px; margin-bottom: 10px; border-radius: 9px; background: var(--graphite); color: #fff; display: grid; place-items: center; }
+  .rail .logo svg { width: 19px; height: 19px; stroke-width: 1.8; }
+  .rail a { width: 44px; padding: 7px 0 5px; border-radius: 8px; display: grid; justify-items: center; gap: 3px; color: var(--muted); font-size: 10.5px; text-decoration: none; }
+  .rail a svg { width: 19px; height: 19px; }
+  .rail a.on { background: #fff; color: var(--graphite); box-shadow: 0 1px 2px rgba(13,13,13,.08); font-weight: 600; }
+  .rail .push { flex: 1; }
+
+  .panel { border-right: 1px solid var(--line); padding: 16px 12px; display: flex; flex-direction: column; }
+  .panel h2 { margin: 0 8px 2px; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+  .panel .sub { margin: 0 8px 14px; font-size: 11.5px; color: var(--faint); }
+  .navlink { display: flex; align-items: center; gap: 9px; height: 32px; padding: 0 9px; border-radius: 6px; color: var(--text); font-size: 13px; }
+  .navlink svg { width: 16px; height: 16px; color: var(--muted); }
+  .navlink .count { margin-left: auto; font-size: 11.5px; color: var(--faint); }
+  .navlink.on { background: var(--blue-soft); color: var(--blue); font-weight: 600; }
+  .navlink.on svg { color: var(--blue); }
+  .panel .foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+  .panel .foot .svc { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(16,153,104,.12); }
+  .panel .foot button { margin-top: 6px; height: 30px; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; color: var(--text); font-size: 12px; }
+
+  /* 工作区 */
+  .work { display: flex; flex-direction: column; min-width: 0; }
+  .topbar { height: 52px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 24px; border-bottom: 1px solid var(--line); }
+  .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+  .statline { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--muted); }
+  .statline span { display: inline-flex; align-items: center; gap: 6px; }
+  .statline i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .statline i.off { background: var(--line-strong); }
+  .topbar .send { margin-left: auto; height: 32px; padding: 0 14px; border: 0; border-radius: var(--r); background: var(--graphite); color: #fff; font-size: 12.5px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; }
+  .topbar .send svg { width: 15px; height: 15px; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0; padding: 20px 24px 0; flex: 1; min-height: 0; }
+  .col { display: flex; flex-direction: column; min-height: 0; }
+  .col + .col { border-left: 1px solid var(--line); padding-left: 24px; }
+  .col:first-child { padding-right: 24px; }
+  .colhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .colhead h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .colhead .n { color: var(--faint); font-size: 12px; }
+  .colhead .more { margin-left: auto; font-size: 12px; color: var(--blue); }
+
+  .dev { display: flex; align-items: center; gap: 11px; height: 54px; padding: 0 10px; border-radius: var(--r); }
+  .dev:hover { background: rgba(15,17,21,.035); }
+  .typo { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; color: var(--graphite); background: #fff; }
+  .typo svg { width: 17px; height: 17px; }
+  .dev .name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+  .dev .addr { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+  .dev .now { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--green); }
+  .dev .now.warn { color: #b4600f; }
+  .dev .btn { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--line); background: #fff; color: var(--graphite); display: grid; place-items: center; }
+  .dev .btn svg { width: 14px; height: 14px; }
+
+  .task { padding: 11px 10px 12px; border-radius: var(--r); }
+  .task + .task { border-top: 1px solid var(--line); border-radius: 0; }
+  .task .row1 { display: flex; align-items: baseline; gap: 8px; }
+  .task .file { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .task .pct { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--graphite); }
+  .task .row2 { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11.5px; color: var(--muted); }
+  .task .row2 .speed { font-weight: 600; color: var(--text); }
+  .bar { position: relative; height: 3px; border-radius: 2px; background: rgba(15,17,21,.08); margin-top: 9px; }
+  .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--graphite); }
+  .bar i::after { content: ""; position: absolute; right: -2px; top: -1.5px; width: 6px; height: 6px; border-radius: 50%; background: var(--graphite); box-shadow: 0 0 0 3px rgba(15,17,21,.10); }
+  .bar.blue i { background: var(--blue); }
+  .bar.blue i::after { background: var(--blue); box-shadow: 0 0 0 3px rgba(31,105,224,.12); }
+  .bar.flat i::after { display: none; }
+  .task .acts { display: flex; gap: 6px; margin-top: 9px; }
+  .task .acts button { height: 26px; padding: 0 11px; border-radius: 6px; font-size: 12px; border: 1px solid var(--line-strong); background: #fff; color: var(--text); }
+  .task .acts button.pri { border-color: var(--graphite); background: var(--graphite); color: #fff; font-weight: 600; }
+  .task .err { color: #a7241e; }
+
+  /* 「最近完成」垫在中段空白处：中继台说的是「刚刚交换了什么」，让首屏没有死白 */
+  .done { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .done .row { display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 6px; font-size: 12.5px; color: var(--text); }
+  .done .row:hover { background: rgba(15,17,21,.035); }
+  .done .row .ok { color: var(--green); font-size: 11.5px; }
+  .done .row .t { margin-left: auto; color: var(--faint); font-size: 11.5px; }
+  .done .row .dir { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); }
+  .done .row .dir svg { width: 11px; height: 11px; }
+
+  .strip { margin: 16px 24px 18px; display: flex; align-items: center; gap: 12px; height: 60px; padding: 0 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--chrome); }
+  .strip .glyph { width: 30px; height: 30px; border-radius: 7px; background: #fff; border: 1px solid var(--line); display: grid; place-items: center; color: var(--graphite); }
+  .strip .glyph svg { width: 17px; height: 17px; }
+  .strip .t1 { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .strip .t2 { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .strip .state { margin-left: auto; font-size: 12px; color: var(--green); display: inline-flex; align-items: center; gap: 6px; }
+  .strip button { height: 30px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-strong); background: #fff; font-size: 12px; color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <div class="brand">EasyShare</div>
+    <div class="spacer"></div>
+    <div class="actions">
+      <span class="pill"><svg width="13" height="13" viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8"/></svg>活动<b>3</b></span>
+      <span class="avatar">李</span><span class="username">李丰</span>
+      <div class="winctl">
+        <span><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></span>
+        <span><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></span>
+        <span><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></span>
+      </div>
+    </div>
+  </div>
+  <div class="body">
+    <nav class="rail">
+      <div class="logo"><svg viewBox="0 0 32 32"><path d="M8.5 12a6.5 6.5 0 0 1 12.6-2.2A5.5 5.5 0 1 1 22.5 20H8a5 5 0 0 1 .5-8Z"/><path d="m12 15 4-4 4 4M16 11v11"/></svg></div>
+      <a class="on"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>总览</a>
+      <a><svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>网盘</a>
+      <a><svg viewBox="0 0 24 24"><path d="M12 4.5C10.5 3.5 8.5 3 6 3v15c2.5 0 4.5.5 6 1.5 1.5-1 3.5-1.5 6-1.5V3c-2.5 0-4.5.5-6 1.5Z"/><path d="M12 4.5v15"/></svg>知识</a>
+      <a><svg viewBox="0 0 24 24"><path d="M9 3h6l1.5 3 3 1.5v6L16.5 15 15 18H9l-1.5-3-3-1.5v-6L7.5 6Z"/></svg>扩展</a>
+      <span class="push"></span>
+      <a><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M4 12h2m12 0h2M12 4v2m0 12v2"/></svg>设置</a>
+    </nav>
+
+    <aside class="panel">
+      <h2>总览</h2>
+      <p class="sub">本机服务、局域网与任务</p>
+      <a class="navlink on"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>工作台</a>
+      <a class="navlink"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4"/></svg>附近设备<span class="count">4</span></a>
+      <a class="navlink"><svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>任务中心<span class="count">7</span></a>
+      <a class="navlink"><svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 4.6 3.2 8.8 8 10 4.8-1.2 8-5.4 8-10V6l-8-3Z"/></svg>管理后台</a>
+      <div class="foot">
+        <div class="svc"><span class="dot"></span>本机连接正常</div>
+        <button>退出服务</button>
+      </div>
+    </aside>
+
+    <main class="work">
+      <header class="topbar">
+        <h1>工作台</h1>
+        <div class="statline">
+          <span><i></i>局域网可见</span>
+          <span><i></i>共享运行中</span>
+          <span><i></i>网盘已连接</span>
+        </div>
+        <button class="send"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>发送文件</button>
+      </header>
+
+      <div class="cols">
+        <section class="col">
+          <div class="colhead"><h3>附近设备</h3><span class="n">4 台在线</span><a class="more">全部</a></div>
+          <div class="dev">
+            <span class="typo"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg></span>
+            <div><div class="name">DESIGN-STUDIO</div><div class="addr">192.168.1.24 · 本机</div></div>
+            <span class="now">这台电脑</span>
+          </div>
+          <div class="dev">
+            <span class="typo"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg></span>
+            <div><div class="name">MacBook Pro · 陈默</div><div class="addr">192.168.1.31 · 2 分钟前</div></div>
+            <span class="now">正在接收</span>
+            <span class="btn"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg></span>
+          </div>
+          <div class="dev">
+            <span class="typo"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><circle cx="17" cy="7.5" r=".6"/><circle cx="17" cy="17.5" r=".6"/></svg></span>
+            <div><div class="name">研发部 NAS</div><div class="addr">192.168.1.10 · 在线</div></div>
+            <span class="now warn">上次传输失败</span>
+            <span class="btn"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg></span>
+          </div>
+          <div class="dev">
+            <span class="typo"><svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M10 19h4"/></svg></span>
+            <div><div class="name">前台平板</div><div class="addr">192.168.1.88 · 6 分钟前</div></div>
+            <span class="btn"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg></span>
+          </div>
+        </section>
+
+        <section class="col">
+          <div class="colhead"><h3>正在传输</h3><span class="n">2 个进行中 · 1 个等待确认</span><a class="more">任务中心</a></div>
+          <div class="task">
+            <div class="row1"><span class="file">设计稿_终版.fig</span><span class="pct">33%</span></div>
+            <div class="row2">接收自 MacBook Pro · 陈默<span class="speed">40.0 MB/s</span><span>1.2 GB</span></div>
+            <div class="bar"><i style="width:33%"></i></div>
+          </div>
+          <div class="task">
+            <div class="row1"><span class="file">Q4产品路线图.pdf</span><span class="pct">56%</span></div>
+            <div class="row2">上传到网盘<span class="speed">3.5 MB/s</span><span>46.0 MB</span></div>
+            <div class="bar blue"><i style="width:56%"></i></div>
+          </div>
+          <div class="task">
+            <div class="row1"><span class="file">会议音频_周三.m4a</span><span class="pct">待确认</span></div>
+            <div class="row2">接收自 DESIGN-STUDIO<span>90.0 MB</span></div>
+            <div class="acts"><button>拒绝</button><button>另存</button><button class="pri">接收</button></div>
+          </div>
+          <div class="task">
+            <div class="row1"><span class="file">年度预算汇总.xlsx</span><span class="pct err">失败</span></div>
+            <div class="row2">发送到 研发部 NAS<span class="err">对方已离线，传输中断</span></div>
+            <div class="acts"><button>重试</button></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="cols" style="flex:none;padding-top:0">
+        <section class="col done">
+          <div class="colhead"><h3>刚刚完成</h3><span class="n">今天 3 项</span></div>
+          <div class="row"><span class="dir"><svg viewBox="0 0 24 24"><path d="M12 19V5m0 0-4 4m4-4 4 4"/></svg></span>客户验收单.xlsx<span class="ok">已完成</span><span class="t">41 分钟前</span></div>
+          <div class="row"><span class="dir"><svg viewBox="0 0 24 24"><path d="M12 5v14m0 0-4-4m4 4 4-4"/></svg></span>品牌视觉/设计规范.pdf<span class="ok">已完成</span><span class="t">2 小时前</span></div>
+        </section>
+        <section class="col done">
+          <div class="colhead"><h3>共享与网盘</h3></div>
+          <div class="row"><span class="dir"><svg viewBox="0 0 24 24"><path d="M10 20a4 4 0 0 1-4-4v-1a4 4 0 0 1 .8-2.4L10 8l3.2 4.6A4 4 0 0 1 14 15v1a4 4 0 0 1-4 4Z"/><path d="m14 6 4-2 2 4-4 2Z"/></svg></span>EasyShare 共享<span class="ok">此电脑可见</span><span class="t">WebDAV 运行中</span></div>
+          <div class="row"><span class="dir"><svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg></span>个人网盘<span class="t">已用 456 GB / 1024 GB</span></div>
+        </section>
+      </div>
+
+      <div class="strip">
+        <span class="glyph"><svg viewBox="0 0 24 24"><path d="M10 20a4 4 0 0 1-4-4v-1a4 4 0 0 1 .8-2.4L10 8l3.2 4.6A4 4 0 0 1 14 15v1a4 4 0 0 1-4 4Z"/><path d="m14 6 4-2 2 4-4 2Z"/></svg></span>
+        <div><div class="t1">EasyShare 共享</div><div class="t2">此电脑 → EasyShare 共享 · 无需映射盘符</div></div>
+        <span class="state"><svg width="12" height="12" viewBox="0 0 24 24"><path d="M12 3v9M7.2 5.8a8 8 0 1 0 9.6 0"/></svg>WebDAV 运行中</span>
+        <button>停止共享</button>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

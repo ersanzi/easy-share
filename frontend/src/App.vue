@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import ActivityDrawer from './components/ActivityDrawer.vue'
 import AdminPanel from './components/AdminPanel.vue'
 import CloudPanel from './components/CloudPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import DevicePicker from './components/DevicePicker.vue'
-import DrivePanel from './components/DrivePanel.vue'
 import KnowledgePanel from './components/KnowledgePanel.vue'
 import LoginView from './components/LoginView.vue'
 import MeetingsPanel from './components/MeetingsPanel.vue'
@@ -13,29 +12,76 @@ import PeerList from './components/PeerList.vue'
 import PluginHost from './components/PluginHost.vue'
 import PluginMarket from './components/PluginMarket.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import StatusBar from './components/StatusBar.vue'
 import TransferList from './components/TransferList.vue'
-import { RECYCLE_RETENTION_DAYS } from './types/core'
+import { RECYCLE_RETENTION_DAYS, type Peer, type TransferTask } from './types/core'
 import { useEasyShare } from './composables/useEasyShare'
 import { useConfirm } from './composables/useConfirm'
 import { usePlugins } from './composables/usePlugins'
-import { taskKind, taskSection } from './utils/tasks'
+import {
+  compareTasks,
+  formatBytes,
+  taskActionLabel,
+  taskAmountLabel,
+  taskKind,
+  taskProgress,
+  taskSection,
+  taskStatusLabel,
+  taskTimestamp,
+} from './utils/tasks'
 import { WindowMinimise, Quit, WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
 
 // 内置视图 + 动态插件视图（plugin:{id}）
 type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'meetings' | 'admin' | 'plugins' | 'settings'
 type View = BuiltinView | `plugin:${string}`
 
+// ─── 三段式信息架构（对标 WPS / 钉钉：图标轨切产品域，上下文面板列域内入口）───
+// 单一真相源仍是 `view`：rail 与面板都从它派生，点 rail 只是把 view 切到该域默认页。
+// 这样各页面组件的路由契约一字不改，改的只有外壳与导航分组。
+type SectionId = 'home' | 'drive' | 'knowledge' | 'apps' | 'settings'
+
+const sectionOf = (v: View): SectionId => {
+  if (v === 'cloud') return 'drive'
+  if (v === 'knowledge' || v === 'meetings') return 'knowledge'
+  if (v === 'plugins' || v.startsWith('plugin:')) return 'apps'
+  if (v === 'settings') return 'settings'
+  return 'home'
+}
+const sectionMeta: Record<SectionId, { label: string; title: string; subtitle: string; home: View }> = {
+  home: { label: '总览', title: '总览', subtitle: '本机服务、局域网与任务', home: 'overview' },
+  drive: { label: '网盘', title: '我的网盘', subtitle: '云端文件与本机挂载', home: 'cloud' },
+  knowledge: { label: '知识', title: '知识与会议', subtitle: '问答、听记与纪要', home: 'knowledge' },
+  apps: { label: '扩展', title: '插件中心', subtitle: '按需安装，随程序提供', home: 'plugins' },
+  settings: { label: '设置', title: '设置', subtitle: '账号、服务与更新', home: 'settings' },
+}
+const railSection = computed(() => sectionOf(view.value))
+const openSection = (id: SectionId) => { view.value = sectionMeta[id].home }
+
+// 浏览器预览（docs/design/*/preview）用 ?scene= 指定初始视图；桌面端没有这个参数，恒为 overview。
+// 只影响首屏落在哪一页，不绕过任何登录与数据流程。
+const initialView = (() => {
+  if (typeof window === 'undefined') return 'overview'
+  const scene = new URLSearchParams(window.location.search).get('scene') ?? ''
+  const views: View[] = ['overview', 'devices', 'transfers', 'cloud', 'knowledge', 'meetings', 'admin', 'plugins', 'settings']
+  return (views.includes(scene as View) ? scene : 'overview') as View
+})()
+
 const app = useEasyShare()
 const { confirmState, confirm, settle } = useConfirm()
 const pluginSys = usePlugins()
-const view = ref<View>('overview')
+const view = ref<View>(initialView)
 const cloudRef = ref<InstanceType<typeof CloudPanel> | null>(null)
 const activityOpen = ref(false)
 const activityTriggerRef = ref<HTMLButtonElement | null>(null)
 const closeActivityDrawer = () => {
   activityOpen.value = false
   activityTriggerRef.value?.focus()
+}
+// 回收站原本是网盘页里的一个按钮，藏在工具条后面；提到「网盘」域面板当一等入口。
+// 组件与状态都没变，只是变得看得见、点得到。
+const openRecycleBin = async () => {
+  view.value = 'cloud'
+  await nextTick()
+  cloudRef.value?.openRecycle()
 }
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
@@ -61,6 +107,54 @@ const completedCloudUploads = computed(() => app.snapshot.value.tasks
   .map(task => `${task.id}:${task.updatedAt ?? ''}`)
   .sort()
   .join('|'))
+
+// ─── 工作台「设备中继台」（方向 A）───
+// 首屏只回答两个问题：现在谁在线、正在交换什么。任务排序沿用任务中心的优先级，
+// 因此这里看到的顺序和点进任务中心后一致，不会出现两套说法。
+const relayPeers = computed(() => app.snapshot.value.peers.slice(0, 4))
+const relayTasks = computed(() => app.snapshot.value.tasks
+  .filter(task => taskSection(task) !== 'recent')
+  .sort(compareTasks)
+  .slice(0, 4))
+const pendingTaskCount = computed(() => app.snapshot.value.tasks
+  .filter(task => task.status === 'pending').length)
+const relayCompleted = computed(() => app.snapshot.value.tasks
+  .filter(task => task.status === 'completed')
+  .sort((left, right) => taskTimestamp(right) - taskTimestamp(left))
+  .slice(0, 3))
+const relayServices = computed(() => {
+  const status = app.snapshot.value.status
+  return [
+    { label: '设备发现', on: status.discovery },
+    { label: '文件接收', on: status.receiver },
+    { label: '网盘', on: status.cloudEnabled },
+    { label: '共享', on: status.webdav },
+  ]
+})
+const peerState = (peer: Peer) => {
+  const busy = app.snapshot.value.tasks.find(task =>
+    task.peer === peer.deviceName && ['running', 'accepted', 'queued'].includes(task.status))
+  if (busy) return { label: busy.direction === 'receive' ? '正在接收' : '正在发送', tone: 'busy' }
+  const failed = app.snapshot.value.tasks.find(task =>
+    task.peer === peer.deviceName && task.status === 'failed')
+  if (failed) return { label: '上次传输失败', tone: 'warn' }
+  return { label: '在线', tone: 'online' }
+}
+const relayTaskTone = (task: TransferTask) => taskKind(task).startsWith('cloud') ? 'cloud' : 'lan'
+const relayTaskMeta = (task: TransferTask) => {
+  const parts = [taskActionLabel(task)]
+  if (task.status === 'running' && task.speed > 0) parts.push(`${formatBytes(task.speed)}/s`)
+  parts.push(taskAmountLabel(task))
+  return parts.join(' · ')
+}
+const relayRecentLabel = (task: TransferTask) => {
+  const minutes = Math.max(0, Math.round((Date.now() - taskTimestamp(task)) / 60000))
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.round(minutes / 60)
+  return hours < 24 ? `${hours} 小时前` : `${Math.round(hours / 24)} 天前`
+}
+
 
 // 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
 watch(view, value => { app.activeView.value = value })
@@ -102,15 +196,21 @@ const handleCloudUploadFolder = async (targetDir = '') => {
 const handleCloudDownload = async (key: string) => {
   await app.cloudDownload(key)
 }
-const handleCloudDelete = async (key: string) => {
-  // 目录 key 带尾斜杠：目录没有 es_file 行，删除是直接删对象、不进回收站，
-  // 文案必须讲清楚，不能沿用文件的「可在回收站还原」
+const handleCloudDelete = async (key: string, subCount?: number, subDirCount?: number) => {
+  // 目录 key 带尾斜杠：递归删时子文件逐个进回收站，目录标记本身直接删（目录没有
+  // es_file 行，不进回收站）。文案必须分开讲，不能沿用文件的「可在回收站还原」
+  // 让用户以为文件夹也能一键还原——还原其中任一文件时目录会按路径重新出现。
   const isDir = key.endsWith('/')
   const name = key.split('/').filter(Boolean).pop() ?? key
+  const inner = subCount || subDirCount
+    ? `及其中${subCount ? ` ${subCount} 个文件` : ''}${subCount && subDirCount ? '、' : ''}${subDirCount ? ` ${subDirCount} 个子文件夹` : ''}`
+    : ''
   const confirmed = await confirm({
     title: isDir ? '删除云端文件夹' : '删除云端文件',
     message: isDir
-      ? `确定删除文件夹「${name}」？文件夹将直接删除，不可从回收站还原。`
+      ? inner
+        ? `确定删除文件夹「${name}」${inner}？文件删除后可在回收站还原，还原任一文件时该文件夹会重新出现；文件夹本身不进回收站。`
+        : `确定删除空文件夹「${name}」？文件夹不进回收站，删除后不可还原。`
       : `确定删除「${name}」？删除后可在回收站还原，回收站保留 ${RECYCLE_RETENTION_DAYS} 天。`,
     confirmText: '删除',
     danger: true,
@@ -135,6 +235,9 @@ const avatarText = computed(() => {
   <!-- 窗口控制条：拖拽区域 + 最小化/最大化/关闭（macOS 用原生红绿灯）。
        登录页与主界面共用——登录前快捷操作区不渲染，避免暴露活动/账号入口。 -->
   <div class="window-chrome">
+    <!-- 顶栏左端补产品名：原来整条 1900px 只有右端两个胶囊，中间全空，
+         看着像没画完。产品标识从侧栏顶部移到这里，侧栏顶部让给图标轨 -->
+    <div class="chrome-brand">EasyShare</div>
     <div class="drag-region" @dblclick="toggleMaximise" />
     <div v-if="app.currentUser.value.loggedIn" class="window-quick-actions">
       <button
@@ -212,80 +315,118 @@ const avatarText = computed(() => {
     />
 
     <div class="app-body">
-      <aside class="sidebar">
-        <div class="app-identity">
-          <div class="app-icon" aria-hidden="true">
-            <svg viewBox="0 0 32 32"><path d="M8.5 12a6.5 6.5 0 0 1 12.6-2.2A5.5 5.5 0 1 1 22.5 20H8a5 5 0 0 1 .5-8Z"/><path d="m12 15 4-4 4 4M16 11v11"/></svg>
-          </div>
-          <div><strong>EasyShare</strong><span>统一文件空间</span></div>
+      <!-- ① 图标轨（对标 WPS 左轨）：只放产品域，图标 + 10px 标签，选中抬起成白底胶囊。
+             原来 9 个内置视图 + N 个插件实例全挤在一个 220px 列表里，是「不像专业软件」的主因 -->
+      <nav class="nav-rail" aria-label="产品切换">
+        <div class="rail-brand" title="EasyShare 统一文件空间">
+          <svg viewBox="0 0 32 32"><path d="M8.5 12a6.5 6.5 0 0 1 12.6-2.2A5.5 5.5 0 1 1 22.5 20H8a5 5 0 0 1 .5-8Z"/><path d="m12 15 4-4 4 4M16 11v11"/></svg>
         </div>
 
-        <nav class="sidebar-nav" aria-label="主导航">
-          <button :class="['nav-item', view === 'overview' ? 'active' : '']" :aria-current="view === 'overview' ? 'page' : undefined" type="button" @click="view = 'overview'">
-            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
-            首页
-          </button>
-          <button :class="['nav-item', view === 'devices' ? 'active' : '']" :aria-current="view === 'devices' ? 'page' : undefined" type="button" @click="view = 'devices'">
-            <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
-            设备
-            <span class="nav-count">{{ app.snapshot.value.peers.length }}</span>
-          </button>
-          <button :class="['nav-item', view === 'transfers' ? 'active' : '']" :aria-current="view === 'transfers' ? 'page' : undefined" type="button" @click="view = 'transfers'">
-            <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
-            任务中心
-            <span class="nav-count">{{ app.snapshot.value.tasks.length }}</span>
-          </button>
-          <button :class="['nav-item', view === 'cloud' ? 'active' : '']" :aria-current="view === 'cloud' ? 'page' : undefined" type="button" @click="view = 'cloud'">
-            <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
-            文件
-          </button>
-          <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" :aria-current="view === 'knowledge' ? 'page' : undefined" type="button" @click="view = 'knowledge'">
-            <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
-            知识
-          </button>
-          <!-- 会议听记：录音 → 转写 → 发言人 → AI 纪要 -->
-          <button :class="['nav-item', view === 'meetings' ? 'active' : '']" :aria-current="view === 'meetings' ? 'page' : undefined" type="button" @click="view = 'meetings'">
-            <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"/></svg>
-            会议听记
-          </button>
-          <!-- 管理入口：仅管理员可见。页面在客户端内，账号与空间都在这里管 -->
-          <button
-            v-if="app.currentUser.value.isAdmin"
-            :class="['nav-item', view === 'admin' ? 'active' : '']" :aria-current="view === 'admin' ? 'page' : undefined"
-            type="button"
-            @click="view = 'admin'"
-          >
-            <svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 4.6 3.2 8.8 8 10 4.8-1.2 8-5.4 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
-            管理
-          </button>
+        <button :class="['rail-item', railSection === 'home' ? 'active' : '']" type="button" aria-label="总览" :aria-current="railSection === 'home' ? 'page' : undefined" @click="openSection('home')">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
+          <span>总览</span>
+        </button>
+        <button :class="['rail-item', railSection === 'drive' ? 'active' : '']" type="button" aria-label="网盘" :aria-current="railSection === 'drive' ? 'page' : undefined" @click="openSection('drive')">
+          <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
+          <span>网盘</span>
+        </button>
+        <button :class="['rail-item', railSection === 'knowledge' ? 'active' : '']" type="button" aria-label="知识" :aria-current="railSection === 'knowledge' ? 'page' : undefined" @click="openSection('knowledge')">
+          <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
+          <span>知识</span>
+        </button>
+        <button :class="['rail-item', railSection === 'apps' ? 'active' : '']" type="button" aria-label="扩展" :aria-current="railSection === 'apps' ? 'page' : undefined" @click="openSection('apps')">
+          <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
+          <span>扩展</span>
+          <i v-if="pluginSys.updateNotices.value.length" class="rail-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
+        </button>
 
-          <!-- 插件中心：商城 + 已装管理（有插件更新时亮红点） -->
-          <button :class="['nav-item', view === 'plugins' ? 'active' : '']" :aria-current="view === 'plugins' ? 'page' : undefined" type="button" @click="view = 'plugins'">
-            <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
-            插件中心
-            <span v-if="pluginSys.updateNotices.value.length" class="nav-update-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
-          </button>
+        <span class="rail-spacer" />
 
-          <!-- 插件入口（动态）：内置插件（如剪切板）与已安装插件 -->
-          <button
-            v-for="p in enabledPlugins"
-            :key="p.id"
-            :class="['nav-item', view === `plugin:${p.id}` ? 'active' : '']" :aria-current="activePluginId === p.id ? 'page' : undefined"
-            type="button"
-            :title="p.description"
-            @click="view = `plugin:${p.id}` as View"
-          >
-            <span v-if="isIconPath(p.icon)" class="nav-plugin-icon"><img :src="`/plugins/${p.id}/${p.icon}`" alt=""></span>
-            <span v-else class="nav-plugin-icon">{{ p.icon || '🧩' }}</span>
-            {{ p.name }}
-            <span v-if="p.builtin" class="nav-plugin-builtin" title="内置插件">内</span>
-          </button>
+        <button :class="['rail-item', railSection === 'settings' ? 'active' : '']" type="button" aria-label="设置" :aria-current="railSection === 'settings' ? 'page' : undefined" @click="openSection('settings')">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a6 6 0 0 1-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.6.24 1.14.78 1.51 1h.09a2 2 0 0 1 0 4h-.09c-.37.22-.91.76-1.51 1Z"/></svg>
+          <span>设置</span>
+          <i v-if="app.updateAvailable.value" class="rail-dot" :title="`发现新版本 ${app.updateAvailable.value}`" />
+        </button>
+      </nav>
 
-          <button :class="['nav-item', view === 'settings' ? 'active' : '']" :aria-current="view === 'settings' ? 'page' : undefined" type="button" @click="view = 'settings'">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-            设置
-            <span v-if="app.updateAvailable.value" class="nav-update-dot" :title="`发现新版本 ${app.updateAvailable.value}`" />
-          </button>
+      <!-- ② 上下文面板：只列当前域内的入口。插件实例不再和主导航平级 -->
+      <aside class="context-panel">
+        <header class="panel-head">
+          <strong>{{ sectionMeta[railSection].title }}</strong>
+          <span>{{ sectionMeta[railSection].subtitle }}</span>
+        </header>
+
+        <nav class="panel-nav" aria-label="域内导航">
+          <template v-if="railSection === 'home'">
+            <button :class="['nav-item', view === 'overview' ? 'active' : '']" :aria-current="view === 'overview' ? 'page' : undefined" type="button" @click="view = 'overview'">
+              <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+              工作台
+            </button>
+            <button :class="['nav-item', view === 'devices' ? 'active' : '']" :aria-current="view === 'devices' ? 'page' : undefined" type="button" @click="view = 'devices'">
+              <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
+              附近设备
+              <span class="nav-count">{{ app.snapshot.value.peers.length }}</span>
+            </button>
+            <button :class="['nav-item', view === 'transfers' ? 'active' : '']" :aria-current="view === 'transfers' ? 'page' : undefined" type="button" @click="view = 'transfers'">
+              <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
+              任务中心
+              <span class="nav-count">{{ app.snapshot.value.tasks.length }}</span>
+            </button>
+            <button v-if="app.currentUser.value.isAdmin" :class="['nav-item', view === 'admin' ? 'active' : '']" :aria-current="view === 'admin' ? 'page' : undefined" type="button" @click="view = 'admin'">
+              <svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 4.6 3.2 8.8 8 10 4.8-1.2 8-5.4 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+              管理后台
+            </button>
+          </template>
+
+          <template v-else-if="railSection === 'drive'">
+            <button :class="['nav-item', view === 'cloud' ? 'active' : '']" :aria-current="view === 'cloud' ? 'page' : undefined" type="button" @click="view = 'cloud'">
+              <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
+              我的网盘
+            </button>
+            <button class="nav-item" type="button" @click="openRecycleBin">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+              回收站
+            </button>
+          </template>
+
+          <template v-else-if="railSection === 'knowledge'">
+            <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" :aria-current="view === 'knowledge' ? 'page' : undefined" type="button" @click="view = 'knowledge'">
+              <svg viewBox="0 0 24 24"><path d="M12 4.5C10.5 3.5 8.5 3 6 3v15c2.5 0 4.5.5 6 1.5 1.5-1 3.5-1.5 6-1.5V3c-2.5 0-4.5.5-6 1.5Z"/><path d="M12 4.5v15"/></svg>
+              知识问答
+            </button>
+            <button :class="['nav-item', view === 'meetings' ? 'active' : '']" :aria-current="view === 'meetings' ? 'page' : undefined" type="button" @click="view = 'meetings'">
+              <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"/></svg>
+              会议听记
+            </button>
+          </template>
+
+          <template v-else-if="railSection === 'apps'">
+            <button :class="['nav-item', view === 'plugins' ? 'active' : '']" :aria-current="view === 'plugins' ? 'page' : undefined" type="button" @click="view = 'plugins'">
+              <svg viewBox="0 0 24 24"><path d="M4 5h7v7H4zM13 5h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+              插件中心
+              <span v-if="pluginSys.updateNotices.value.length" class="nav-update-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
+            </button>
+            <button
+              v-for="p in enabledPlugins"
+              :key="p.id"
+              :class="['nav-item', view === `plugin:${p.id}` ? 'active' : '']" :aria-current="activePluginId === p.id ? 'page' : undefined"
+              type="button"
+              :title="p.description"
+              @click="view = `plugin:${p.id}` as View"
+            >
+              <span v-if="isIconPath(p.icon)" class="nav-plugin-icon"><img :src="`/plugins/${p.id}/${p.icon}`" alt=""></span>
+              <span v-else class="nav-plugin-icon">{{ p.icon || '🧩' }}</span>
+              {{ p.name }}
+              <span v-if="p.builtin" class="nav-plugin-builtin" title="内置插件">内</span>
+            </button>
+          </template>
+
+          <template v-else>
+            <button class="nav-item active" type="button" aria-current="page">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a6 6 0 0 1-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.6.24 1.14.78 1.51 1h.09a2 2 0 0 1 0 4h-.09c-.37.22-.91.76-1.51 1Z"/></svg>
+              账号与服务
+            </button>
+          </template>
         </nav>
 
         <div class="sidebar-footer">
@@ -327,94 +468,165 @@ const avatarText = computed(() => {
 
         <!-- ═══ 首页 ═══ -->
         <template v-else-if="view === 'overview'">
-          <header class="workspace-header">
-            <div>
-              <span class="section-label">工作台</span>
-              <h1>你好，欢迎回来</h1>
-              <p>文件传输、云端存储与知识处理，统一在这里管理。</p>
-            </div>
-            <div :class="['availability', app.snapshot.value.status.core ? 'online' : '']">
-              <span />
-              {{ app.snapshot.value.status.core ? '可被发现' : '正在启动' }}
-            </div>
-          </header>
-
-          <div v-if="app.error.value" class="alert" role="alert">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
-            <span class="alert-copy">
-              <b>{{ app.error.value }}</b>
-              <small>详细运行日志：{{ app.logDirectory.value }}</small>
-            </span>
-            <button type="button" aria-label="关闭错误提示" @click="app.clearError">×</button>
-          </div>
-
-          <StatusBar :status="app.snapshot.value.status" :loading="app.loading.value" />
-
-          <!-- 摘要卡片：点击跳转详情 -->
-          <div class="summary-cards">
-            <button class="summary-card" type="button" @click="view = 'devices'">
-              <div class="summary-icon devices-icon">
-                <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
+          <div class="relay-page">
+            <header class="relay-topbar">
+              <div class="relay-heading">
+                <h1>工作台</h1>
+                <span>这台电脑此刻在跟谁交换什么</span>
               </div>
-              <div class="summary-body">
-                <strong>{{ app.snapshot.value.peers.length }} 台设备</strong>
-                <span>附近在线设备</span>
+              <div class="relay-statusline" aria-label="服务状态">
+                <span v-for="service in relayServices" :key="service.label" :class="{ off: !service.on }">
+                  <i />{{ service.label }}
+                </span>
               </div>
-              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-            </button>
-
-            <button class="summary-card" type="button" @click="view = 'transfers'">
-              <div class="summary-icon transfers-icon">
-                <svg viewBox="0 0 24 24"><path d="M7 3v13m0 0-4-4m4 4 4-4M17 21V8m0 0-4 4m4-4 4 4"/></svg>
-              </div>
-              <div class="summary-body">
-                <strong>{{ app.snapshot.value.tasks.length }} 个任务</strong>
-                <span>统一任务与历史</span>
-              </div>
-              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-            </button>
-
-            <button class="summary-card" type="button" @click="view = 'cloud'">
-              <div class="summary-icon cloud-icon">
-                <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
-              </div>
-              <div class="summary-body">
-                <strong>文件</strong>
-                <span>{{ app.snapshot.value.status.cloudEnabled ? '云端文件存储' : '未连接' }}</span>
-              </div>
-              <svg class="summary-arrow" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-            </button>
-          </div>
-
-          <!-- 进行中的任务摘要 -->
-          <section v-if="app.activeTasks.value.length" class="card active-tasks-preview">
-            <header class="card-header">
-              <div>
-                <span class="section-label">正在进行</span>
-                <h2>{{ app.activeTasks.value.length }} 个活动任务</h2>
-              </div>
-              <button class="text-button" type="button" @click="view = 'transfers'">查看全部</button>
+              <button class="relay-primary" type="button" @click="view = 'devices'">
+                <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
+                发送文件
+              </button>
             </header>
-            <div class="active-tasks-list">
-              <div v-for="task in app.activeTasks.value.slice(0, 4)" :key="task.id" class="active-task-row">
-                <div class="active-task-info">
-                  <strong>{{ task.fileName }}</strong>
-                  <span>{{ task.peer }}</span>
-                </div>
-                <div class="active-task-progress">
-                  <div class="mini-track"><i :style="{ width: `${task.totalBytes ? Math.min(100, Math.round(task.transferredBytes / task.totalBytes * 100)) : 0}%` }" /></div>
-                  <span class="active-task-percent">{{ task.totalBytes ? Math.min(100, Math.round(task.transferredBytes / task.totalBytes * 100)) : 0 }}%</span>
-                </div>
-              </div>
-            </div>
-          </section>
 
-          <!-- 共享空间留在首页 -->
-          <DrivePanel
-            :status="app.snapshot.value.status"
-            @start="app.startDrive"
-            @stop="app.stopDrive"
-          />
+            <div v-if="app.error.value" class="alert" role="alert">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
+              <span class="alert-copy">
+                <b>{{ app.error.value }}</b>
+                <small>详细运行日志：{{ app.logDirectory.value }}</small>
+              </span>
+              <button type="button" aria-label="关闭错误提示" @click="app.clearError">×</button>
+            </div>
+
+            <div class="relay-grid">
+              <section class="relay-column">
+                <header class="relay-column-head">
+                  <h2>附近设备</h2>
+                  <span>{{ app.snapshot.value.peers.length }} 台在线</span>
+                  <button class="relay-link" type="button" @click="view = 'devices'">全部设备</button>
+                </header>
+                <div v-if="!relayPeers.length" class="relay-empty">
+                  <span class="relay-empty-glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.5 5.5a9 9 0 0 0 0 13M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+                  </span>
+                  <strong>还没有发现设备</strong>
+                  <span>确保对方也打开了 EasyShare，并连在同一个局域网。</span>
+                </div>
+                <article v-for="peer in relayPeers" :key="peer.deviceId" class="relay-device">
+                  <span class="relay-device-glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M8 19h4M10 15v4M19 9h2v10h-6v-2"/></svg>
+                  </span>
+                  <div class="relay-device-copy">
+                    <strong>{{ peer.deviceName }}</strong>
+                    <span>{{ peer.ip }}:{{ peer.transferPort }}</span>
+                  </div>
+                  <span :class="['relay-device-state', peerState(peer).tone]">{{ peerState(peer).label }}</span>
+                  <button
+                    class="relay-send-btn"
+                    type="button"
+                    :aria-label="`发送文件到 ${peer.deviceName}`"
+                    :title="`发送文件到 ${peer.deviceName}`"
+                    @click="app.send(peer.deviceId)"
+                  >
+                    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
+                  </button>
+                </article>
+              </section>
+
+              <section class="relay-column relay-column-tasks">
+                <header class="relay-column-head">
+                  <h2>正在传输</h2>
+                  <span v-if="relayTasks.length">{{ activeTaskCount }} 个进行中<template v-if="pendingTaskCount"> · {{ pendingTaskCount }} 个待确认</template></span>
+                  <span v-else>没有进行中的任务</span>
+                  <button class="relay-link" type="button" @click="view = 'transfers'">任务中心</button>
+                </header>
+                <div v-if="!relayTasks.length" class="relay-empty">
+                  <span class="relay-empty-glyph" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6M9 13h6M9 17h4"/></svg>
+                  </span>
+                  <strong>当前没有传输</strong>
+                  <span>把文件拖到窗口，或从附近设备里选一台发送。</span>
+                </div>
+                <article v-for="task in relayTasks" :key="task.id" :class="['relay-task', relayTaskTone(task)]">
+                  <div class="relay-task-head">
+                    <strong>{{ task.fileName }}</strong>
+                    <span v-if="task.status === 'running'" class="relay-task-pct">{{ taskProgress(task) }}%</span>
+                    <span v-else-if="task.status === 'pending'" class="relay-task-pct pending">待确认</span>
+                    <span v-else-if="task.status === 'failed'" class="relay-task-pct failed">失败</span>
+                    <span v-else class="relay-task-pct">{{ taskStatusLabel(task.status) }}</span>
+                  </div>
+                  <div class="relay-task-meta">
+                    <span>{{ relayTaskMeta(task) }}</span>
+                    <span v-if="task.error" class="relay-task-error">{{ task.error }}</span>
+                  </div>
+                  <div
+                    v-if="['running', 'accepted', 'queued'].includes(task.status)"
+                    class="relay-track"
+                    role="progressbar"
+                    :aria-valuenow="taskProgress(task)"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                  >
+                    <i :style="{ width: `${taskProgress(task)}%` }" />
+                  </div>
+                  <div v-if="task.status === 'pending' && taskKind(task) === 'lan_receive'" class="relay-task-actions">
+                    <button class="relay-mini" type="button" @click="app.reject(task.id)">拒绝</button>
+                    <button class="relay-mini" type="button" @click="app.acceptAs(task.id)">另存</button>
+                    <button class="relay-mini primary" type="button" @click="app.accept(task.id)">接收</button>
+                  </div>
+                  <div v-else-if="task.status === 'failed'" class="relay-task-actions">
+                    <button class="relay-mini" type="button" @click="view = 'transfers'">查看任务</button>
+                  </div>
+                </article>
+              </section>
+            </div>
+
+            <div class="relay-foot">
+              <section class="relay-foot-block">
+                <header class="relay-foot-head">
+                  <h3>刚刚完成</h3>
+                  <button class="relay-link" type="button" @click="view = 'transfers'">全部任务</button>
+                </header>
+                <div v-if="!relayCompleted.length" class="relay-foot-empty">还没有完成记录</div>
+                <button v-for="task in relayCompleted" :key="task.id" class="relay-done" type="button" @click="view = 'transfers'">
+                  <span class="relay-done-icon done" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>
+                  </span>
+                  <strong>{{ task.fileName }}</strong>
+                  <span class="relay-done-time">{{ relayRecentLabel(task) }}</span>
+                </button>
+              </section>
+
+              <section class="relay-foot-block">
+                <header class="relay-foot-head"><h3>共享与网盘</h3></header>
+                <button class="relay-done" type="button" @click="view = 'settings'">
+                  <span class="relay-done-icon share" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+                  </span>
+                  <strong>EasyShare 共享</strong>
+                  <span class="relay-done-time">{{ app.snapshot.value.status.webdav ? '此电脑可见' : '未启动' }}</span>
+                </button>
+                <button class="relay-done" type="button" @click="view = 'cloud'">
+                  <span class="relay-done-icon cloud" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/></svg>
+                  </span>
+                  <strong>个人网盘</strong>
+                  <span class="relay-done-time">{{ app.snapshot.value.status.cloudEnabled ? '已连接' : '未连接' }}</span>
+                </button>
+              </section>
+            </div>
+
+            <div class="relay-drive-strip">
+              <span class="relay-drive-glyph" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+              </span>
+              <div class="relay-drive-copy">
+                <strong>EasyShare 共享</strong>
+                <span>此电脑 → EasyShare 共享 · 无需映射盘符</span>
+              </div>
+              <span :class="['relay-drive-state', app.snapshot.value.status.webdav ? 'on' : 'off']">
+                <i />{{ app.snapshot.value.status.webdav ? 'WebDAV 运行中' : 'WebDAV 未启动' }}
+              </span>
+              <button v-if="app.snapshot.value.status.webdav" class="relay-strip-btn" type="button" @click="app.stopDrive">停止共享</button>
+              <button v-else class="relay-strip-btn primary" type="button" @click="app.startDrive">启动共享</button>
+            </div>
+          </div>
         </template>
 
         <!-- ═══ 附近设备详情页 ═══ -->

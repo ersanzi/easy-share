@@ -1,0 +1,13 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [
+      "图片没加载出来：/plugins/notes/notes.png"
+    ],
+    "lint": []
+  }
+]

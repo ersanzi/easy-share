@@ -1,0 +1,80 @@
+[
+  {
+    "file": "relay.png",
+    "target": "E:\\myProgrom\\有趣项目\\easyShare\\docs\\design\\oil-ui-redesign\\explore\\a-relay.html",
+    "name": "A · 设备中继台",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "sidebar.png",
+    "target": "E:\\myProgrom\\有趣项目\\easyShare\\docs\\design\\oil-ui-redesign\\explore\\b-sidebar.html",
+    "name": "B · 侧栏工作台",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "console.png",
+    "target": "E:\\myProgrom\\有趣项目\\easyShare\\docs\\design\\oil-ui-redesign\\explore\\c-console.html",
+    "name": "C · 总览仪表",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "thumb": true,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "sheet.png",
+    "width": 2000,
+    "height": 480,
+    "columns": 3,
+    "items": [
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "A · 设备中继台",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "B · 侧栏工作台",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 720,
+        "naturalHeight": 450,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "C · 总览仪表",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

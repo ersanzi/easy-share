@@ -1,0 +1,18 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>EasyShare 桌面端 · 预览壳</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f8f9fb; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  #app { height: 100%; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<!-- 预览专用：在浏览器里给 Wails 的 Go 绑定与 runtime 打桩，返回固定样例数据。
+     只为在 vite dev 下截图看界面；真实桌面端由 Wails 注入 window.go / window.runtime。 -->
+<script type="module" src="./mock.ts"></script>
+<script type="module" src="/@fs/E:/myProgrom/有趣项目/easyShare/frontend/src/main.ts"></script>
+</body>
+</html>

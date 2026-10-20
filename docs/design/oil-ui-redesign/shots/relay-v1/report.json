@@ -1,0 +1,21 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 2,
+        "examples": [
+          "button.nav-item.active「工作台」（4.26:1）",
+          "span「仅在本地网络中可见」（3.88:1）"
+        ]
+      }
+    ]
+  }
+]

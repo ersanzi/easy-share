@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 C · 总览仪表</title>
+<style>
+  :root {
+    --bg: #0e1420; --panel: #141c2b; --panel-2: #182235; --line: #243044; --line-2: #2c3a52;
+    --ink: #eef3fa; --text: #c6d1e0; --muted: #8494ab; --faint: #617089;
+    --teal: #14b8a6; --amber: #f0a83a; --rose: #f0616d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; width: 1440px; height: 900px; overflow: hidden;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px; color: var(--text); background: var(--bg);
+    font-variant-numeric: tabular-nums;
+  }
+  svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  .chrome { height: 40px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--line); gap: 18px; }
+  .chrome .brand { display: flex; align-items: center; gap: 8px; color: var(--ink); font-weight: 600; font-size: 13px; }
+  .chrome .brand i { width: 8px; height: 8px; border-radius: 2px; background: var(--teal); box-shadow: 0 0 10px rgba(20,184,166,.7); display: inline-block; }
+  .tabs { display: flex; gap: 2px; }
+  .tabs a { padding: 5px 11px; border-radius: 6px; color: var(--muted); font-size: 12.5px; text-decoration: none; }
+  .tabs a.on { background: var(--panel-2); color: var(--ink); }
+  .chrome .grow { flex: 1; }
+  .chrome .right { display: flex; align-items: center; gap: 14px; color: var(--muted); }
+  .chrome .right .u { color: var(--text); font-size: 12.5px; }
+  .chrome .right svg { width: 14px; height: 14px; }
+
+  .wrap { height: 860px; padding: 18px 20px 20px; display: grid; grid-template-rows: auto auto 1fr; gap: 14px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 13px; }
+  .kpi .k { font-size: 11.5px; color: var(--faint); letter-spacing: .04em; }
+  .kpi .v { margin-top: 6px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 30px; line-height: 1; font-weight: 600; color: var(--ink); letter-spacing: -.02em; }
+  .kpi .v small { font-size: 13px; color: var(--muted); font-weight: 500; margin-left: 4px; letter-spacing: 0; }
+  .kpi .d { margin-top: 8px; font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .kpi .d .up { color: var(--teal); } .kpi .d .warn { color: var(--amber); }
+
+  .mid { display: grid; grid-template-columns: 1fr 340px; gap: 14px; min-height: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .ch { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .ch h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .ch .lg { margin-left: auto; display: flex; gap: 12px; font-size: 11.5px; color: var(--muted); }
+  .ch .lg span { display: inline-flex; align-items: center; gap: 5px; }
+  .ch .lg i { width: 7px; height: 2px; border-radius: 1px; display: inline-block; }
+  .ch .lg i.up { background: var(--teal); } .ch .lg i.dn { background: #5b8def; }
+
+  .chart { position: relative; flex: 1; padding: 14px 16px 8px; }
+  .chart svg { width: 100%; height: 100%; stroke: none; }
+  .axis { position: absolute; left: 16px; right: 16px; bottom: 6px; display: flex; justify-content: space-between; font-size: 10.5px; color: var(--faint); }
+
+  .side { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .alerts { flex: 1.05; }
+  .alist { padding: 6px 0; overflow: hidden; }
+  .a { display: flex; gap: 10px; padding: 10px 16px; }
+  .a .bar { width: 2px; border-radius: 1px; background: var(--amber); flex: none; }
+  .a.bad .bar { background: var(--rose); }
+  .a .t { font-size: 12.5px; color: var(--ink); }
+  .a .m { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .a .go { margin-left: auto; font-size: 11.5px; color: var(--teal); white-space: nowrap; }
+
+  .devs { flex: 0 0 auto; }
+  .dl { padding: 4px 0 8px; }
+  .d { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 12.5px; }
+  .d .n { color: var(--ink); }
+  .d .ip { color: var(--faint); font-size: 11.5px; }
+  .d .st { margin-left: auto; font-size: 11.5px; color: var(--teal); display: inline-flex; align-items: center; gap: 5px; }
+  .d .st i { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px rgba(20,184,166,.8); }
+  .d .st.idle { color: var(--muted); } .d .st.idle i { background: #3a4a63; box-shadow: none; }
+
+  .tasks { min-height: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-weight: 500; font-size: 11px; color: var(--faint); letter-spacing: .05em; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 16px; border-bottom: 1px solid rgba(36,48,68,.6); color: var(--text); }
+  td.f { color: var(--ink); font-weight: 500; }
+  td.num { text-align: right; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .prog { display: flex; align-items: center; gap: 9px; }
+  .prog .tr { flex: 1; height: 2px; background: var(--line-2); border-radius: 1px; position: relative; }
+  .prog .tr i { position: absolute; inset: 0 auto 0 0; background: var(--teal); border-radius: 1px; }
+  .prog .tr.blue i { background: #5b8def; }
+  .prog .tr::after { content: ""; }
+  .prog span { width: 34px; text-align: right; color: var(--muted); font-size: 11.5px; }
+  .s { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 2px 8px; border-radius: 10px; }
+  .s.run { color: var(--teal); background: rgba(20,184,166,.10); }
+  .s.wait { color: var(--amber); background: rgba(240,168,58,.10); }
+  .s.err { color: var(--rose); background: rgba(240,97,109,.10); }
+  .s.done { color: var(--muted); background: rgba(132,148,171,.10); }
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <div class="brand"><i></i>EasyShare</div>
+    <div class="tabs"><a class="on">总览</a><a>网盘</a><a>知识</a><a>扩展</a><a>设置</a></div>
+    <div class="grow"></div>
+    <div class="right">
+      <svg viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8"/></svg>
+      <span class="u">李丰</span>
+      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="kpis">
+      <div class="kpi"><div class="k">在线设备</div><div class="v">4<small>台</small></div><div class="d"><span class="up">+1</span> 比一小时前</div></div>
+      <div class="kpi"><div class="k">实时吞吐</div><div class="v">43.5<small>MB/s</small></div><div class="d"><span class="up">↑ 3.5</span> · <span>↓ 40.0</span></div></div>
+      <div class="kpi"><div class="k">今日传输</div><div class="v">7<small>项</small></div><div class="d">完成 3 · <span class="warn">需处理 2</span></div></div>
+      <div class="kpi"><div class="k">网盘占用</div><div class="v">456<small>GB</small></div><div class="d"><span class="warn">44%</span> of 1024 GB</div></div>
+    </div>
+
+    <div class="mid">
+      <section class="card">
+        <header class="ch"><h2>近 24 小时吞吐</h2><div class="lg"><span><i class="up"></i>上传</span><span><i class="dn"></i>下载</span></div></header>
+        <div class="chart">
+          <svg viewBox="0 0 900 300" preserveAspectRatio="none">
+            <g stroke="#22304a" stroke-width="1">
+              <line x1="0" y1="60" x2="900" y2="60"/><line x1="0" y1="130" x2="900" y2="130"/><line x1="0" y1="200" x2="900" y2="200"/><line x1="0" y1="270" x2="900" y2="270"/>
+            </g>
+            <path d="M0 250 L60 236 L120 244 L180 210 L240 226 L300 190 L360 204 L420 150 L480 178 L540 120 L600 148 L660 96 L720 132 L780 70 L840 104 L900 58 L900 300 L0 300 Z" fill="rgba(20,184,166,.13)" stroke="none"/>
+            <path d="M0 250 L60 236 L120 244 L180 210 L240 226 L300 190 L360 204 L420 150 L480 178 L540 120 L600 148 L660 96 L720 132 L780 70 L840 104 L900 58" fill="none" stroke="#14b8a6" stroke-width="2"/>
+            <path d="M0 282 L60 276 L120 280 L180 266 L240 272 L300 250 L360 262 L420 236 L480 252 L540 220 L600 240 L660 206 L720 228 L780 196 L840 214 L900 190" fill="none" stroke="#5b8def" stroke-width="1.6" stroke-dasharray="0"/>
+            <circle cx="900" cy="58" r="4" fill="#14b8a6"/>
+            <circle cx="900" cy="190" r="3.5" fill="#5b8def"/>
+          </svg>
+          <div class="axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>现在</span></div>
+        </div>
+      </section>
+
+      <div class="side">
+        <section class="card alerts">
+          <header class="ch"><h2>需要处理</h2></header>
+          <div class="alist">
+            <div class="a bad"><span class="bar"></span><div><div class="t">年度预算汇总.xlsx 发送失败</div><div class="m">研发部 NAS · 对方已离线</div></div><span class="go">重试</span></div>
+            <div class="a"><span class="bar"></span><div><div class="t">会议音频_周三.m4a 等待确认</div><div class="m">DESIGN-STUDIO · 90.0 MB</div></div><span class="go">接收</span></div>
+            <div class="a"><span class="bar"></span><div><div class="t">插件「扫描件识别」可更新</div><div class="m">1.3.2 → 1.4.0</div></div><span class="go">更新</span></div>
+          </div>
+        </section>
+        <section class="card devs">
+          <header class="ch"><h2>设备</h2><div class="lg"><span>4 在线</span></div></header>
+          <div class="dl">
+            <div class="d"><svg width="14" height="14" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg><span class="n">MacBook Pro · 陈默</span><span class="ip">192.168.1.31</span><span class="st"><i></i>接收中</span></div>
+            <div class="d"><svg width="14" height="14" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/></svg><span class="n">研发部 NAS</span><span class="ip">192.168.1.10</span><span class="st idle"><i></i>在线</span></div>
+            <div class="d"><svg width="14" height="14" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M10 19h4"/></svg><span class="n">前台平板</span><span class="ip">192.168.1.88</span><span class="st idle"><i></i>在线</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card tasks">
+      <header class="ch"><h2>传输</h2><div class="lg"><span>7 项</span></div></header>
+      <table>
+        <thead><tr><th style="width:34%">文件</th><th>方向</th><th>对端</th><th style="width:22%">进度</th><th style="width:12%">速度</th><th style="width:12%">状态</th></tr></thead>
+        <tbody>
+          <tr><td class="f">设计稿_终版.fig</td><td>接收</td><td>MacBook Pro · 陈默</td><td><div class="prog"><div class="tr"><i style="width:33%"></i></div><span>33%</span></div></td><td class="num">40.0 MB/s</td><td><span class="s run">进行中</span></td></tr>
+          <tr><td class="f">Q4产品路线图.pdf</td><td>上传</td><td>网盘</td><td><div class="prog"><div class="tr blue"><i style="width:56%"></i></div><span>56%</span></div></td><td class="num">3.5 MB/s</td><td><span class="s run">进行中</span></td></tr>
+          <tr><td class="f">会议音频_周三.m4a</td><td>接收</td><td>DESIGN-STUDIO</td><td><div class="prog"><div class="tr"><i style="width:0"></i></div><span>0%</span></div></td><td class="num">—</td><td><span class="s wait">等待确认</span></td></tr>
+          <tr><td class="f">年度预算汇总.xlsx</td><td>发送</td><td>研发部 NAS</td><td><div class="prog"><div class="tr"><i style="width:0"></i></div><span>0%</span></div></td><td class="num">—</td><td><span class="s err">失败</span></td></tr>
+          <tr><td class="f">客户验收单.xlsx</td><td>下载</td><td>网盘</td><td><div class="prog"><div class="tr blue"><i style="width:100%"></i></div><span>100%</span></div></td><td class="num">—</td><td><span class="s done">已完成</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>

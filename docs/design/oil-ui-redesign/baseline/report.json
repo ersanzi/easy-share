@@ -1,0 +1,339 @@
+[
+  {
+    "file": "page.png",
+    "target": "http://localhost:1421/?scene=overview",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-2.png",
+    "target": "http://localhost:1421/?scene=devices",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-3.png",
+    "target": "http://localhost:1421/?scene=transfers",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-4.png",
+    "target": "http://localhost:1421/?scene=cloud",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-5.png",
+    "target": "http://localhost:1421/?scene=knowledge",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-6.png",
+    "target": "http://localhost:1421/?scene=meetings",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-7.png",
+    "target": "http://localhost:1421/?scene=settings",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "page-8.png",
+    "target": "http://localhost:1421/?scene=admin",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "sheet.png",
+    "width": 5280,
+    "height": 480,
+    "columns": 8,
+    "items": [
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1992,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 2648,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 3304,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 3960,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 4616,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

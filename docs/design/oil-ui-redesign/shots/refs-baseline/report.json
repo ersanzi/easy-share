@@ -1,0 +1,30 @@
+[
+  {
+    "file": "page.png",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": [
+      {
+        "rule": "nestedCards",
+        "label": "卡片里套卡片",
+        "count": 1,
+        "examples": [
+          "div.drive-visual.active「共享 EasyShare 此电脑内直接访问」（外层 section.card.drive-panel）"
+        ]
+      },
+      {
+        "rule": "contrastLow",
+        "label": "文字对比度不达标（正文低于 4.5:1，大字低于 3:1）",
+        "count": 10,
+        "examples": [
+          "div.chrome-brand「EasyShare」（3.88:1）",
+          "span「本机服务、局域网与任务」（3.88:1）",
+          "button.nav-item.active「工作台」（4.26:1）"
+        ]
+      }
+    ]
+  }
+]

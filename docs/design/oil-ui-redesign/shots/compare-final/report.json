@@ -1,0 +1,33 @@
+[
+  {
+    "file": "stitch.png",
+    "width": 1344,
+    "height": 480,
+    "columns": 2,
+    "items": [
+      {
+        "naturalWidth": 1416,
+        "naturalHeight": 774,
+        "width": 640,
+        "height": 350,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "改造前",
+        "labelY": 382
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "改造后",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

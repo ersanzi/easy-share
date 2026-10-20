@@ -1,0 +1,118 @@
+[
+  {
+    "file": "page.png",
+    "target": "http://localhost:1421/?scene=transfers",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-2.png",
+    "target": "http://localhost:1421/?scene=cloud",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-3.png",
+    "target": "http://localhost:1421/?scene=meetings",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-4.png",
+    "target": "http://localhost:1421/?scene=settings",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [
+      "图片没加载出来：/plugins/notes/notes.png"
+    ],
+    "lint": [
+      {
+        "rule": "smallText",
+        "label": "正文小于 13px",
+        "count": 1,
+        "examples": [
+          "p.setting-hint「把地址与令牌填进支持 MCP 的 AI 客户端（」（12px）"
+        ]
+      },
+      {
+        "rule": "longMeasure",
+        "label": "正文行太长",
+        "count": 1,
+        "examples": [
+          "p.setting-hint「把地址与令牌填进支持 MCP 的 AI 客户端（」（每行约 50 字）"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "sheet.png",
+    "width": 2656,
+    "height": 480,
+    "columns": 4,
+    "items": [
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1992,
+        "y": 24,
+        "label": "page",
+        "labelY": 432
+      }
+    ],
+    "issues": []
+  }
+]

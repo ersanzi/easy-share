@@ -1,0 +1,99 @@
+[
+  {
+    "file": "page-1440x900.png",
+    "target": "http://localhost:1421/?scene=overview",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-1180x780.png",
+    "target": "http://localhost:1421/?scene=overview",
+    "name": "page",
+    "state": null,
+    "size": "1180x780",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-1440x900-2.png",
+    "target": "http://localhost:1421/?scene=empty",
+    "name": "page",
+    "state": null,
+    "size": "1440x900",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "page-1180x780-2.png",
+    "target": "http://localhost:1421/?scene=empty",
+    "name": "page",
+    "state": null,
+    "size": "1180x780",
+    "zoom": 1,
+    "animationWaitMs": 0,
+    "issues": [],
+    "lint": []
+  },
+  {
+    "file": "sheet.png",
+    "width": 2656,
+    "height": 503,
+    "columns": 4,
+    "items": [
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 24,
+        "y": 24,
+        "label": "page · 1440x900",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1180,
+        "naturalHeight": 780,
+        "width": 640,
+        "height": 423,
+        "labelHeight": 32,
+        "x": 680,
+        "y": 24,
+        "label": "page · 1180x780",
+        "labelY": 455
+      },
+      {
+        "naturalWidth": 1440,
+        "naturalHeight": 900,
+        "width": 640,
+        "height": 400,
+        "labelHeight": 32,
+        "x": 1336,
+        "y": 24,
+        "label": "page · 1440x900",
+        "labelY": 432
+      },
+      {
+        "naturalWidth": 1180,
+        "naturalHeight": 780,
+        "width": 640,
+        "height": 423,
+        "labelHeight": 32,
+        "x": 1992,
+        "y": 24,
+        "label": "page · 1180x780",
+        "labelY": 455
+      }
+    ],
+    "issues": []
+  }
+]
