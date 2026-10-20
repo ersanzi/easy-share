@@ -157,13 +157,33 @@ watch(() => meetingSession.finishedMeetingId.value, () => { void consumeFinished
 
 let pollHandle: number | null = null
 
+// 阅读区标签页（对标钉钉听记的「转写 / AI 纪要 / 观点树 / 章节」分段）：
+// 听记内容天然是"音频 + 逐字稿 + AI 产物"三份平行的东西，竖着叠成一长条
+// 用户只能一直往下滚；分标签后每一屏只讲一件事。
+type DetailTab = 'summary' | 'transcript' | 'mindmap'
+const detailTab = ref<DetailTab>('summary')
+const detailPane = ref<HTMLElement | null>(null)
+
+const DETAIL_TABS: { id: DetailTab; label: string; hint: string }[] = [
+  { id: 'summary', label: 'AI 纪要', hint: '结论、要点与待办' },
+  { id: 'transcript', label: '转写', hint: '逐句原文，点句跳转播放' },
+  { id: 'mindmap', label: '导图', hint: '结构化大纲' },
+]
+
+const summarySections = computed(() => selected.value?.summary?.sections ?? [])
+
 const openDetail = async (id: string) => {
+  const switching = selected.value?.id !== id
   detailLoading.value = true
   confirmingDelete.value = false
   try {
     const detail = await core.meetingDetail(id)
-    if (selected.value?.id !== id) releaseAudio()
-    if (selected.value?.id !== id) chat.value = []
+    if (switching) releaseAudio()
+    if (switching) {
+      chat.value = []
+      // 换一条听记时回到「纪要」，并滚到阅读区顶部——否则用户看到的是上一条的滚动位置
+      detailTab.value = 'summary'
+    }
     selected.value = detail
     regenTemplateId.value = detail.template_id || 'meeting-minutes'
     if (detail.status === 'completed' && !audioUrl.value) {
@@ -173,10 +193,38 @@ const openDetail = async (id: string) => {
         .catch(() => {})
     }
     ensurePolling()
+    if (switching) await nextTick()
+    if (switching) scrollToDetailTop()
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
     detailLoading.value = false
+  }
+}
+
+// 打开一条听记就把它的标题顶到阅读区顶部：
+// 听记页上半部分是录音卡与模板条，用户点列表进来想看的是内容，
+// 而不是"标题被挤到屏幕外、只看到一半纪要"。
+const scrollToDetailTop = () => {
+  const host = detailAnchor.value
+  if (!host) return
+  const scroller = host.closest('.workspace') as HTMLElement | null
+  if (!scroller) return
+  const top = host.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+  scroller.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' })
+}
+
+const detailAnchor = ref<HTMLElement | null>(null)
+
+const switchTab = async (tab: DetailTab) => {
+  detailTab.value = tab
+  await nextTick()
+  // 换标签时把阅读区拉回顶部，不保留上一标签的滚动位置
+  const pane = detailPane.value
+  const scroller = pane?.closest('.workspace') as HTMLElement | null
+  if (pane && scroller) {
+    const top = pane.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    scroller.scrollTo({ top: Math.max(0, top - 8), behavior: 'smooth' })
   }
 }
 
@@ -212,7 +260,50 @@ const closeDetail = () => {
   chat.value = []
   qaQuestion.value = ''
   confirmingDelete.value = false
+  detailTab.value = 'summary'
 }
+
+// 发言人颜色的唯一来源（色相轮转：同一场里不同人不撞色，改完名颜色也不跳）
+const SPEAKER_HUES = [214, 268, 158, 32, 340, 196, 96, 300] as const
+const speakerHue = (speaker: string) => {
+  const index = speakerRows.value.findIndex(row => row.speaker === speaker)
+  return SPEAKER_HUES[(index < 0 ? Number(speaker) || 0 : index) % SPEAKER_HUES.length]
+}
+
+// 逐字稿按「连续同一个人、且间隔不大」并成一块：
+// 钉钉的转写读起来舒服，是因为它把同一个人连着的碎句收在一条里；
+// 一句一行时，一段两分钟的发言会被切成十几条小行，眼睛要不停地跳。
+const transcriptBlocks = computed(() => {
+  const segments = selected.value?.segments ?? []
+  const blocks: { speaker: string; start: number; end: number; index: number; texts: { text: string; index: number }[] }[] = []
+  segments.forEach((segment, index) => {
+    const previous = blocks[blocks.length - 1]
+    const sameSpeaker = previous && previous.speaker === String(segment.speaker)
+    if (sameSpeaker && segment.start - previous.end <= 6) {
+      previous.texts.push({ text: segment.text, index })
+      previous.end = segment.end
+      return
+    }
+    blocks.push({
+      speaker: String(segment.speaker),
+      start: segment.start,
+      end: segment.end,
+      index,
+      texts: [{ text: segment.text, index }],
+    })
+  })
+  return blocks
+})
+
+// 当前这句落在第几块（播放跟随滚动用）
+const activeBlockIndex = computed(() => {
+  const blocks = transcriptBlocks.value
+  let index = -1
+  blocks.forEach((block, blockIndex) => {
+    if (block.texts.some(item => item.index <= activeSegmentIndex.value)) index = blockIndex
+  })
+  return activeSegmentIndex.value < 0 ? -1 : index
+})
 
 // ─── 发言人（改名 / 标注真名） ───
 //
@@ -942,12 +1033,34 @@ const seekTo = (seconds: number) => {
   void audio.play().catch(() => {})
 }
 
-// 播放跟随：转写区滚动到当前句（仅播放中，避免浏览时被抢滚动）
-watch(activeSegmentIndex, async () => {
-  if (!playing.value || activeSegmentIndex.value < 0) return
+// 播放跟随：转写区滚动到当前那一块（仅播放中，避免浏览时被抢滚动）
+watch(activeBlockIndex, async () => {
+  if (!playing.value || activeBlockIndex.value < 0) return
   await nextTick()
-  document.getElementById(`meeting-segment-${activeSegmentIndex.value}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  document.getElementById(`meeting-block-${activeBlockIndex.value}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 })
+
+// 菜单与复制：导出/更多操作收进一个入口，标题行只留主操作
+const moreMenuOpen = ref(false)
+const toggleMoreMenu = async () => {
+  moreMenuOpen.value = !moreMenuOpen.value
+  if (!moreMenuOpen.value) return
+  await nextTick()
+  window.addEventListener('click', closeMoreMenu, { once: true })
+}
+const closeMoreMenu = () => { moreMenuOpen.value = false }
+
+const copyTranscript = async () => {
+  const meeting = selected.value
+  if (!meeting) return
+  const lines = meeting.segments.map(segment => `${nameOf(String(segment.speaker))} ${formatTime(segment.start)}  ${segment.text}`)
+  try {
+    await navigator.clipboard.writeText(`${meeting.title}\n\n${lines.join('\n')}`)
+    showNotice('逐字稿已复制到剪贴板')
+  } catch {
+    showNotice('复制失败（剪贴板不可用）', 'error')
+  }
+}
 
 // ─── 展示辅助 ───
 
@@ -1225,20 +1338,24 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 详情卡 -->
-      <div v-if="selected" class="card meeting-detail-card">
-        <div class="meeting-detail-head">
-          <div>
+      <!-- 详情：标题 + 阅读区。刻意不再套一层 card：里面每块已经是卡片，
+           卡片套卡片会让「一屏里有几层容器」变得数不清（钉钉听记这里也是无边框的。 -->
+      <div v-if="selected" ref="detailAnchor" class="meeting-detail">
+        <!-- 标题行：左标题 / 右操作。操作只留「导出」与「更多」，其余进菜单，
+             不再让十个文字按钮横向铺满一行把标题挤到下面 -->
+        <header class="meeting-detail-head">
+          <div class="meeting-detail-title">
             <h2>{{ selected.title }}</h2>
             <p class="meeting-detail-meta">
-              {{ formatDate(selected.created_at) }}
-              <template v-if="selected.duration_seconds"> · 时长 {{ durationLabel(selected) }}</template>
-              <template v-if="selected.speaker_count"> · {{ selected.speaker_count }} 位发言人</template>
+              <span>{{ formatDate(selected.created_at) }}</span>
+              <template v-if="selected.duration_seconds"><i aria-hidden="true">·</i><span>时长 {{ durationLabel(selected) }}</span></template>
+              <template v-if="selected.speaker_count"><i aria-hidden="true">·</i><span>{{ selected.speaker_count }} 位发言人</span></template>
+              <template v-if="selected.segments.length"><i aria-hidden="true">·</i><span>{{ selected.segments.length }} 句</span></template>
             </p>
-            <!-- 区块独立状态（对标钉钉：转写/关键词/总结/导图各自一个状态，失败只补跑那块） -->
-            <div class="meeting-block-chips">
+            <!-- 区块独立状态：只显示还没就绪的块，全部就绪时整行收起 -->
+            <div v-if="blockChips.some(chip => chip.state !== 'ready')" class="meeting-block-chips">
               <span
-                v-for="chip in blockChips"
+                v-for="chip in blockChips.filter(chip => chip.state !== 'ready')"
                 :key="chip.key"
                 class="meeting-block-chip"
                 :class="`is-${chip.state}`"
@@ -1247,382 +1364,371 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="meeting-detail-actions">
-            <button class="text-button" type="button" :disabled="archiving || selected.status !== 'completed'" @click="archive">
-              {{ archiving ? '归档中…' : '归档入库' }}
-            </button>
-            <button class="text-button" type="button" :disabled="exportBusy !== '' || selected.status !== 'completed'" @click="exportFile('markdown')">
-              {{ exportBusy === 'markdown' ? '导出中…' : '导出 MD' }}
-            </button>
-            <button class="text-button" type="button" :disabled="exportBusy !== '' || selected.status !== 'completed'" @click="exportFile('docx')">
+            <button class="meeting-ghost-btn" type="button" :disabled="exportBusy !== '' || selected.status !== 'completed'" @click="exportFile('docx')">
               {{ exportBusy === 'docx' ? '导出中…' : '导出 Word' }}
             </button>
-            <button class="text-button" type="button" :disabled="selected.status !== 'completed'" @click="openPoster">图文海报</button>
-            <select
-              v-model="regenTemplateId"
-              class="meeting-regen-select"
-              :disabled="summaryRegenBusy || selected.status !== 'completed'"
-            >
-              <option v-for="t in TEMPLATES" :key="t.id" :value="t.id">{{ t.name }}</option>
-            </select>
+            <div class="meeting-more">
+              <button class="meeting-ghost-btn" type="button" :aria-expanded="moreMenuOpen" @click.stop="toggleMoreMenu">
+                更多
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div v-if="moreMenuOpen" class="meeting-more-menu" role="menu" @click.stop>
+                <button type="button" role="menuitem" :disabled="exportBusy !== '' || selected.status !== 'completed'" @click="closeMoreMenu(); exportFile('markdown')">导出 Markdown</button>
+                <button type="button" role="menuitem" :disabled="selected.status !== 'completed'" @click="closeMoreMenu(); openPoster()">生成图文海报</button>
+                <button type="button" role="menuitem" :disabled="selected.status !== 'completed'" @click="closeMoreMenu(); copyTranscript()">复制逐字稿</button>
+                <button type="button" role="menuitem" :disabled="archiving || selected.status !== 'completed'" @click="closeMoreMenu(); archive()">归档进知识库</button>
+                <button type="button" role="menuitem" :disabled="selected.status !== 'completed'" @click="closeMoreMenu(); retranscribe()">重新转写（用上热词）</button>
+                <span class="meeting-more-sep" aria-hidden="true" />
+                <button type="button" role="menuitem" class="is-danger" @click="closeMoreMenu(); remove()">
+                  {{ confirmingDelete ? '再点一次确认删除' : '删除这条听记' }}
+                </button>
+                <button type="button" role="menuitem" @click="closeMoreMenu(); closeDetail()">关闭</button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- 播放条：章节即播放位，点一个就跳过去 -->
+        <div class="meeting-player">
+          <audio
+            v-if="audioUrl"
+            ref="audioPlayer"
+            :src="audioUrl"
+            controls
+            class="meeting-audio"
+            @timeupdate="onTimeUpdate"
+            @play="playing = true"
+            @pause="playing = false"
+            @ended="playing = false"
+          />
+          <div v-if="chapters.length" class="meeting-chapters" role="group" aria-label="智能切片章节">
             <button
-              class="text-button"
+              v-for="(chapter, index) in chapters"
+              :key="chapter.start"
               type="button"
-              :disabled="summaryRegenBusy || selected.status !== 'completed' || !regenTemplateId"
-              @click="regenWithTemplate"
+              :class="['meeting-chapter', { on: index === activeChapterIndex }]"
+              :title="chapter.gist"
+              @click="seekTo(chapter.start)"
             >
-              {{ summaryRegenBusy ? '生成中…' : '按模板重生成' }}
+              <span class="meeting-chapter-time">{{ formatTime(chapter.start) }}</span>
+              <span class="meeting-chapter-name">{{ chapter.title }}</span>
             </button>
-            <button
-              class="text-button"
-              type="button"
-              :disabled="retranscribeBusy || selected.status === 'processing'"
-              title="重跑转写+总结+关键词+导图（改了热词后让本场用上）"
-              @click="retranscribe"
-            >
-              {{ retranscribeBusy ? '排队中…' : '重新转写' }}
-            </button>
-            <button class="text-button meeting-danger" type="button" @click="remove">
-              {{ confirmingDelete ? '再点一次确认删除' : '删除' }}
-            </button>
-            <button class="text-button" type="button" @click="closeDetail">关闭</button>
           </div>
         </div>
-
-        <p v-if="selected.status === 'processing'" class="meeting-pending">
-          <span class="knowledge-spinner" aria-hidden="true" />
-          正在转写与生成纪要…（录音越长耗时越久，可离开此页稍后回来）
-        </p>
-        <p v-else-if="selected.status === 'failed'" class="meeting-pending meeting-failed">
-          转写失败：{{ selected.error || '未知原因' }}
-        </p>
-          <template v-else>
-            <div class="meeting-detail-body">
-              <div class="meeting-detail-main">
-            <!-- 播放器卡：智能切片章节 + 音频，详情页的驾驶台 -->
-            <div class="meeting-player-card">
-            <div v-if="chapters.length" class="meeting-chapters" role="group" aria-label="智能切片章节">
-              <button
-                v-for="(chapter, index) in chapters"
-                :key="chapter.start"
-                type="button"
-                :class="['meeting-chapter', { on: index === activeChapterIndex }]"
-                :title="chapter.gist"
-                @click="seekTo(chapter.start)"
-              >
-                <span class="meeting-chapter-time">{{ formatTime(chapter.start) }}</span>
-                <span class="meeting-chapter-name">{{ chapter.title }}</span>
-              </button>
-            </div>
-            <audio
-              v-if="audioUrl"
-              ref="audioPlayer"
-              :src="audioUrl"
-              controls
-              class="meeting-audio"
-              @timeupdate="onTimeUpdate"
-              @play="playing = true"
-              @pause="playing = false"
-              @ended="playing = false"
-            />
-            </div>
-
-            <!-- 纪要卡 -->
-            <section class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>纪要</h3>
-                <span class="meeting-block-tag">{{ templateName(selected.template_id) }}</span>
-              </header>
-              <div v-if="selected.summary?.sections?.length" class="meeting-section-nav" role="navigation" aria-label="小节导航">
-                <button v-for="(section, index) in selected.summary.sections" :key="section.title" type="button" class="meeting-section-chip" @click="scrollToSection(index)">{{ section.title }}</button>
-              </div>
-              <template v-if="selected.summary?.sections?.length">
-                <div v-for="(section, index) in selected.summary.sections" :key="section.title" :id="`meeting-section-${index}`" class="meeting-summary">
-                  <h3>{{ section.title }}</h3>
-                  <ul v-if="section.text.includes('\n- ') || section.text.startsWith('- ')">
-                    <li v-for="(line, index) in section.text.split('\n').filter(l => l.trim())" :key="index">
-                      {{ line.replace(/^- */, '').trim() }}
-                    </li>
-                  </ul>
-                  <p v-else>{{ section.text }}</p>
-                </div>
-              </template>
-              <template v-else>
-                <div v-if="selected.summary?.minutes" class="meeting-summary">
-                  <h3>全文</h3>
-                  <p>{{ selected.summary.minutes }}</p>
-                </div>
-                <div v-if="selected.summary?.key_points?.length" class="meeting-summary">
-                  <h3>要点</h3>
-                  <ul>
-                    <li v-for="(point, index) in selected.summary.key_points" :key="index">{{ point }}</li>
-                  </ul>
-                </div>
-              </template>
-              <p v-if="!selected.summary || (!selected.summary.minutes && !selected.summary.key_points?.length && !selected.summary.sections?.length)" class="meeting-hint">
-                还没有纪要内容，点上方「按模板重生成」用 AI 提炼
-              </p>
-            </section>
-
-            <!-- 关键词卡（对标钉钉 queryKeywords：独立区块，可单独补跑） -->
-            <section class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>关键词</h3>
-                <button class="text-button" type="button" :disabled="keywordsBusy || selected.status !== 'completed'" @click="regenKeywords">
-                  {{ keywordsBusy ? '生成中…' : selected.keywords?.length ? '重新生成' : '生成关键词' }}
-                </button>
-              </header>
-              <div v-if="selected.keywords?.length" class="meeting-keywords">
-                <span v-for="word in selected.keywords" :key="word" class="meeting-keyword">{{ word }}</span>
-              </div>
-              <p v-else-if="!keywordsBusy" class="meeting-hint">还没有关键词，点「生成关键词」由 AI 从转写提炼（对标钉钉听记的关键词位）</p>
-            </section>
-
-            <!-- 待办卡（一等实体：勾选完成 / 点击编辑 / 删除 / 手工补一条） -->
-            <section class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>待办</h3>
-                <span class="meeting-block-count">
-                  {{ selected.todos?.length ? `${pendingTodosCount} 项未完成 / 共 ${selected.todos.length} 项` : '暂无待办' }}
-                </span>
-              </header>
-              <ul v-if="selected.todos?.length" class="meeting-todos">
-                <li v-for="todo in selected.todos" :key="todo.id" class="meeting-todo-item" :class="{ 'is-done': todo.done }">
-                  <input
-                    class="meeting-todo-check"
-                    type="checkbox"
-                    :checked="todo.done"
-                    :disabled="todoBusy"
-                    title="勾选完成"
-                    @change="toggleTodo(todo)"
-                  />
-                  <template v-if="editingTodoId === todo.id">
-                    <input
-                      v-model="editingTask"
-                      class="meeting-todo-input"
-                      type="text"
-                      @keyup.enter="saveEditTodo(todo)"
-                      @keyup.esc="editingTodoId = ''"
-                    />
-                    <button class="text-button" type="button" :disabled="todoBusy" @click="saveEditTodo(todo)">保存</button>
-                    <button class="text-button" type="button" @click="editingTodoId = ''">取消</button>
-                  </template>
-                  <template v-else>
-                    <button class="meeting-todo-text" type="button" title="点击修改内容" @click="startEditTodo(todo)">{{ todo.task }}</button>
-                    <span v-if="todo.owner_hint" class="meeting-todo-owner">{{ todo.owner_hint }}</span>
-                    <span v-if="todo.due_hint" class="meeting-todo-owner">{{ todo.due_hint }}</span>
-                    <button class="text-button meeting-danger" type="button" :disabled="todoBusy" @click="removeTodo(todo)">删除</button>
-                  </template>
-                </li>
-              </ul>
-              <div class="meeting-todo-add">
-                <input
-                  v-model="newTodoTask"
-                  class="meeting-todo-input"
-                  type="text"
-                  placeholder="补一条待办…"
-                  :disabled="todoBusy"
-                  @keyup.enter="addTodo"
-                />
-                <input
-                  v-model="newTodoOwner"
-                  class="meeting-todo-input meeting-todo-owner-input"
-                  type="text"
-                  placeholder="负责人（可空）"
-                  :disabled="todoBusy"
-                  @keyup.enter="addTodo"
-                />
-                <button class="text-button" type="button" :disabled="todoBusy || !newTodoTask.trim()" @click="addTodo">添加</button>
-              </div>
-            </section>
-
-            <!-- AI 洞察 / 核心发言卡（对标钉钉同款两段：「AI洞察」三点 + 「核心发言提炼」观点与原话引用）
-                 老记录由 AI 总结生成时没有这两块，按模板重生成即出 -->
-            <section v-if="selected.summary?.insights?.length || selected.summary?.quote_kp" class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>AI 洞察</h3>
-                <span class="meeting-block-count">导出 Word / 汇报卡时同版呈现</span>
-              </header>
-              <ul v-if="selected.summary?.insights?.length" class="meeting-summary">
-                <li v-for="(insight, index) in selected.summary.insights" :key="index">{{ insight }}</li>
-              </ul>
-              <div v-if="selected.summary?.quote_kp" class="meeting-kp">
-                <p class="meeting-kp-head">核心发言提炼 · {{ selected.summary.quote_kp.speaker || '发言人' }}</p>
-                <ul v-if="selected.summary.quote_kp.points?.length" class="meeting-summary">
-                  <li v-for="(point, index) in selected.summary.quote_kp.points" :key="index">{{ point }}</li>
-                </ul>
-                <blockquote
-                  v-for="(quote, index) in selected.summary.quote_kp.quotes || []"
-                  :key="`q${index}`"
-                  class="meeting-kp-quote"
-                >
-                  {{ quote }}
-                </blockquote>
-              </div>
-            </section>
-
-            <!-- 思维导图卡（真图：markmap 放射状导图，可折叠/缩放/导出 SVG；对标钉钉听记导图区块） -->
-            <section class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>思维导图</h3>
-                <button class="text-button" type="button" :disabled="mindmapBusy" @click="regenMindmap">
-                  {{ mindmapBusy ? '生成中…（AI 从转写提取）' : selected.mindmap ? '重新生成' : '生成导图' }}
-                </button>
-              </header>
-              <MindMap v-if="selected.mindmap" :markdown="selected.mindmap" />
-              <p v-else-if="!mindmapBusy" class="meeting-hint">
-                {{ selected.segments.length ? '还没有导图，点「生成导图」用 AI 从转写提炼结构' : '本次录音没有可提炼的发言内容' }}
-              </p>
-            </section>
-
-            <!-- 发言人卡（对标钉钉听记的发言人清单）：把「说话人 N」标注成真名，或把被拆开的同一个人合并 -->
-            <section v-if="speakerRows.length" class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>发言人</h3>
-                <span class="meeting-block-count">{{ speakerRows.length }} 位 · 点名字标注真名</span>
-              </header>
-              <div class="meeting-speakers">
-                <div v-for="row in speakerRows" :key="row.speaker" class="meeting-speaker-row">
-                  <span class="meeting-speaker-avatar" aria-hidden="true">{{ (row.name || '说').slice(0, 1) }}</span>
-                  <template v-if="renamingSpeaker === row.speaker">
-                    <input
-                      v-model="renamingName"
-                      class="setting-input meeting-rename-input"
-                      type="text"
-                      maxlength="20"
-                      placeholder="输入这位发言人的名字"
-                      :disabled="renamingBusy"
-                      @keydown.enter.stop="confirmRename"
-                      @keydown.esc.stop="renamingSpeaker = ''"
-                    />
-                    <button class="text-button" type="button" :disabled="renamingBusy || !renamingName.trim()" @click="confirmRename">
-                      {{ renamingBusy ? '保存中…' : '保存' }}
-                    </button>
-                    <button class="text-button" type="button" :disabled="renamingBusy" @click="renamingSpeaker = ''">取消</button>
-                  </template>
-                  <template v-else-if="mergeFrom === row.speaker">
-                    <span class="meeting-speaker-meta">把「{{ row.name }}」的 {{ row.count }} 句并进其他发言人？</span>
-                    <button class="text-button" type="button" :disabled="renamingBusy" @click="confirmMerge">
-                      {{ renamingBusy ? '合并中…' : '确认合并' }}
-                    </button>
-                    <button class="text-button" type="button" :disabled="renamingBusy" @click="mergeFrom = ''">取消</button>
-                  </template>
-                  <template v-else>
-                    <button class="meeting-speaker-name" type="button" title="点击标注真名" @click="beginRename(row.speaker)">{{ row.name }}</button>
-                    <span class="meeting-speaker-meta">{{ row.count }} 句 · {{ formatTime(row.seconds) }}</span>
-                    <button class="text-button" type="button" @click="beginRename(row.speaker)">改名</button>
-                    <button
-                      v-if="speakerRows.length > 1"
-                      class="text-button"
-                      type="button"
-                      title="同一人被拆成两簇时，把这一位的发言并进另一位"
-                      @click="beginMerge(row.speaker)"
-                    >合并</button>
-                  </template>
-                </div>
-              </div>
-              <p class="meeting-hint">标注后转写行、导出文件会立刻用新名字；同时会记下这个人的声纹，之后的会议自动认领。纪要或导图里若仍是旧称呼，点上方「按模板重生成」即可。声纹可在录音卡的「识别热词与声纹」里随时删除。</p>
-            </section>
-
-            <!-- 转写卡 -->
-            <section class="meeting-block">
-              <header class="meeting-block-head">
-                <h3>转写记录</h3>
-                <span class="meeting-block-count">{{ selected.segments.length }} 句 · 点击句子跳转播放，点「改字」可修正识别错误</span>
-              </header>
-          <div class="meeting-transcript">
-            <div
-              v-for="(segment, index) in selected.segments"
-              :id="`meeting-segment-${index}`"
-              :key="index"
-              :class="['meeting-segment', { on: index === activeSegmentIndex }]"
-              :title="editingSegment === index ? '' : '点击跳转播放'"
-              role="button"
-              tabindex="0"
-              @click="editingSegment === index ? null : seekTo(segment.start)"
-              @keydown.enter="editingSegment === index ? null : seekTo(segment.start)"
-            >
-              <template v-if="renamingSpeaker === segment.speaker">
-                <div class="meeting-segment-edit" @click.stop>
+          <!-- 发言人：横向一排人，改名/合并都就地完成（对标钉钉的发言人条） -->
+          <section v-if="speakerRows.length" class="meeting-speakers-bar">
+            <span class="meeting-speakers-label">发言人</span>
+            <div class="meeting-speakers">
+              <div v-for="row in speakerRows" :key="row.speaker" :class="['meeting-speaker-pill', `h${speakerHue(row.speaker)}`]">
+                <span class="meeting-speaker-avatar" aria-hidden="true">{{ (row.name || '说').slice(0, 1) }}</span>
+                <template v-if="renamingSpeaker === row.speaker">
                   <input
                     v-model="renamingName"
                     class="setting-input meeting-rename-input"
                     type="text"
+                    maxlength="20"
+                    placeholder="输入这位发言人的名字"
                     :disabled="renamingBusy"
                     @keydown.enter.stop="confirmRename"
                     @keydown.esc.stop="renamingSpeaker = ''"
                   />
-                  <button class="text-button" type="button" :disabled="renamingBusy" @click="confirmRename">{{ renamingBusy ? '保存中…' : '确定' }}</button>
+                  <button class="text-button" type="button" :disabled="renamingBusy || !renamingName.trim()" @click="confirmRename">
+                    {{ renamingBusy ? '保存中…' : '保存' }}
+                  </button>
                   <button class="text-button" type="button" :disabled="renamingBusy" @click="renamingSpeaker = ''">取消</button>
-                </div>
-              </template>
-              <template v-else-if="editingSegment === index">
-                <div class="meeting-segment-edit" @click.stop>
-                  <button class="meeting-speaker-chip" type="button" @click="beginRename(segment.speaker)">
-                    {{ nameOf(segment.speaker) }}
+                </template>
+                <template v-else-if="mergeFrom === row.speaker">
+                  <span class="meeting-speaker-meta">并进其他人？</span>
+                  <button class="text-button" type="button" :disabled="renamingBusy" @click="confirmMerge">
+                    {{ renamingBusy ? '合并中…' : '确认' }}
                   </button>
-                  <span class="meeting-segment-time">{{ formatTime(segment.start) }}</span>
-                  <textarea
-                    v-model="editingText"
-                    class="setting-input meeting-segment-textarea"
-                    rows="2"
-                    :disabled="segmentBusy"
-                    @keydown.enter.prevent="confirmEditSegment()"
-                    @keydown.esc.stop="editingSegment = -1"
-                  />
-                  <button class="text-button" type="button" :disabled="segmentBusy || !editingText.trim()" @click="confirmEditSegment">
-                    {{ segmentBusy ? '保存中…' : '保存' }}
+                  <button class="text-button" type="button" :disabled="renamingBusy" @click="mergeFrom = ''">取消</button>
+                </template>
+                <template v-else>
+                  <button class="meeting-speaker-name" type="button" title="点击标注真名" @click="beginRename(row.speaker)">{{ row.name }}</button>
+                  <span class="meeting-speaker-meta">{{ row.count }} 句 · {{ formatTime(row.seconds) }}</span>
+                  <button v-if="speakerRows.length > 1" class="meeting-icon-btn" type="button" title="把这位的发言并进另一位" aria-label="合并发言人" @click="beginMerge(row.speaker)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h5l5 10h6M15 3l4 4-4 4M15 13l4 4-4 4"/></svg>
                   </button>
-                  <button class="text-button" type="button" :disabled="segmentBusy" @click="editingSegment = -1">取消</button>
-                </div>
-              </template>
-              <template v-else>
-                <button class="meeting-speaker-chip" type="button" :title="'点击改名'" @click.stop="beginRename(segment.speaker)">
-                  {{ nameOf(segment.speaker) }}
-                </button>
-                <span class="meeting-segment-time">{{ formatTime(segment.start) }}</span>
-                <span class="meeting-segment-text">{{ segment.text }}</span>
-                <button
-                  class="text-button meeting-segment-edit-btn"
-                  type="button"
-                  title="修正这一句的识别错误"
-                  @click.stop="beginEditSegment(index, $event)"
-                >改字</button>
-              </template>
-            </div>
-          </div>
-            </section>
+                </template>
               </div>
-              <aside class="meeting-qa">
-                <div class="meeting-qa-head">
-                  <h3>AI 问答</h3>
-                  <span class="meeting-hint">基于本条听记的纪要与转写全文</span>
-                </div>
-                <div ref="qaList" class="meeting-qa-list">
-                  <p v-if="!chat.length && !qaBusy" class="meeting-hint">问结论、问待办、问数据，或让它起草跟进邮件。</p>
-                  <div v-for="(turn, index) in chat" :key="index" :class="['meeting-qa-turn', turn.role]">
-                    <div class="meeting-qa-bubble">{{ turn.content }}</div>
-                  </div>
-                  <div v-if="qaBusy" class="meeting-qa-turn assistant">
-                    <div class="meeting-qa-bubble meeting-qa-busy">思考中…</div>
-                  </div>
-                </div>
-                <div class="meeting-qa-suggest">
-                  <button v-for="s in QA_SUGGESTIONS" :key="s" type="button" class="meeting-qa-chip" :disabled="qaBusy" @click="askQuestion(s)">{{ s }}</button>
-                </div>
-                <div class="meeting-qa-input">
-                  <input
-                    v-model="qaQuestion"
-                    class="setting-input"
-                    type="text"
-                    placeholder="就这条听记提问…"
-                    :disabled="qaBusy"
-                    @keydown.enter="askQuestion()"
-                  />
-                  <button class="primary-button" type="button" :disabled="qaBusy || !qaQuestion.trim()" @click="askQuestion()">发送</button>
-                </div>
-              </aside>
             </div>
-          </template>
+          </section>
+
+        <p v-if="selected.status === 'processing'" class="meeting-pending">
+          <span class="knowledge-spinner" aria-hidden="true" />
+          正在转写与生成纪要…（录音越长耗时越久，可以离开此页，稍后回来）
+        </p>
+        <p v-else-if="selected.status === 'failed'" class="meeting-pending meeting-failed">
+          转写失败：{{ selected.error || '未知原因' }}
+        </p>
+
+        <template v-else>
+          <div class="meeting-detail-body">
+            <!-- 主区：标签页，一屏只讲一件事 -->
+            <div ref="detailPane" class="meeting-pane">
+              <nav class="meeting-tabs" role="tablist" aria-label="听记内容">
+                <button
+                  v-for="tab in DETAIL_TABS"
+                  :key="tab.id"
+                  type="button"
+                  role="tab"
+                  :aria-selected="detailTab === tab.id"
+                  :title="tab.hint"
+                  :class="['meeting-tab', { on: detailTab === tab.id }]"
+                  @click="switchTab(tab.id)"
+                >
+                  {{ tab.label }}
+                  <span v-if="tab.id === 'transcript'" class="meeting-tab-count">{{ selected.segments.length }}</span>
+                </button>
+              </nav>
+
+              <!-- ① AI 纪要 -->
+              <div v-if="detailTab === 'summary'" class="meeting-tab-panel" role="tabpanel">
+                <section class="meeting-block">
+                  <header class="meeting-block-head">
+                    <h3>纪要</h3>
+                    <span class="meeting-block-tag">{{ templateName(selected.template_id) }}</span>
+                  </header>
+                  <div v-if="summarySections.length" class="meeting-section-nav" role="navigation" aria-label="小节导航">
+                    <button v-for="(section, index) in summarySections" :key="section.title" type="button" class="meeting-section-chip" @click="scrollToSection(index)">{{ section.title }}</button>
+                  </div>
+                  <template v-if="summarySections.length">
+                    <div v-for="(section, index) in summarySections" :key="section.title" :id="`meeting-section-${index}`" class="meeting-summary">
+                      <h3>{{ section.title }}</h3>
+                      <ul v-if="section.text.includes('\n- ') || section.text.startsWith('- ')">
+                        <li v-for="(line, lineIndex) in section.text.split('\n').filter(l => l.trim())" :key="lineIndex">
+                          {{ line.replace(/^- */, '').trim() }}
+                        </li>
+                      </ul>
+                      <p v-else>{{ section.text }}</p>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div v-if="selected.summary?.minutes" class="meeting-summary">
+                      <p>{{ selected.summary.minutes }}</p>
+                    </div>
+                    <div v-if="selected.summary?.key_points?.length" class="meeting-summary">
+                      <h3>要点</h3>
+                      <ul>
+                        <li v-for="(point, index) in selected.summary.key_points" :key="index">{{ point }}</li>
+                      </ul>
+                    </div>
+                  </template>
+                  <p v-if="!selected.summary || (!selected.summary.minutes && !selected.summary.key_points?.length && !summarySections.length)" class="meeting-hint">
+                    还没有纪要内容，用右上角「更多 → 重新生成纪要」提炼
+                  </p>
+                  <!-- 重新按模板生成：模板选择跟纪要放一起，而不是和导出按钮挤在标题行 -->
+                  <div class="meeting-regen-row">
+                    <select v-model="regenTemplateId" class="meeting-regen-select" :disabled="summaryRegenBusy || selected.status !== 'completed'">
+                      <option v-for="t in TEMPLATES" :key="t.id" :value="t.id">{{ t.name }}</option>
+                    </select>
+                    <button class="meeting-ghost-btn" type="button" :disabled="summaryRegenBusy || selected.status !== 'completed' || !regenTemplateId" @click="regenWithTemplate">
+                      {{ summaryRegenBusy ? '生成中…' : '按模板重生成' }}
+                    </button>
+                  </div>
+                </section>
+
+                <section class="meeting-block">
+                  <header class="meeting-block-head">
+                    <h3>待办</h3>
+                    <span class="meeting-block-count">
+                      {{ selected.todos?.length ? `${pendingTodosCount} 项未完成 / 共 ${selected.todos.length} 项` : '暂无待办' }}
+                    </span>
+                  </header>
+                  <ul v-if="selected.todos?.length" class="meeting-todos">
+                    <li v-for="todo in selected.todos" :key="todo.id" class="meeting-todo-item" :class="{ 'is-done': todo.done }">
+                      <input
+                        class="meeting-todo-check"
+                        type="checkbox"
+                        :checked="todo.done"
+                        :disabled="todoBusy"
+                        title="勾选完成"
+                        @change="toggleTodo(todo)"
+                      />
+                      <template v-if="editingTodoId === todo.id">
+                        <input
+                          v-model="editingTask"
+                          class="meeting-todo-input"
+                          type="text"
+                          @keyup.enter="saveEditTodo(todo)"
+                          @keyup.esc="editingTodoId = ''"
+                        />
+                        <button class="text-button" type="button" :disabled="todoBusy" @click="saveEditTodo(todo)">保存</button>
+                        <button class="text-button" type="button" @click="editingTodoId = ''">取消</button>
+                      </template>
+                      <template v-else>
+                        <button class="meeting-todo-text" type="button" title="点击修改内容" @click="startEditTodo(todo)">{{ todo.task }}</button>
+                        <span v-if="todo.owner_hint" class="meeting-todo-owner">{{ todo.owner_hint }}</span>
+                        <span v-if="todo.due_hint" class="meeting-todo-owner">{{ todo.due_hint }}</span>
+                        <button class="meeting-icon-btn" type="button" :disabled="todoBusy" aria-label="删除待办" title="删除待办" @click="removeTodo(todo)">
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12M10 7V5h4v2M9 11v6M15 11v6M8 7l1 12h6l1-12"/></svg>
+                        </button>
+                      </template>
+                    </li>
+                  </ul>
+                  <div class="meeting-todo-add">
+                    <input
+                      v-model="newTodoTask"
+                      class="meeting-todo-input"
+                      type="text"
+                      placeholder="补一条待办…"
+                      :disabled="todoBusy"
+                      @keyup.enter="addTodo"
+                    />
+                    <input
+                      v-model="newTodoOwner"
+                      class="meeting-todo-input meeting-todo-owner-input"
+                      type="text"
+                      placeholder="负责人（可空）"
+                      :disabled="todoBusy"
+                      @keyup.enter="addTodo"
+                    />
+                    <button class="text-button" type="button" :disabled="todoBusy || !newTodoTask.trim()" @click="addTodo">添加</button>
+                  </div>
+                </section>
+
+                <section v-if="selected.summary?.insights?.length || selected.summary?.quote_kp" class="meeting-block">
+                  <header class="meeting-block-head">
+                    <h3>AI 洞察</h3>
+                    <span class="meeting-block-count">导出 Word / 汇报卡时同版呈现</span>
+                  </header>
+                  <ul v-if="selected.summary?.insights?.length" class="meeting-summary">
+                    <li v-for="(insight, index) in selected.summary.insights" :key="index">{{ insight }}</li>
+                  </ul>
+                  <div v-if="selected.summary?.quote_kp" class="meeting-kp">
+                    <p class="meeting-kp-head">核心发言提炼 · {{ selected.summary.quote_kp.speaker || '发言人' }}</p>
+                    <ul v-if="selected.summary.quote_kp.points?.length" class="meeting-summary">
+                      <li v-for="(point, index) in selected.summary.quote_kp.points" :key="index">{{ point }}</li>
+                    </ul>
+                    <blockquote
+                      v-for="(quote, index) in selected.summary.quote_kp.quotes || []"
+                      :key="`q${index}`"
+                      class="meeting-kp-quote"
+                    >
+                      {{ quote }}
+                    </blockquote>
+                  </div>
+                </section>
+
+                <section class="meeting-block">
+                  <header class="meeting-block-head">
+                    <h3>关键词</h3>
+                    <button class="meeting-ghost-btn" type="button" :disabled="keywordsBusy || selected.status !== 'completed'" @click="regenKeywords">
+                      {{ keywordsBusy ? '生成中…' : selected.keywords?.length ? '重新生成' : '生成关键词' }}
+                    </button>
+                  </header>
+                  <div v-if="selected.keywords?.length" class="meeting-keywords">
+                    <span v-for="word in selected.keywords" :key="word" class="meeting-keyword">{{ word }}</span>
+                  </div>
+                  <p v-else-if="!keywordsBusy" class="meeting-hint">还没有关键词，点「生成关键词」由 AI 从转写提炼。</p>
+                </section>
+              </div>
+
+              <!-- ② 转写：按发言人分块，像读一段对话 -->
+              <div v-else-if="detailTab === 'transcript'" class="meeting-tab-panel" role="tabpanel">
+                <div class="meeting-transcript">
+                  <article
+                    v-for="(block, blockIndex) in transcriptBlocks"
+                    :id="`meeting-block-${blockIndex}`"
+                    :key="blockIndex"
+                    :class="['meeting-turn', { on: blockIndex === activeBlockIndex }]"
+                  >
+                    <header class="meeting-turn-head">
+                      <span :class="['meeting-turn-avatar', `h${speakerHue(block.speaker)}`]" aria-hidden="true">{{ (nameOf(block.speaker) || '说').slice(0, 1) }}</span>
+                      <button
+                        :class="['meeting-turn-name', `h${speakerHue(block.speaker)}`]"
+                        type="button"
+                        title="点击标注真名"
+                        @click="beginRename(block.speaker)"
+                      >{{ nameOf(block.speaker) }}</button>
+                      <button class="meeting-turn-time" type="button" :title="'从这一句开始播放'" @click="seekTo(block.start)">{{ formatTime(block.start) }}</button>
+                    </header>
+                    <div class="meeting-turn-body">
+                      <p
+                        v-for="piece in block.texts"
+                        :key="piece.index"
+                        :class="['meeting-turn-line', { on: piece.index === activeSegmentIndex }]"
+                      >
+                        <template v-if="editingSegment === piece.index">
+                          <span class="meeting-edit-row">
+                            <textarea
+                              v-model="editingText"
+                              class="setting-input meeting-segment-textarea"
+                              rows="2"
+                              :disabled="segmentBusy"
+                              @keydown.enter.prevent="confirmEditSegment()"
+                              @keydown.esc.stop="editingSegment = -1"
+                            />
+                            <span class="meeting-edit-btns">
+                              <button class="text-button" type="button" :disabled="segmentBusy || !editingText.trim()" @click="confirmEditSegment">
+                                {{ segmentBusy ? '保存中…' : '保存' }}
+                              </button>
+                              <button class="text-button" type="button" :disabled="segmentBusy" @click="editingSegment = -1">取消</button>
+                            </span>
+                          </span>
+                        </template>
+                        <template v-else>
+                          <span class="meeting-turn-text" @dblclick="beginEditSegment(piece.index)">{{ piece.text }}</span>
+                          <button class="meeting-turn-edit" type="button" title="修正这一句" @click="beginEditSegment(piece.index, $event)">改字</button>
+                        </template>
+                      </p>
+                    </div>
+                  </article>
+                  <p v-if="!selected.segments.length" class="meeting-hint">这条听记没有转写内容。</p>
+                </div>
+                <p class="meeting-hint meeting-transcript-foot">双击任意一句可直接改字；发言人点名字即可标注真名。</p>
+              </div>
+
+              <!-- ③ 导图 -->
+              <div v-else class="meeting-tab-panel" role="tabpanel">
+                <section class="meeting-block">
+                  <header class="meeting-block-head">
+                    <h3>思维导图</h3>
+                    <button class="meeting-ghost-btn" type="button" :disabled="mindmapBusy" @click="regenMindmap">
+                      {{ mindmapBusy ? '生成中…' : selected.mindmap ? '重新生成' : '生成导图' }}
+                    </button>
+                  </header>
+                  <MindMap v-if="selected.mindmap" :markdown="selected.mindmap" />
+                  <p v-else-if="!mindmapBusy" class="meeting-hint">
+                    {{ selected.segments.length ? '还没有导图，点「生成导图」用 AI 从转写提炼结构' : '本次录音没有可提炼的发言内容' }}
+                  </p>
+                </section>
+              </div>
+            </div>
+
+            <!-- 侧栏：AI 问答。常驻在最右，和主区同一屏宽，不跟着标签页消失 -->
+            <aside class="meeting-qa">
+              <div class="meeting-qa-head">
+                <h3>AI 问答</h3>
+                <span class="meeting-hint">基于本条听记</span>
+              </div>
+              <div ref="qaList" class="meeting-qa-list">
+                <p v-if="!chat.length && !qaBusy" class="meeting-hint">问结论、问待办、问数据，或让它起草跟进邮件。</p>
+                <div v-for="(turn, index) in chat" :key="index" :class="['meeting-qa-turn', turn.role]">
+                  <div class="meeting-qa-bubble">{{ turn.content }}</div>
+                </div>
+                <div v-if="qaBusy" class="meeting-qa-turn assistant">
+                  <div class="meeting-qa-bubble meeting-qa-busy">思考中…</div>
+                </div>
+              </div>
+              <div class="meeting-qa-suggest">
+                <button v-for="s in QA_SUGGESTIONS" :key="s" type="button" class="meeting-qa-chip" :disabled="qaBusy" @click="askQuestion(s)">{{ s }}</button>
+              </div>
+              <div class="meeting-qa-input">
+                <input
+                  v-model="qaQuestion"
+                  class="setting-input"
+                  type="text"
+                  placeholder="就这条听记提问…"
+                  :disabled="qaBusy"
+                  @keydown.enter="askQuestion()"
+                />
+                <button class="primary-button" type="button" :disabled="qaBusy || !qaQuestion.trim()" @click="askQuestion()">发送</button>
+              </div>
+            </aside>
+          </div>
+        </template>
       </div>
 
       <!-- 图文海报弹窗：主题选择 + zoom 缩放预览 + 导出动作 -->

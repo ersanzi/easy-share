@@ -57,6 +57,8 @@
   --green-tint: #ecf9ef;
   --orange: #e2651a;
   --orange-rgb: 226, 101, 26;
+  /* 文字档：基色在浅底上只有 3.4:1（听记发言人名要过 AA），压在 #a8430d 才达标 */
+  --orange-text: #a8430d;
   --red: #dd3332;
   --red-rgb: 221, 51, 50;
   --red-text: #a7241e;
@@ -71,6 +73,8 @@
   --amber-tint: #fff5df;
   --cyan: #009bb0;
   --cyan-rgb: 0, 155, 176;
+  /* 同理：青基色在浅底上约 3.5:1，文字档下压 */
+  --cyan-text: #0a6b7a;
   /* 边框/填充走「深色基 + 透明度」模型：
      基色取 --kd-text-2 的 rgb，靠 alpha 控制深浅。
      rgba(38,46,62,.12) 在白底上 = #E5E6E8，正对 WPS 的 line-2 #E4E6EB。
@@ -1729,7 +1733,14 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 
 /* ═══════════ 知识问答面板 ═══════════ */
 
-.knowledge-panel { display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 36px - 48px); min-height: 540px; }
+/* 听记/知识页的容器：**不要写 height: 100vh**。
+   实测（2026-10-20，CDP 量 DOM）：写死 `height: calc(100vh - 84px)` 时
+   `.knowledge-panel` 的 clientHeight 被钉在 718px，而内容 1315px——
+   溢出部分整个跑到 `.workspace`（真正的滚动容器，`overflow-y:auto`）外面，
+   页面只剩「一半」可滚，用户表现为「整体滚不动、滚轮没反应」。
+   改成自适应高度后，滚的是 `.workspace`，内容多高滚多高。
+   注意 `html, body` 是 `overflow:hidden`（桌面壳固定尺寸），滚动只发生在 `.workspace`。 */
+.knowledge-panel { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 
 .knowledge-login-card { max-width: 460px; }
 .knowledge-login-form { display: flex; flex-direction: column; gap: 14px; padding: 4px 18px 18px; }
@@ -2105,11 +2116,110 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-level-bar { width: 4px; height: 6px; border-radius: 2px; background: var(--muted); opacity: .35; transition: all .12s ease; }
 .meeting-level-bar.on { height: 22px; background: var(--accent, var(--blue)); opacity: 1; }
 
-.meeting-detail-card { display: flex; flex-direction: column; gap: 12px; }
-.meeting-detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.meeting-detail-head h2 { margin: 0 0 4px; font-size: 16px; }
-.meeting-detail-meta { margin: 0; font-size: 12px; color: var(--muted); }
-.meeting-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
+/* 听记详情：标题行 + 播放条 + 标签页 + 侧栏问答。
+   刻意不套外层卡片——里面每块已是卡片，卡里套卡会让容器层级数不清，也会让整页
+   变成一条从上到下的长条（2026-10-20 用户反馈「整体布局很丑、不够直观」）。
+   这里用「标题贴顶 + 两栏内容 + 标签页」把它压进一屏，滚动只发生在内容区里。 */
+.meeting-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.meeting-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.meeting-detail-title { min-width: 0; }
+.meeting-detail-head h2 { margin: 0 0 5px; font-size: 19px; line-height: 1.3; letter-spacing: -.01em; }
+.meeting-detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: 12.5px; }
+.meeting-detail-meta i { font-style: normal; opacity: .55; }
+.meeting-detail-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* 次级动作：中性底、无边框悬浮感，权重低于主按钮又不至于像纯文字 */
+.meeting-ghost-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-height: 30px; padding: 0 10px;
+  color: var(--text); font-size: 12.5px;
+  background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+.meeting-ghost-btn:hover { background: var(--soft-bg); border-color: var(--border); }
+.meeting-ghost-btn:disabled { opacity: .45; cursor: default; background: transparent; border-color: transparent; }
+.meeting-ghost-btn svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+
+/* 「更多」下拉：把导出 MD/海报/复制/归档/重新转写收进一个入口，
+   标题行只剩两个按钮——原来十个文字按钮横排，标题被挤成折行 */
+.meeting-more { position: relative; }
+.meeting-more-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
+  display: flex; flex-direction: column; min-width: 186px; padding: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(var(--line-rgb), .16);
+}
+.meeting-more-menu button {
+  padding: 8px 10px; color: var(--text); font-size: 13px; text-align: left;
+  background: transparent; border: 0; border-radius: 7px; cursor: pointer;
+}
+.meeting-more-menu button:hover { background: var(--soft-bg); }
+.meeting-more-menu button:disabled { opacity: .45; cursor: default; background: transparent; }
+.meeting-more-menu button.is-danger { color: var(--red); }
+.meeting-more-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+
+/* 播放条：章节即播放位，横向 chips 放在播放器下面而不是单独一张卡 */
+.meeting-player { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--soft-bg); }
+.meeting-player .meeting-audio { width: 100%; height: 34px; }
+
+/* 标签页：一屏只讲一件事（纪要 / 转写 / 导图） */
+.meeting-pane { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.meeting-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); }
+.meeting-tab {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 14px 10px; color: var(--muted); font-size: 13.5px; font-weight: 600;
+  background: transparent; border: 0; border-radius: 8px 8px 0 0; cursor: pointer;
+}
+.meeting-tab:hover { color: var(--text); background: var(--soft-bg); }
+.meeting-tab.on { color: var(--blue); }
+.meeting-tab.on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--blue); }
+.meeting-tab-count { padding: 0 6px; color: var(--muted); font-size: 11px; font-weight: 600; background: var(--soft-bg); border-radius: 8px; }
+.meeting-tab.on .meeting-tab-count { color: var(--blue); background: rgba(var(--blue-rgb), .1); }
+.meeting-tab-panel { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+
+/* 发言人条：横向一排人，改名/合并就地完成 */
+.meeting-speakers-bar { display: flex; align-items: flex-start; gap: 12px; padding-top: 4px; border-top: 1px solid var(--border); }
+.meeting-speakers-label { flex-shrink: 0; padding-top: 7px; color: var(--muted); font-size: 12px; font-weight: 600; }
+.meeting-speakers { display: flex; flex-wrap: wrap; gap: 8px; }
+.meeting-speaker-pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px 4px 4px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); }
+.meeting-speaker-pill .meeting-rename-input { width: 150px; }
+
+/* 逐字稿：按发言人分块，像读一段对话（钉钉听记的转写也是这个读法） */
+.meeting-transcript { display: flex; flex-direction: column; gap: 14px; }
+.meeting-turn { display: flex; flex-direction: column; gap: 4px; padding: 2px 10px 2px 0; border-radius: 10px; }
+.meeting-turn.on { background: rgba(var(--blue-rgb), .045); }
+.meeting-turn-head { display: flex; align-items: center; gap: 8px; }
+.meeting-turn-avatar { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%; font-size: 11px; font-weight: 700; }
+.meeting-turn-name { padding: 0; font-size: 12.5px; font-weight: 700; background: none; border: 0; cursor: pointer; }
+.meeting-turn-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.meeting-turn-time { padding: 0 5px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.meeting-turn-time:hover { color: var(--blue); background: rgba(var(--blue-rgb), .08); }
+.meeting-turn-body { display: flex; flex-direction: column; gap: 3px; padding-left: 30px; }
+.meeting-turn-line { position: relative; margin: 0; color: var(--text); font-size: 14px; line-height: 1.75; }
+.meeting-turn-line.on .meeting-turn-text { background: rgba(var(--amber-rgb), .16); border-radius: 4px; box-shadow: 0 0 0 2px rgba(var(--amber-rgb), .16); }
+.meeting-turn-text { cursor: default; }
+.meeting-turn-edit { margin-left: 6px; padding: 0 6px; color: var(--muted); font-size: 11.5px; background: transparent; border: 0; border-radius: 6px; cursor: pointer; opacity: 0; }
+.meeting-turn-line:hover .meeting-turn-edit, .meeting-turn-line:focus-within .meeting-turn-edit { opacity: 1; }
+.meeting-turn-edit:hover { color: var(--blue); background: rgba(var(--blue-rgb), .08); }
+.meeting-edit-row { display: flex; flex-direction: column; gap: 6px; }
+/* 发言人色相轮转：名字用各自的「文字档」深色（浅绿/浅橙在浅底上过不了 AA），头像底色用本色低透明 */
+.meeting-transcript-foot { margin: 2px 0 0; }
+
+/* 发言人色相轮转：只改色相，饱和与明度固定，保证同一套明暗关系 */
+.h214 { color: var(--blue); } .meeting-turn-avatar.h214, .meeting-speaker-avatar.h214 { background: rgba(var(--blue-rgb), .12); }
+.h158 { color: var(--green-text); } .meeting-turn-avatar.h158, .meeting-speaker-avatar.h158 { background: rgba(var(--green-rgb), .12); }
+.h32 { color: var(--orange-text); } .meeting-turn-avatar.h32, .meeting-speaker-avatar.h32 { background: rgba(var(--orange-rgb), .14); }
+.h340 { color: var(--red-text); } .meeting-turn-avatar.h340, .meeting-speaker-avatar.h340 { background: rgba(var(--red-rgb), .12); }
+.h196 { color: var(--cyan-text); } .meeting-turn-avatar.h196, .meeting-speaker-avatar.h196 { background: rgba(var(--cyan-rgb), .12); }
+.h300 { color: var(--purple-text); } .meeting-turn-avatar.h300, .meeting-speaker-avatar.h300 { background: rgba(var(--purple-rgb), .1); }
+.meeting-turn-avatar, .meeting-speaker-avatar { color: currentColor; }
+
+/* 待办行内操作：图标按钮，不再每行挂一个红字「删除」 */
+.meeting-icon-btn { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; padding: 0; color: var(--muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.meeting-icon-btn:hover { color: var(--red); background: rgba(var(--red-rgb), .1); }
+.meeting-icon-btn:disabled { opacity: .4; cursor: default; }
+.meeting-icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.meeting-regen-row { display: flex; align-items: center; gap: 8px; margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--border); }
+
 .meeting-danger { color: var(--red); }
 .meeting-pending { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0; }
 .meeting-failed { color: var(--red); }
@@ -2129,7 +2239,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-todo-owner { font-size: 11px; color: var(--muted); background: rgba(var(--fill-rgb),.14); border-radius: 8px; padding: 1px 7px; }
 /* 关键词（对标钉钉听记关键词位） */
 .meeting-keywords { display: flex; flex-wrap: wrap; gap: 6px; }
-.meeting-keyword { font-size: 12px; color: var(--accent, var(--blue)); background: rgba(var(--blue-rgb),.1); border-radius: 8px; padding: 2px 9px; }
+.meeting-keyword { padding: 2px 9px; color: var(--kd-blue-8); font-size: 12px; background: rgba(var(--blue-rgb),.1); border-radius: 8px; }
 /* 实时上屏（边说边出字 + 会中要点） */
 .meeting-live { flex-basis: 100%; width: 100%; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(var(--fill-rgb),.18); text-align: left; }
 .meeting-live-title { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: .04em; margin: 6px 0 4px; }
@@ -2224,15 +2334,14 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-server-error-copy span { font-size: 12px; line-height: 1.5; color: var(--text); }
 .meeting-server-error-copy .meeting-hint { color: var(--muted); }
 
-/* 会议听记·发言人清单（对标钉钉听记：点名字即把「说话人 N」标注成真名） */
-.meeting-speakers { display: flex; flex-direction: column; gap: 2px; }
-.meeting-speaker-row { display: flex; align-items: center; gap: 9px; padding: 7px 4px; border-bottom: 1px solid rgba(var(--line-rgb),.08); }
-.meeting-speaker-row:last-child { border-bottom: 0; }
-.meeting-speaker-avatar { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; background: rgba(var(--blue-rgb),.12); color: var(--blue); font-size: 12px; font-weight: 700; }
-.meeting-speaker-name { border: 0; background: transparent; padding: 0; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
-.meeting-speaker-name:hover { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
-.meeting-speaker-meta { margin-right: auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.meeting-speaker-row .meeting-rename-input { width: 180px; }
+/* 会议听记·发言人（横排胶囊，点名字即把「说话人 N」标注成真名）
+   ⚠️ 这里不能再写 .meeting-speakers 的 flex-direction——上一版留着 column，
+   把胶囊压成了竖排四行；横排布局由上面 .meeting-speakers-bar 那一组定义。 */
+.meeting-speaker-pill .meeting-speaker-avatar { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%; font-size: 11.5px; font-weight: 700; }
+.meeting-speaker-name { padding: 0; color: var(--text); font-size: 12.5px; font-weight: 600; background: transparent; border: 0; cursor: pointer; }
+.meeting-speaker-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.meeting-speaker-meta { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.meeting-speaker-pill .meeting-rename-input { width: 150px; }
 
 /* 会议听记·思维导图（markmap） */
 .meeting-mindmap { display: flex; flex-direction: column; gap: 6px; }
@@ -2271,21 +2380,29 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-section-chip { border: 1px solid rgba(var(--fill-rgb),.28); background: transparent; border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; color: var(--muted); }
 .meeting-section-chip:hover { border-color: var(--blue, var(--blue)); color: var(--blue, var(--blue)); }
 
-/* 听记·详情双栏：主栏 + AI 问答侧栏（对标钉钉听记问答面板） */
-.meeting-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
-.meeting-detail-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-@media (max-width: 1100px) { .meeting-detail-body { grid-template-columns: 1fr; } }
-.meeting-qa { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--soft-bg); position: sticky; top: 0; max-height: 70vh; }
-.meeting-qa-head h3 { margin: 0 0 2px; font-size: 13px; }
-.meeting-qa-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 120px; max-height: 42vh; padding-right: 2px; }
+/* 听记·详情双栏：主栏（标签页）+ AI 问答侧栏。
+   侧栏宽度从 280 收到 300：问答要能放下一句完整的问题；
+   窄屏（<1180px）时侧栏掉到主栏下面，而不是把主栏挤成一条窄缝。 */
+.meeting-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+@media (max-width: 1180px) { .meeting-detail-body { grid-template-columns: 1fr; } }
+.meeting-qa {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; border-radius: 12px;
+  background: var(--soft-bg); border: 1px solid var(--border);
+  position: sticky; top: 12px; max-height: calc(100vh - 160px);
+}
+.meeting-qa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.meeting-qa-head h3 { margin: 0; font-size: 13.5px; font-weight: 700; }
+.meeting-qa-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 96px; flex: 1; padding-right: 2px; }
 .meeting-qa-turn { display: flex; }
 .meeting-qa-turn.user { justify-content: flex-end; }
-.meeting-qa-bubble { max-width: 88%; white-space: pre-wrap; font-size: 12.5px; line-height: 1.65; border-radius: 12px; padding: 7px 10px; background: rgba(255,255,255,.92); border: 1px solid var(--border); }
-.meeting-qa-turn.user .meeting-qa-bubble { background: var(--blue, var(--blue)); border-color: var(--blue, var(--blue)); color: #fff; border-bottom-right-radius: 4px; }
+.meeting-qa-bubble { max-width: 92%; white-space: pre-wrap; font-size: 13px; line-height: 1.65; border-radius: 12px; padding: 8px 11px; background: var(--bg); border: 1px solid var(--border); }
+.meeting-qa-turn.user .meeting-qa-bubble { background: var(--blue); border-color: var(--blue); color: #fff; border-bottom-right-radius: 4px; }
 .meeting-qa-turn.assistant .meeting-qa-bubble { border-bottom-left-radius: 4px; }
 .meeting-qa-busy { color: var(--muted); }
 .meeting-qa-suggest { display: flex; flex-direction: column; gap: 5px; }
-.meeting-qa-chip { border: 1px dashed rgba(var(--blue-rgb),.45); background: transparent; border-radius: 999px; padding: 4px 10px; font-size: 11.5px; color: var(--blue, var(--blue)); cursor: pointer; text-align: left; }
+.meeting-qa-chip { padding: 5px 11px; color: var(--kd-blue-8); font-size: 12px; text-align: left; background: transparent; border: 1px dashed rgba(var(--blue-rgb),.45); border-radius: 999px; cursor: pointer; }
+.meeting-qa-chip:hover { background: rgba(var(--blue-rgb), .06); border-style: solid; }
 .meeting-qa-chip:disabled { opacity: .5; cursor: default; }
 .meeting-qa-input { display: flex; gap: 6px; }
 .meeting-qa-input .setting-input { flex: 1; }
@@ -2298,31 +2415,26 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .mcp-regen { align-self: flex-start; }
 .mcp-regen.meeting-danger { color: var(--red); }
 
-/* 听记·智能切片章节条 + 播放联动（对标钉钉结构化章节纪要） */
+/* 听记·智能切片章节条 + 播放联动（对标钉钉结构化章节纪要）
+   chip 落在浅灰播放条上，文字用最深的中性档（--kd-text-1）而不是 --muted：
+   --muted 在 --soft-bg 上只有 3.76:1，达不到 AA。 */
 .meeting-chapters { display: flex; gap: 6px; flex-wrap: wrap; }
-.meeting-chapter { display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(var(--fill-rgb),.28); background: transparent; border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; color: var(--text, var(--text)); }
-.meeting-chapter-time { font-variant-numeric: tabular-nums; font-size: 11px; color: var(--muted); }
-.meeting-chapter.on { border-color: var(--blue, var(--blue)); background: rgba(var(--blue-rgb),.12); color: var(--blue, var(--blue)); font-weight: 700; }
-.meeting-chapter.on .meeting-chapter-time { color: var(--blue, var(--blue)); }
-.meeting-segment { cursor: pointer; border-radius: 8px; padding: 4px 6px; margin: -2px -6px; }
-.meeting-segment:hover { background: rgba(var(--fill-rgb),.08); }
-.meeting-segment.on { background: rgba(var(--blue-rgb),.1); }
-.meeting-segment.on .meeting-speaker-chip { background: rgba(var(--blue-rgb),.18); }
-.meeting-segment-edit { display: flex; align-items: center; gap: 8px; }
+.meeting-chapter { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; color: var(--kd-text-1); font-size: 12.5px; background: var(--bg); border: 1px solid rgba(var(--fill-rgb),.18); border-radius: 999px; cursor: pointer; }
+.meeting-chapter:hover { border-color: rgba(var(--blue-rgb),.45); }
+.meeting-chapter-time { color: var(--kd-text-1); font-size: 11.5px; font-variant-numeric: tabular-nums; opacity: .78; }
+.meeting-chapter.on { color: var(--kd-blue-8); font-weight: 700; background: rgba(var(--blue-rgb),.1); border-color: rgba(var(--blue-rgb),.45); }
+.meeting-chapter.on .meeting-chapter-time { color: var(--kd-blue-8); opacity: 1; }
 /* 逐字稿「改字」：平时低调，行悬停才明显，避免正文里到处是按钮 */
-.meeting-segment-edit-btn { margin-left: auto; flex-shrink: 0; font-size: 11px; opacity: 0; transition: opacity .14s ease; }
-.meeting-segment:hover .meeting-segment-edit-btn, .meeting-segment:focus-within .meeting-segment-edit-btn { opacity: 1; }
-.meeting-segment-textarea { flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; resize: vertical; }
+.meeting-segment-textarea { flex: 1; min-width: 0; font-size: 14px; line-height: 1.7; resize: vertical; }
 .meeting-list-card .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .meeting-search { width: 220px; padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
 
-/* 听记·详情页分区卡片化（对标钉听详情页：播放器驾驶台 + 纪要/待办/导图/转写分区卡） */
-.meeting-player-card { display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(var(--blue-rgb),.22); border-radius: 12px; padding: 12px 14px; background: linear-gradient(135deg, rgba(var(--blue-rgb),.06), rgba(124,108,242,.05)); }
-.meeting-block { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.55); }
+/* 听记·详情页分区卡：同一层级的块长相一致，容器只用来分组，不再套边线加底色 */
+.meeting-block { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); }
 .meeting-block-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.meeting-block-head h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--text, var(--text)); }
-.meeting-block-tag { flex-shrink: 0; font-size: 11px; color: var(--blue, var(--blue)); background: rgba(var(--blue-rgb),.1); border-radius: 8px; padding: 1px 8px; }
-.meeting-block-count { flex-shrink: 0; font-size: 11px; color: var(--muted); background: var(--soft-bg); border-radius: 8px; padding: 1px 8px; }
+.meeting-block-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.meeting-block-tag { flex-shrink: 0; padding: 2px 9px; color: var(--kd-blue-8); font-size: 12px; font-weight: 600; background: rgba(var(--blue-rgb),.1); border-radius: 8px; }
+.meeting-block-count { flex-shrink: 0; color: var(--muted); font-size: 11.5px; }
 
 /* 听记·列表缩略图色块（对标钉钉列表文档缩略图） */
 .meeting-thumb { flex-shrink: 0; width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; font-weight: 700; }
@@ -2345,14 +2457,6 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-poster-todos { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .meeting-poster-todos li { display: flex; align-items: center; gap: 8px; }
 .meeting-poster-check { flex-shrink: 0; width: 13px; height: 13px; border: 2px solid var(--p-accent, #2f6bff); border-radius: 4px; }
-.meeting-poster-todo-task { font-size: 13.5px; line-height: 1.6; }
-.meeting-poster-tag { flex-shrink: 0; font-size: 11px; color: var(--p-accent, #2f6bff); background: var(--p-tag-bg, rgba(47,107,255,.1)); border-radius: 9px; padding: 2px 8px; }
-.meeting-poster-foot { padding: 0 44px 26px; text-align: center; font-size: 11px; letter-spacing: 2px; color: var(--p-muted, #7c828e); }
-
-/* 海报主题皮肤：经典（蓝白商务）/ 碳素（深灰金字）/ 极光（紫青渐变）/ 蓝图（工程图纸）/ 暖纸（奶油笔记） */
-.meeting-poster--classic { --p-bg: #f4f6fa; --p-card: #ffffff; --p-text: #1f2329; --p-muted: #7c828e; --p-accent: #2f6bff; --p-head-bg: linear-gradient(135deg, #2f6bff, #5a8dff); --p-head-text: #ffffff; --p-border: rgba(47,107,255,.14); --p-tag-bg: rgba(47,107,255,.1); }
-.meeting-poster--carbon { --p-bg: #23262c; --p-card: #2d3138; --p-text: #e8e9eb; --p-muted: #9aa0aa; --p-accent: #e3ba7c; --p-head-bg: linear-gradient(135deg, #191c21, #33373f); --p-head-text: #f5f5f2; --p-border: rgba(255,255,255,.08); --p-tag-bg: rgba(227,186,124,.16); }
-.meeting-poster--aurora { --p-bg: #f1f3ff; --p-card: #ffffff; --p-text: #241b4d; --p-muted: #7d76a8; --p-accent: #6a3df5; --p-head-bg: linear-gradient(130deg, #5b2be0 0%, #3a6cf5 55%, #00b4d8 100%); --p-head-text: #ffffff; --p-border: rgba(106,61,245,.16); --p-tag-bg: rgba(106,61,245,.1); }
 .meeting-poster--blueprint { --p-bg: #14417e; --p-card: rgba(255,255,255,.07); --p-text: #eaf2ff; --p-muted: #a8c4ea; --p-accent: #9cc9ff; --p-head-bg: #0f3468; --p-head-text: #ffffff; --p-border: rgba(156,201,255,.35); --p-tag-bg: rgba(156,201,255,.16); }
 .meeting-poster--note { --p-bg: #faf1de; --p-card: #fffdf6; --p-text: #4a3a24; --p-muted: #9a8a6c; --p-accent: #d97a29; --p-head-bg: linear-gradient(135deg, #f3d9a4, #eec27a); --p-head-text: #5a3d10; --p-border: rgba(217,122,41,.22); --p-tag-bg: rgba(217,122,41,.12); }
 
