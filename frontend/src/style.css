@@ -1678,6 +1678,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .activity-progress i { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--blue-hover)); border-radius: inherit; transition: width .2s; }
 .activity-meta { display: flex; align-items: center; gap: 8px; min-height: 16px; color: var(--faint); font-size: 11px; }
 .activity-error { min-width: 0; overflow: hidden; color: var(--red); text-overflow: ellipsis; white-space: nowrap; }
+.activity-actions { margin: 7px 0 0; margin-left: 0; }
 .activity-drawer-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 18px 16px; color: var(--faint); border-top: 1px solid rgba(var(--line-rgb),.1); font-size: 11px; }
 .activity-drawer-footer .primary-button { flex: 0 0 auto; }
 

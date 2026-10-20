@@ -1013,13 +1013,23 @@ func (a *App) OpenAdminConsole() error {
 	return nil
 }
 
-// OpenFile 用系统默认应用打开指定文件（Finder 双击 / 资源管理器选中）。
+// OpenFile 用系统默认应用打开指定文件（Finder 双击 / 资源管理器双击）。
 func (a *App) OpenFile(path string) error {
 	if path == "" {
 		return nil
 	}
 	err := fsutil.OpenFile(path)
 	a.reportError("open file", err)
+	return err
+}
+
+// ShowInFolder 在文件管理器中定位并选中指定文件（下载完成后的「打开所在文件夹」）。
+func (a *App) ShowInFolder(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := fsutil.ShowInFolder(path)
+	a.reportError("show in folder", err)
 	return err
 }
 
@@ -1382,6 +1392,11 @@ func sameContentOnRemote(objects []drive.Object, objectKey, localPath string) bo
 // 分类走 internal/driveerr.Classify（只从已有信息推断，不改变行为）。
 func (a *App) failTask(core *desktop.Client, taskID string, err error) {
 	triple := driveerr.Classify(err)
+	// 调用点显式标注的分类优先：本地写盘失败在中文文案里未必带
+	// 英文 errno / "permission denied"，不让它掉进 UNKNOWN。
+	if code := driveerr.CodeOf(err); code != "" {
+		triple.Code = code
+	}
 	message, code, system := triple.Format()
 	patch := map[string]any{
 		"status": "failed",
@@ -1690,18 +1705,262 @@ func (a *App) CloudMkdir(targetDir, name string) error {
 	return nil
 }
 
+// CloudDownload 把云端文件下载到本机接收目录，进度写入 Core 统一任务存储。
+//
+// 不走浏览器：预签名 URL 只在本进程内取字节。WPS / 钉钉桌面端同样是
+// 「默认落到下载目录 + 传输面板里给进度」，把保存动作甩给浏览器会丢失
+// 进度、失败原因和完成后的打开入口——用户在应用里看不到下载发生过。
 func (a *App) CloudDownload(key string) error {
+	return a.startCloudDownload(key, "", "")
+}
+
+// CloudDownloadAs 弹保存框让用户另选落点；取消时不创建任务。
+func (a *App) CloudDownloadAs(key string) error {
+	defaultDir, err := a.downloadDirectory()
+	if err != nil {
+		return err
+	}
+	defaultName, err := safeCloudDownloadName(key)
+	if err != nil {
+		return err
+	}
+	target, dialogErr := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:            "另存云端文件",
+		DefaultDirectory: defaultDir,
+		DefaultFilename:  defaultName,
+	})
+	if dialogErr != nil {
+		a.reportError("cloud download dialog", dialogErr)
+		return dialogErr
+	}
+	if target == "" {
+		return nil
+	}
+	return a.startCloudDownload(key, filepath.Dir(target), filepath.Base(target))
+}
+
+// startCloudDownload 打开远端流并登记任务，字节复制交给后台 goroutine。
+//
+// 远端流在这里同步打开：未登录、无权限、对象不存在这类错误要立刻回到
+// 调用方（前端能马上提示），而不是等用户去任务面板里发现一条失败记录。
+// dir/name 为空表示走默认接收目录，并在重名时自动加序号。
+func (a *App) startCloudDownload(key, dir, name string) error {
+	core, err := a.coreClient()
+	if err != nil {
+		return err
+	}
 	client, token, err := a.driveClient()
 	if err != nil {
 		return err
 	}
-	url, err := client.PresignGet(a.ctx, token, drive.SpacePersonal, key)
+	body, size, err := client.Open(a.ctx, token, drive.SpacePersonal, key)
 	if err != nil {
 		a.reportError("cloud download", err)
 		return err
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
+	started := false
+	defer func() {
+		if !started {
+			_ = body.Close()
+		}
+	}()
+
+	explicitTarget := name != ""
+	if dir == "" {
+		dir, err = a.downloadDirectory()
+		if err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		wrapped := driveerr.Wrap(fmt.Errorf("创建下载目录失败：%w", err), driveerr.CodeLocal)
+		a.reportError("cloud download mkdir", wrapped)
+		return wrapped
+	}
+	if name == "" {
+		name, err = safeCloudDownloadName(key)
+		if err != nil {
+			return err
+		}
+	}
+	target := filepath.Join(dir, name)
+	if !explicitTarget {
+		// 默认下载与同目录重名时不让用户覆盖（WPS / 钉钉同款
+		// 「文件 (1).ext」规则）；另存为的落点由保存框确认。
+		target = uniqueDownloadPath(target)
+	}
+	if size < 0 {
+		size = 0
+	}
+	// 先写临时文件再改名：失败时不会留下一个「看起来下载完了」的半截文件。
+	temp, err := os.CreateTemp(dir, ".easyshare-download-*.part")
+	if err != nil {
+		wrapped := driveerr.Wrap(fmt.Errorf("创建本地文件失败：%w", err), driveerr.CodeLocal)
+		a.reportError("cloud download create temp", wrapped)
+		return wrapped
+	}
+	created, createErr := core.CreateTask(a.ctx, map[string]any{
+		"kind": "cloud_download", "fileName": filepath.Base(target), "direction": "receive",
+		"peer": "网盘", "totalBytes": size, "status": "running", "localPath": target,
+	})
+	if createErr != nil {
+		_ = temp.Close()
+		_ = os.Remove(temp.Name())
+		a.reportError("create cloud download task", createErr)
+		return createErr
+	}
+	started = true
+	go a.copyCloudDownload(core, created.ID, body, temp, target, size)
 	return nil
+}
+
+// copyCloudDownload 把远端流写进临时文件，200ms 节流上报进度，完成后原子落位。
+func (a *App) copyCloudDownload(core *desktop.Client, taskID string, body io.ReadCloser, file *os.File, target string, total int64) {
+	defer body.Close()
+	tempPath := file.Name()
+	start := time.Now()
+	var lastPatch time.Time
+	written := int64(0)
+
+	fail := func(cause error) {
+		_ = file.Close()
+		_ = os.Remove(tempPath)
+		a.reportError("cloud download", cause)
+		a.failTask(core, taskID, cause)
+	}
+
+	buffer := make([]byte, 256*1024)
+	for {
+		read, readErr := body.Read(buffer)
+		if read > 0 {
+			if _, writeErr := file.Write(buffer[:read]); writeErr != nil {
+				fail(driveerr.Wrap(fmt.Errorf("写入本地文件失败：%w", writeErr), driveerr.CodeLocal))
+				return
+			}
+			written += int64(read)
+			if now := time.Now(); total > 0 && written < total && now.Sub(lastPatch) >= 200*time.Millisecond {
+				lastPatch = now
+				speed := 0.0
+				if elapsed := now.Sub(start).Seconds(); elapsed > 0 {
+					speed = float64(written) / elapsed
+				}
+				reported := written
+				if reported > total {
+					reported = total
+				}
+				_ = core.PatchTask(a.ctx, taskID, map[string]any{
+					"transferredBytes": reported, "speed": speed, "status": "running",
+				})
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			fail(fmt.Errorf("下载中断：%w", readErr))
+			return
+		}
+	}
+
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		a.failTask(core, taskID, driveerr.Wrap(fmt.Errorf("关闭本地文件失败：%w", err), driveerr.CodeLocal))
+		return
+	}
+	if err := placeDownloadedFile(tempPath, target); err != nil {
+		_ = os.Remove(tempPath)
+		a.failTask(core, taskID, driveerr.Wrap(fmt.Errorf("保存文件失败：%w", err), driveerr.CodeLocal))
+		return
+	}
+	patch := map[string]any{"speed": 0, "status": "completed"}
+	if total > 0 {
+		patch["transferredBytes"] = total
+	}
+	if err := core.PatchTask(a.ctx, taskID, patch); err != nil {
+		a.reportError("complete cloud download task", err)
+	}
+	a.logger.Printf("cloud download completed: %s (%d bytes)", target, written)
+}
+
+// downloadDirectory 取当前配置的接收目录（下载默认落在这里）。
+// 每次从持久化配置读取，避免桌面端启动快照与设置页刚改的值不一致。
+func (a *App) downloadDirectory() (string, error) {
+	value, err := config.Load(a.configPath)
+	if err != nil {
+		wrapped := fmt.Errorf("读取下载目录配置失败：%w", err)
+		a.reportError("cloud download directory", wrapped)
+		return "", wrapped
+	}
+	dir := strings.TrimSpace(value.ReceiveDir)
+	if dir == "" {
+		err := fmt.Errorf("下载目录未配置")
+		a.reportError("cloud download directory", err)
+		return "", err
+	}
+	return dir, nil
+}
+
+// safeCloudDownloadName 从云端键取单段文件名，并清掉 Windows 不允许的字符。
+// 文件名来自用户内容，不能直接拼进本地路径（分隔符、保留名、尾点都会出问题）。
+func safeCloudDownloadName(key string) (string, error) {
+	trimmed := strings.TrimSpace(key)
+	name := path.Base(strings.TrimSuffix(trimmed, "/"))
+	if name == "" || name == "." || name == ".." || name == "/" {
+		return "", fmt.Errorf("云端路径不合法：%s", key)
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '_'
+		}
+		return r
+	}, name)
+	cleaned = strings.TrimSpace(strings.TrimRight(cleaned, ". "))
+	if cleaned == "" {
+		cleaned = "下载文件"
+	}
+	stem := strings.TrimSuffix(cleaned, filepath.Ext(cleaned))
+	if windowsReservedNames[strings.ToUpper(stem)] {
+		cleaned = "_" + cleaned
+	}
+	return cleaned, nil
+}
+
+// windowsReservedNames 是 Windows 设备名：即便带扩展名也不能作为文件名。
+var windowsReservedNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// uniqueDownloadPath 在重名时生成「文件 (1).ext」，与 WPS / 钉钉的下载落盘规则一致。
+func uniqueDownloadPath(target string) string {
+	if _, err := os.Stat(target); err != nil {
+		return target
+	}
+	ext := filepath.Ext(target)
+	stem := strings.TrimSuffix(target, ext)
+	for index := 1; index <= 9999; index++ {
+		candidate := fmt.Sprintf("%s (%d)%s", stem, index, ext)
+		if _, err := os.Stat(candidate); err != nil {
+			return candidate
+		}
+	}
+	return target
+}
+
+// placeDownloadedFile 把临时文件改名为最终文件。
+// Windows 的 Rename 不能覆盖已存在文件；另存为时保存框已确认覆盖，
+// 因此改名失败且目标存在时先移除旧文件——下载失败时旧文件原样保留。
+func placeDownloadedFile(tempPath, target string) error {
+	if err := os.Rename(tempPath, target); err == nil {
+		return nil
+	}
+	if removeErr := os.Remove(target); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+		return removeErr
+	}
+	return os.Rename(tempPath, target)
 }
 
 func (a *App) CloudDelete(key string) error {

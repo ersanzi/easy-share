@@ -1,7 +1,10 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import TransferList from '../TransferList.vue'
 import type { TransferTask } from '../../types/core'
+
+const coreMocks = vi.hoisted(() => ({ openFile: vi.fn(), showInFolder: vi.fn() }))
+vi.mock('../../services/core', () => ({ core: coreMocks }))
 
 const task = (overrides: Partial<TransferTask> = {}): TransferTask => ({
   id: 'task-1',
@@ -112,5 +115,29 @@ describe('TransferList', () => {
 
     await wrapper.get('[data-task-id="cancelled"] .delete-btn').trigger('click')
     expect(wrapper.emitted('delete')).toEqual([['cancelled']])
+  })
+
+  it('opens a finished download from its local path', async () => {
+    coreMocks.openFile.mockClear()
+    coreMocks.showInFolder.mockClear()
+    const wrapper = mount(TransferList, {
+      props: {
+        tasks: [task({
+          id: 'download',
+          kind: 'cloud_download',
+          direction: 'receive',
+          status: 'completed',
+          localPath: 'C:\\Users\\demo\\Downloads\\EasyShare\\report.pdf',
+        })],
+      },
+    })
+
+    const actions = wrapper.get('[data-task-id="download"] .row-actions')
+    expect(actions.findAll('button').map(button => button.text())).toEqual(['打开文件', '打开所在文件夹'])
+
+    await actions.findAll('button')[0].trigger('click')
+    await actions.findAll('button')[1].trigger('click')
+    expect(coreMocks.openFile).toHaveBeenCalledWith('C:\\Users\\demo\\Downloads\\EasyShare\\report.pdf')
+    expect(coreMocks.showInFolder).toHaveBeenCalledWith('C:\\Users\\demo\\Downloads\\EasyShare\\report.pdf')
   })
 })

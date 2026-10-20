@@ -307,8 +307,8 @@ onBeforeUnmount(() => {
             />
           </div>
           <div class="setting-row">
-            <label class="setting-label">接收目录</label>
-            <p class="setting-hint">他人发送的文件保存到此目录</p>
+            <label class="setting-label">接收与下载目录</label>
+            <p class="setting-hint">他人发送的文件与网盘下载都保存到此目录</p>
             <div class="setting-path">
               <span class="path-display">{{ form.receiveDir || '未选择' }}</span>
               <button class="secondary-button compact" type="button" @click="pickReceiveDir">浏览…</button>

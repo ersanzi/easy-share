@@ -5,10 +5,25 @@ package fsutil
 import (
 	"os/exec"
 	"path/filepath"
+
+	"golang.org/x/sys/windows"
 )
 
-// OpenFile 在资源管理器中选中并高亮指定文件。
+// OpenFile 用系统关联程序打开文件（资源管理器双击语义）。
 func OpenFile(path string) error {
+	verb, err := windows.UTF16PtrFromString("open")
+	if err != nil {
+		return err
+	}
+	target, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	return windows.ShellExecute(0, verb, target, nil, nil, windows.SW_SHOWNORMAL)
+}
+
+// ShowInFolder 在资源管理器中打开所在目录并选中该文件。
+func ShowInFolder(path string) error {
 	return exec.Command("explorer", "/select,", filepath.ToSlash(path)).Start()
 }
 

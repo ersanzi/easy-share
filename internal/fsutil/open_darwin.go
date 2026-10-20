@@ -9,6 +9,11 @@ func OpenFile(path string) error {
 	return exec.Command("open", path).Start()
 }
 
+// ShowInFolder 在 Finder 中打开所在目录并选中该文件。
+func ShowInFolder(path string) error {
+	return exec.Command("open", "-R", path).Start()
+}
+
 // OpenFolder 在 Finder 中打开指定目录。
 func OpenFolder(dir string) error {
 	return exec.Command("open", dir).Start()

@@ -9,7 +9,7 @@ import { core } from '../services/core'
 
 
 defineProps<{ enabled: boolean }>()
-const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir: string]; download: [key: string]; delete: [key: string, subCount?: number, subDirCount?: number]; share: [key: string] }>()
+const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir: string]; download: [key: string]; downloadAs: [key: string]; delete: [key: string, subCount?: number, subDirCount?: number]; share: [key: string] }>()
 
 const files = ref<CloudFile[]>([])
 const loading = ref(false)
@@ -452,7 +452,7 @@ const openCtxMenu = (event: MouseEvent, file: CloudFile) => {
   selectedFile.value = file
   // 贴边翻转，避免菜单被窗口边缘裁掉
   const width = 184
-  const height = cfapiPath.value ? 300 : 236
+  const height = cfapiPath.value ? 332 : 268
   ctxMenu.value = {
     x: Math.min(event.clientX, window.innerWidth - width - 8),
     y: Math.min(event.clientY, window.innerHeight - height - 8),
@@ -468,7 +468,13 @@ const runCtx = (action: (file: CloudFile) => void) => {
 }
 
 const ctxPreview = () => runCtx(file => openFile(file))
-const ctxDownload = () => runCtx(file => emit('download', file.key))
+// 下载走应用内任务：默认落接收目录，进度出现在「活动」；另存为只换落点。
+const requestDownload = (key: string) => {
+  emit('download', key)
+  showNotice('已开始下载，可在「活动」中查看进度')
+}
+const ctxDownload = () => runCtx(file => requestDownload(file.key))
+const ctxDownloadAs = () => runCtx(file => emit('downloadAs', file.key))
 const ctxShare = () => runCtx(file => { void requestShare(file.key) })
 const ctxStar = () => runCtx(file => { void toggleStar(file) })
 const ctxRename = () => runCtx(() => startRename())
@@ -1013,7 +1019,7 @@ defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true
           <div class="cloud-size">{{ formatSize(file.size) }}</div>
           <div class="cloud-actions">
             <button v-if="file.previewKind !== 'unsupported'" class="secondary-button compact preview-action" type="button" title="预览" @click.stop="openPreview(file)">预览</button>
-            <button class="secondary-button compact" type="button" title="下载" @click.stop="$emit('download', file.key)">下载</button>
+            <button class="secondary-button compact" type="button" title="下载到接收目录，可在「活动」中查看进度" @click.stop="requestDownload(file.key)">下载</button>
             <button class="secondary-button compact" type="button" title="分享链接" @click.stop="requestShare(file.key)">分享</button>
             <button class="secondary-button compact destructive-text" type="button" title="删除" @click.stop="$emit('delete', file.key)">删除</button>
           </div>
@@ -1079,7 +1085,7 @@ defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true
 
         <div class="detail-actions">
           <button v-if="detail.previewKind !== 'unsupported'" class="secondary-button compact" type="button" @click="openPreview(detail)">预览</button>
-          <button class="secondary-button compact" type="button" @click="$emit('download', detail.key)">下载</button>
+          <button class="secondary-button compact" type="button" title="下载到接收目录，可在「活动」中查看进度" @click="requestDownload(detail.key)">下载</button>
           <button class="secondary-button compact" type="button" @click="requestShare(detail.key)">分享</button>
           <button class="secondary-button compact" type="button" @click="openMove">移动</button>
         </div>
@@ -1108,7 +1114,8 @@ defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true
     @click.stop
   >
     <button v-if="ctxMenu.file.previewKind !== 'unsupported'" class="ctx-item" type="button" @click="ctxPreview">预览</button>
-    <button class="ctx-item" type="button" @click="ctxDownload">下载</button>
+    <button class="ctx-item" type="button" @click="ctxDownload">下载到接收目录</button>
+    <button class="ctx-item" type="button" @click="ctxDownloadAs">另存为…</button>
     <button class="ctx-item" type="button" @click="ctxShare">分享链接</button>
     <button class="ctx-item" type="button" @click="ctxStar">{{ ctxMenu.file && isStarred(ctxMenu.file.key) ? '取消星标' : '添加星标' }}</button>
     <div class="ctx-sep"></div>

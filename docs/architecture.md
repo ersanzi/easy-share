@@ -265,6 +265,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - `/api/cloud/*` 七条路由与 `cloud.Service`、`webdavfs`、desktop.Client 的 Cloud* 方法已删除（KI-5 已关闭）：P4 空间挂载走 `internal/spacedav`（建在 `internal/drive` 之上），不存在"不经控制面的云盘 WebDAV"路径，隔离边界不再有死代码可绕。
 - `internal/cloud` 仅保留前端契约类型与预览辅助；`internal/cloud/objectstore` 的 provider-neutral 存储抽象（s3store + memory fake）仍在服役（控制面之外的用途）。
 - 本地 RustFS 开发环境见 `deploy/rustfs/`，生产启用受 ADR-0006 门禁约束；凭据真值只在 `deploy/rustfs/.env`（gitignore），由 `run-ruoyi-admin.ps1` 注入控制面进程。
+- **下载不经浏览器（2026-10-20）**：`App.CloudDownload` 在桌面进程内取预签名 GET 流、写入接收目录（`ReceiveDir`，每次从 `config.json` 现读），同名自动加 ` (n)`；字节先落 `.easyshare-download-*.part`，完成后再改名，失败不留半截文件。进度写入 Core 统一任务（`kind=cloud_download`，创建时即带 `localPath`），活动面板与传输列表按任务展示；需要换落点时走 `App.CloudDownloadAs` 的保存框。预签名 URL 不再交给 `BrowserOpenURL`，否则进度、失败原因和完成入口都会脱离应用。
 
 ## 8a. 知识网关（桌面端 ↔ 知识服务）
 
@@ -278,7 +279,8 @@ desktop eventStream (Go 协程，指数退避重连)
 | --- | --- | --- |
 | 托盘 | 原生 Shell_NotifyIcon（ICO，NOTIFYICON_VERSION_4 + 悬停浮窗） | NSStatusItem（tray_native_darwin.m） |
 | 文件入口 | Shell NameSpace 注册表 | mount_webdav / osascript |
-| 打开文件 | `explorer /select,` | `open` |
+| 打开文件 | `ShellExecute("open")` | `open` |
+| 在文件夹中显示 | `explorer /select,` | `open -R` |
 | 磁盘枚举 | kernel32 GetLogicalDrives | syscall.Statfs /Volumes |
 | Core 进程 | 同目录子进程 | Setsid 独立会话 |
 | 构建 | `wails build` + NSIS | GitHub Actions macos-latest |

@@ -124,6 +124,10 @@ const openFile = (task: TransferTask) => {
   if (task.localPath) void core.openFile(task.localPath)
 }
 
+const showInFolder = (task: TransferTask) => {
+  if (task.localPath) void core.showInFolder(task.localPath)
+}
+
 const openFolder = () => {
   void core.openReceiveFolder()
 }
@@ -193,6 +197,7 @@ const canConfirmReceive = (task: TransferTask) =>
                   </div>
                   <div v-if="item.status === 'completed' && item.localPath" class="row-actions">
                     <button class="secondary-button compact" type="button" @click="openFile(item)">打开</button>
+                    <button class="secondary-button compact" type="button" @click="showInFolder(item)">打开所在文件夹</button>
                   </div>
                   <button v-if="taskIsTerminal(item.status)" class="delete-btn" type="button" :aria-label="`删除记录 ${item.fileName}`" @click="$emit('delete', item.id)">×</button>
                 </div>
@@ -231,6 +236,7 @@ const canConfirmReceive = (task: TransferTask) =>
               </div>
               <div v-if="entry.task.status === 'completed' && entry.task.localPath" class="row-actions">
                 <button class="secondary-button compact" type="button" @click="openFile(entry.task)">打开文件</button>
+                <button class="secondary-button compact" type="button" @click="showInFolder(entry.task)">打开所在文件夹</button>
               </div>
               <button v-if="taskIsTerminal(entry.task.status)" class="delete-btn" type="button" :aria-label="`删除记录 ${entry.task.fileName}`" @click="$emit('delete', entry.task.id)">×</button>
             </div>

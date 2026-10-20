@@ -65,6 +65,8 @@ export function CloudDelete(arg1:string):Promise<void>;
 
 export function CloudDownload(arg1:string):Promise<void>;
 
+export function CloudDownloadAs(arg1:string):Promise<void>;
+
 export function CloudFreeUpSpace(arg1:string):Promise<void>;
 
 export function CloudKeepOnDevice(arg1:string):Promise<void>;
@@ -248,6 +250,8 @@ export function ServiceEndpoints():Promise<main.ServiceEndpoints>;
 export function SetDropSpace(arg1:string):Promise<void>;
 
 export function SetFileVisibility(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
+
+export function ShowInFolder(arg1:string):Promise<void>;
 
 export function ShutdownAll():Promise<void>;
 

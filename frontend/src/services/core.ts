@@ -24,6 +24,7 @@ import {
   CfapiMountPath,
   ClearHistory,  CloudDelete,
   CloudDownload,
+  CloudDownloadAs,
   CloudFreeUpSpace,
   CloudKeepOnDevice,
   CloudRename,
@@ -89,6 +90,7 @@ import {
   OpenCfapiFolder,
   OpenFile,
   OpenReceiveFolder,
+  ShowInFolder,
   OpenUpdatesFolder,
   PluginInstallFromMarket,
   PluginInstallFromPath,
@@ -178,6 +180,8 @@ export const core = {
   deleteTask: DeleteTask,
   openFile: OpenFile,
   openReceiveFolder: OpenReceiveFolder,
+  // 任务完成后在资源管理器 / Finder 中定位文件
+  showInFolder: ShowInFolder,
   // CfApi 占位符目录（切片 5）：空串 = 未挂载（旧系统/非 Windows/未登录），前端隐藏入口
   cfapiMountPath: () => CfapiMountPath() as Promise<string>,
   openCfapiFolder: OpenCfapiFolder,
@@ -187,6 +191,8 @@ export const core = {
   cloudUploadFolder: (targetDir: string) => CloudUploadFolder(targetDir) as Promise<string>,
   cloudUploadPaths: CloudUploadPaths,
   cloudDownload: CloudDownload,
+  // 另存为：先弹保存框再流式下载；默认下载落接收目录并由活动面板显示进度
+  cloudDownloadAs: CloudDownloadAs,
   cloudDelete: CloudDelete,
   // 长效可撤销的分享；cloudShare 是 10 分钟预签名，只用于「马上下一份」
   cloudShareLink: (key: string, expiresHours: number) =>

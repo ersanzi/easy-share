@@ -1,7 +1,10 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import ActivityDrawer from '../ActivityDrawer.vue'
 import type { TransferTask } from '../../types/core'
+
+const coreMocks = vi.hoisted(() => ({ openFile: vi.fn(), showInFolder: vi.fn() }))
+vi.mock('../../services/core', () => ({ core: coreMocks }))
 
 const task = (overrides: Partial<TransferTask> = {}): TransferTask => ({
   id: 'task-1',
@@ -81,6 +84,29 @@ describe('ActivityDrawer', () => {
     expect(wrapper.text()).toContain('网络连接已断开')
     expect(wrapper.text()).toContain('2.0 KB/s')
     expect(wrapper.find('[data-task-id="running"] [role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+  })
+
+  it('offers open and reveal actions for a completed local download', async () => {
+    const wrapper = mount(ActivityDrawer, {
+      props: {
+        tasks: [task({
+          id: 'download',
+          kind: 'cloud_download',
+          direction: 'receive',
+          status: 'completed',
+          localPath: 'C:/Users/tester/Downloads/EasyShare/demo.zip',
+        })],
+      },
+    })
+
+    const actions = wrapper.get('[data-task-id="download"] .activity-actions')
+    const buttons = actions.findAll('button')
+    expect(buttons.map(button => button.text())).toEqual(['打开文件', '打开所在文件夹'])
+
+    await buttons[0].trigger('click')
+    await buttons[1].trigger('click')
+    expect(coreMocks.openFile).toHaveBeenCalledWith('C:/Users/tester/Downloads/EasyShare/demo.zip')
+    expect(coreMocks.showInFolder).toHaveBeenCalledWith('C:/Users/tester/Downloads/EasyShare/demo.zip')
   })
 
   it('renders an informative empty state', () => {

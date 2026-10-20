@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { TransferTask } from '../types/core'
+import { core } from '../services/core'
 import {
   compareTasks,
   formatBytes,
@@ -51,6 +52,12 @@ const failureCount = computed(() => props.tasks.filter(task => task.status === '
 const hiddenCount = computed(() => Math.max(0, props.tasks.length - visibleTasks.value.length))
 
 const close = () => emit('close')
+const openLocalFile = (task: TransferTask) => {
+  if (task.localPath) void core.openFile(task.localPath)
+}
+const showInFolder = (task: TransferTask) => {
+  if (task.localPath) void core.showInFolder(task.localPath)
+}
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape') close()
 }
@@ -148,6 +155,12 @@ onBeforeUnmount(() => {
                 <span v-if="item.speed > 0 && item.status === 'running'" class="speed-active">{{ formatBytes(item.speed) }}/s</span>
                 <span v-if="formatTaskDuration(item)">用时 {{ formatTaskDuration(item) }}</span>
                 <span v-if="item.error" class="activity-error" :title="formatErrorDetail(item)">{{ item.error }}</span>
+              </div>
+
+              <!-- 完成后的两个落点动作；下载到应用内才有的闭环（原先浏览器下载没有） -->
+              <div v-if="item.status === 'completed' && item.localPath" class="row-actions activity-actions">
+                <button class="secondary-button compact" type="button" @click="openLocalFile(item)">打开文件</button>
+                <button class="secondary-button compact" type="button" @click="showInFolder(item)">打开所在文件夹</button>
               </div>
             </div>
           </article>

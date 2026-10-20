@@ -194,7 +194,12 @@ const handleCloudUploadFolder = async (targetDir = '') => {
   await app.cloudUploadFolder(targetDir)
 }
 const handleCloudDownload = async (key: string) => {
-  await app.cloudDownload(key)
+  // 默认下载落接收目录；开活动抽屉让进度立刻可见（WPS / 钉钉的传输面板同款反馈）。
+  const started = await app.cloudDownload(key)
+  if (started) activityOpen.value = true
+}
+const handleCloudDownloadAs = async (key: string) => {
+  await app.cloudDownloadAs(key)
 }
 const handleCloudDelete = async (key: string, subCount?: number, subDirCount?: number) => {
   // 目录 key 带尾斜杠：递归删时子文件逐个进回收站，目录标记本身直接删（目录没有
@@ -691,6 +696,7 @@ const avatarText = computed(() => {
             @upload="handleCloudUpload"
             @upload-folder="handleCloudUploadFolder"
             @download="handleCloudDownload"
+            @download-as="handleCloudDownloadAs"
             @delete="handleCloudDelete"
           />
         </template>

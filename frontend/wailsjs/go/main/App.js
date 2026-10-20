@@ -110,6 +110,10 @@ export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }
 
+export function CloudDownloadAs(arg1) {
+  return window['go']['main']['App']['CloudDownloadAs'](arg1);
+}
+
 export function CloudFreeUpSpace(arg1) {
   return window['go']['main']['App']['CloudFreeUpSpace'](arg1);
 }
@@ -476,6 +480,10 @@ export function SetDropSpace(arg1) {
 
 export function SetFileVisibility(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetFileVisibility'](arg1, arg2, arg3);
+}
+
+export function ShowInFolder(arg1) {
+  return window['go']['main']['App']['ShowInFolder'](arg1);
 }
 
 export function ShutdownAll() {

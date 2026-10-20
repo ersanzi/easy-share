@@ -400,6 +400,7 @@ func (server *Server) createTask(writer http.ResponseWriter, request *http.Reque
 	var input struct {
 		Kind       task.Kind      `json:"kind"`
 		FileName   string         `json:"fileName"`
+		LocalPath  string         `json:"localPath"`
 		Direction  task.Direction `json:"direction"`
 		Peer       string         `json:"peer"`
 		BatchID    string         `json:"batchId"`
@@ -416,6 +417,7 @@ func (server *Server) createTask(writer http.ResponseWriter, request *http.Reque
 	created, err := server.tasks.Create(task.Task{
 		Kind:       input.Kind,
 		FileName:   input.FileName,
+		LocalPath:  input.LocalPath,
 		Direction:  input.Direction,
 		Peer:       input.Peer,
 		BatchID:    input.BatchID,
@@ -438,6 +440,8 @@ func (server *Server) patchTask(writer http.ResponseWriter, request *http.Reques
 		Speed            *float64     `json:"speed"`
 		Status           *task.Status `json:"status"`
 		Error            *string      `json:"error"`
+		ErrorCode        *string      `json:"errorCode"`
+		SystemCode       *string      `json:"systemCode"`
 	}
 	if json.NewDecoder(request.Body).Decode(&input) != nil {
 		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid JSON"})
@@ -455,6 +459,12 @@ func (server *Server) patchTask(writer http.ResponseWriter, request *http.Reques
 		}
 		if input.Error != nil {
 			value.Error = *input.Error
+		}
+		if input.ErrorCode != nil {
+			value.ErrorCode = *input.ErrorCode
+		}
+		if input.SystemCode != nil {
+			value.SystemCode = *input.SystemCode
 		}
 		return nil
 	})

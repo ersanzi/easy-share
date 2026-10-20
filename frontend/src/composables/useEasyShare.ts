@@ -389,6 +389,7 @@ export function useEasyShare() {
       }
     },
     cloudDownload: (key: string) => act('下载文件', () => core.cloudDownload(key)),
+    cloudDownloadAs: (key: string) => act('另存云端文件', () => core.cloudDownloadAs(key)),
     cloudDelete: (key: string) => act('删除文件', () => core.cloudDelete(key)),
     cloudShare: (key: string, hours: number) => core.cloudShare(key, hours),
     startDrive: () => act('启动 WebDAV', core.startDrive),
