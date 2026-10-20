@@ -31,6 +31,17 @@ const messages = ref<ChatMessage[]>([])
 const draft = ref('')
 const asking = ref(false)
 const listRef = ref<HTMLElement | null>(null)
+const inputRef = ref<HTMLInputElement | null>(null)
+
+const suggestions = [
+  '出差住宿标准是多少？',
+  '报销需要哪些材料？',
+  '知识库支持哪些文件格式？',
+]
+const useSuggestion = (question: string) => {
+  draft.value = question
+  void nextTick(() => inputRef.value?.focus())
+}
 
 const llmLabel = computed(() => health.value?.llm === 'configured' ? 'AI 生成已启用' : health.value?.llm === 'absent' ? '未配置 AI（仅检索）' : '')
 
@@ -234,9 +245,16 @@ onMounted(onMountedPrefill)
       </div>
 
       <div ref="listRef" class="knowledge-message-list" role="log" aria-live="polite">
-        <p v-if="!messages.length" class="knowledge-empty">
-          问一个问题试试，例如「出差住宿标准是多少？」
-        </p>
+        <div v-if="!messages.length" class="knowledge-empty">
+          <span class="knowledge-empty-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 4.5C10.5 3.5 8.5 3 6 3v15c2.5 0 4.5.5 6 1.5 1.5-1 3.5-1.5 6-1.5V3c-2.5 0-4.5.5-6 1.5Z"/><path d="M12 4.5v15"/></svg>
+          </span>
+          <strong>问一个问题，答案会带引用来源</strong>
+          <p>从公司知识库里检索，回答下方会列出引用的文档。</p>
+          <div class="knowledge-suggestions">
+            <button v-for="question in suggestions" :key="question" type="button" @click="useSuggestion(question)">{{ question }}</button>
+          </div>
+        </div>
         <div v-for="(message, index) in messages" :key="index" :class="['knowledge-message', message.role]">
           <div v-if="message.role === 'user'" class="knowledge-bubble">{{ message.text }}</div>
           <div v-else class="knowledge-answer">
@@ -271,6 +289,7 @@ onMounted(onMountedPrefill)
           maxlength="500"
           placeholder="输入问题，回车发送"
           :disabled="asking"
+          ref="inputRef"
           @keydown.enter.exact.prevent="ask"
         />
         <button class="primary-button" type="submit" :disabled="asking || !draft.trim()">

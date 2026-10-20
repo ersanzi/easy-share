@@ -286,7 +286,8 @@ onBeforeUnmount(() => {
       <button type="button" aria-label="关闭" @click="loadError = ''">×</button>
     </div>
 
-    <div class="settings-grid">
+    <div class="settings-columns">
+      <div class="settings-column">
       <!-- 账号资料 -->
       <div class="card settings-card">
         <div class="card-header">
@@ -405,6 +406,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      </div>
+
+      <div class="settings-column settings-column-side">
       <!-- AI 工具连接（听记 MCP，只读） -->
       <div class="card settings-card">
         <div class="card-header">
@@ -499,6 +503,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
         </div>
+      </div>
       </div>
     </div>
 

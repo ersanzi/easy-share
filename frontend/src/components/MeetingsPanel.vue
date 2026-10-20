@@ -6,6 +6,8 @@ import type { KnowledgeStatus, MeetingChatTurn, MeetingLiveLine, MeetingRecord, 
 import { MeetingRecorder, decodeAudioFileToWav } from '../services/recorder'
 import type { RecordingSource } from '../services/recorder'
 import MeetingPoster from './MeetingPoster.vue'
+import MeetingVisualReport from './MeetingVisualReport.vue'
+import MindMap from './MindMap.vue'
 
 // 会议听记：录音（前端 16k WAV）→ /kapi 同源网关上传 → 知识服务 FunASR 转写 +
 // 说话人分离 + LLM 总结。登录态与「知识」页同源（Core 网关）。
@@ -644,46 +646,13 @@ const removeTodo = async (todo: MeetingTodo) => {
   }
 }
 
-// ─── 思维导图（LLM 大纲 → 自绘结构树，零依赖必然可见；markmap 图形渲染待查后置）───
+// ─── 思维导图（真图渲染在 MindMap.vue；这里只管生成/重生成）───
+//
+// 2026-10-12 曾把 markmap 降级成"自绘嵌套列表"，因为没排查出画布空白的根因就绕开了。
+// 2026-10-18 定位到三条缺一不可的条件（容器有确定高度 / 挂载后下一帧再建图 / 数据经 Transformer
+// 转换），改在 MindMap.vue 里用可断言的形态固定住，并补了组件回归用例（断言渲染出 g.markmap-node）。
 
 const mindmapBusy = ref(false)
-
-// 解析 LLM 大纲（#/##/-/缩进- 最多四级）为树：{title, branches: [{title, items: [{text, children: []}]}]}
-const mindmapTree = computed(() => {
-  const markdown = selected.value?.mindmap || ''
-  const root = { title: '', branches: [] as { title: string; items: { text: string; children: string[] }[] }[] }
-  let current: { title: string; items: { text: string; children: string[] }[] } | null = null
-  let last: { text: string; children: string[] } | null = null
-  for (const raw of markdown.split(/\r?\n/)) {
-    const line = raw.replace(/\t/g, '  ')
-    if (!line.trim()) continue
-    if (line.startsWith('## ')) {
-      current = { title: line.slice(3).trim(), items: [] }
-      root.branches.push(current)
-      last = null
-    } else if (line.startsWith('# ')) {
-      root.title = line.slice(2).trim()
-      last = null
-    } else {
-      const trimmed = line.trim()
-      const indented = /^\s/.test(line)
-      const text = trimmed.startsWith('- ') ? trimmed.slice(2).trim() : trimmed
-      if (!current) {
-        current = { title: text, items: [] }
-        root.branches.push(current)
-        last = null
-        continue
-      }
-      if (indented && last) {
-        last.children.push(text)
-      } else {
-        last = { text, children: [] }
-        current.items.push(last)
-      }
-    }
-  }
-  return root
-})
 
 const summaryRegenBusy = ref(false)
 const regenTemplateId = ref('')
@@ -764,10 +733,12 @@ const exportFile = async (format: 'markdown' | 'docx') => {
       anchor.click()
       URL.revokeObjectURL(url)
     } else {
-      const response = await fetch(`/kapi/meetings/${encodeURIComponent(selected.value.id)}/export/docx`)
+      // Word：钉钉版式纪要（封面可视化报告 + 文档体 + AI洞察 + 待办 + 章节 + 汇报卡），
+      // 末尾附转写全文附页，方便同事对照原话
+      const response = await fetch(`/kapi/meetings/${encodeURIComponent(selected.value.id)}/export/docx?with_transcript=1`)
       if (!response.ok) throw new Error((await response.text()) || `导出失败（${response.status}）`)
       const blob = await response.blob()
-      let filename = `${selected.value.title} 备忘录.docx`
+      let filename = `${selected.value.title} 纪要.docx`
       const star = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') || '')
       if (star) filename = decodeURIComponent(star[1])
       const url = URL.createObjectURL(blob)
@@ -788,6 +759,8 @@ const exportFile = async (format: 'markdown' | 'docx') => {
 // ─── 图文海报（内置主题；前端 html2canvas 截图导出 PNG，后端零改动）───
 
 const POSTER_THEMES = [
+  // 汇报卡排第一：对标钉钉「可视化报告」导出件的那种带色块分区的纪要页（A4 版式）
+  { id: 'report', name: '汇报卡' },
   { id: 'classic', name: '经典' },
   { id: 'carbon', name: '碳素' },
   { id: 'aurora', name: '极光' },
@@ -796,12 +769,13 @@ const POSTER_THEMES = [
 ] as const
 
 const posterOpen = ref(false)
-const posterTheme = ref<string>('classic')
+const posterTheme = ref<string>('report')
 const posterBusy = ref(false)
 const posterCaptureHost = ref<HTMLElement | null>(null)
 
 const openPoster = () => {
-  posterTheme.value = 'classic'
+  // 有结构化汇报卡结构时默认选汇报卡，否则回落经典长图
+  posterTheme.value = selected.value?.summary?.visual?.sections?.length ? 'report' : 'classic'
   posterOpen.value = true
 }
 
@@ -826,28 +800,56 @@ watch(posterOpen, async (open) => {
 onBeforeUnmount(() => window.removeEventListener('keydown', onPosterKeydown))
 
 // 截图统一走离屏全尺寸实例（弹窗里的预览实例经 zoom 缩放，不能直接当截图根）
-const capturePosterBlob = async (): Promise<Blob> => {
+const capturePosterCanvas = async (): Promise<HTMLCanvasElement> => {
   const { default: html2canvas } = await import('html2canvas')
-  const target = posterCaptureHost.value?.querySelector('.meeting-poster') as HTMLElement | null
+  const target = posterCaptureHost.value?.querySelector('.meeting-poster, .visual-report') as HTMLElement | null
   if (!target) throw new Error('海报未渲染')
-  const canvas = await html2canvas(target, { scale: 2, backgroundColor: null, logging: false })
+  return html2canvas(target, { scale: 2, backgroundColor: null, logging: false })
+}
+
+const capturePosterBlob = async (): Promise<Blob> => {
+  const canvas = await capturePosterCanvas()
   const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
   if (!blob) throw new Error('图片编码失败')
   return blob
+}
+
+const posterFileName = (ext: string) =>
+  `${selected.value?.title ?? '会议'} ${posterTheme.value === 'report' ? '汇报卡' : '图文纪要'}.${ext}`
+
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 const savePoster = async () => {
   if (!selected.value || posterBusy.value) return
   posterBusy.value = true
   try {
-    const blob = await capturePosterBlob()
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `${selected.value.title} 图文纪要.png`
-    anchor.click()
-    URL.revokeObjectURL(url)
+    downloadBlob(await capturePosterBlob(), posterFileName('png'))
     showNotice('海报图片已保存')
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    posterBusy.value = false
+  }
+}
+
+// 导出 PDF：离屏 A4 实例（794px 宽 @96dpi = A4 宽度）截图后嵌进单页 PDF。
+// 刻意不用 window.print()——WebView2 的打印对话框会打断桌面应用；汇报卡本就是一页 A4，
+// PNG 嵌页与 Word→PDF 的观感一致，且走 services/pdf.ts 手写 PDF，零额外依赖。
+const exportPosterPdf = async () => {
+  if (!selected.value || posterBusy.value) return
+  posterBusy.value = true
+  try {
+    const { canvasToFlateData, buildA4Pdf } = await import('../services/pdf')
+    const canvas = await capturePosterCanvas()
+    downloadBlob(buildA4Pdf(canvasToFlateData(canvas)), posterFileName('pdf'))
+    showNotice('PDF 已导出')
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
@@ -1342,7 +1344,32 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <!-- 思维导图卡 -->
+            <!-- AI 洞察 / 核心发言卡（对标钉钉同款两段：「AI洞察」三点 + 「核心发言提炼」观点与原话引用）
+                 老记录由 AI 总结生成时没有这两块，按模板重生成即出 -->
+            <section v-if="selected.summary?.insights?.length || selected.summary?.quote_kp" class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>AI 洞察</h3>
+                <span class="meeting-block-count">导出 Word / 汇报卡时同版呈现</span>
+              </header>
+              <ul v-if="selected.summary?.insights?.length" class="meeting-summary">
+                <li v-for="(insight, index) in selected.summary.insights" :key="index">{{ insight }}</li>
+              </ul>
+              <div v-if="selected.summary?.quote_kp" class="meeting-kp">
+                <p class="meeting-kp-head">核心发言提炼 · {{ selected.summary.quote_kp.speaker || '发言人' }}</p>
+                <ul v-if="selected.summary.quote_kp.points?.length" class="meeting-summary">
+                  <li v-for="(point, index) in selected.summary.quote_kp.points" :key="index">{{ point }}</li>
+                </ul>
+                <blockquote
+                  v-for="(quote, index) in selected.summary.quote_kp.quotes || []"
+                  :key="`q${index}`"
+                  class="meeting-kp-quote"
+                >
+                  {{ quote }}
+                </blockquote>
+              </div>
+            </section>
+
+            <!-- 思维导图卡（真图：markmap 放射状导图，可折叠/缩放/导出 SVG；对标钉钉听记导图区块） -->
             <section class="meeting-block">
               <header class="meeting-block-head">
                 <h3>思维导图</h3>
@@ -1350,22 +1377,7 @@ onBeforeUnmount(() => {
                   {{ mindmapBusy ? '生成中…（AI 从转写提取）' : selected.mindmap ? '重新生成' : '生成导图' }}
                 </button>
               </header>
-              <div v-if="mindmapTree.title || mindmapTree.branches.length" class="meeting-map-tree">
-                <div class="meeting-map-root">{{ mindmapTree.title || selected.title }}</div>
-                <div class="meeting-map-branches">
-                  <div v-for="branch in mindmapTree.branches" :key="branch.title" class="meeting-map-branch">
-                    <div class="meeting-map-branch-title">{{ branch.title }}</div>
-                    <ul class="meeting-map-leaves">
-                      <li v-for="item in branch.items" :key="item.text">
-                        {{ item.text }}
-                        <ul v-if="item.children.length" class="meeting-map-subleaves">
-                          <li v-for="child in item.children" :key="child">{{ child }}</li>
-                        </ul>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
+              <MindMap v-if="selected.mindmap" :markdown="selected.mindmap" />
               <p v-else-if="!mindmapBusy" class="meeting-hint">
                 {{ selected.segments.length ? '还没有导图，点「生成导图」用 AI 从转写提炼结构' : '本次录音没有可提炼的发言内容' }}
               </p>
@@ -1461,25 +1473,31 @@ onBeforeUnmount(() => {
               type="button"
               @click="posterTheme = theme.id"
             >
-              <span :class="['meeting-poster-theme-chip', `meeting-poster-theme-chip--${theme.id}`]" aria-hidden="true">Aa</span>
+              <span :class="['meeting-poster-theme-chip', `meeting-poster-theme-chip--${theme.id}`]" aria-hidden="true">
+                <template v-if="theme.id === 'report'"><i /><i /><i /></template>
+                <template v-else>Aa</template>
+              </span>
               {{ theme.name }}
             </button>
           </div>
           <div class="meeting-poster-scroll">
             <div class="meeting-poster-preview">
-              <MeetingPoster :meeting="selected" :theme="posterTheme" />
+              <MeetingVisualReport v-if="posterTheme === 'report'" :meeting="selected" />
+              <MeetingPoster v-else :meeting="selected" :theme="posterTheme" />
             </div>
           </div>
           <div class="meeting-poster-actions">
-            <span v-if="posterBusy" class="meeting-hint">正在生成图片…</span>
+            <span v-if="posterBusy" class="meeting-hint">正在生成…</span>
             <button class="text-button" type="button" :disabled="posterBusy" @click="copyPoster">复制图片</button>
+            <button class="text-button" type="button" :disabled="posterBusy" @click="exportPosterPdf">导出 PDF</button>
             <button class="primary-button" type="button" :disabled="posterBusy" @click="savePoster">保存图片</button>
           </div>
         </div>
       </div>
       <!-- 离屏全尺寸海报：html2canvas 截图根（预览实例带 zoom，不能直接截） -->
       <div v-if="posterOpen && selected" ref="posterCaptureHost" class="meeting-poster-offscreen" aria-hidden="true">
-        <MeetingPoster :meeting="selected" :theme="posterTheme" />
+        <MeetingVisualReport v-if="posterTheme === 'report'" :meeting="selected" />
+        <MeetingPoster v-else :meeting="selected" :theme="posterTheme" />
       </div>
 
       <!-- 记录列表 -->
@@ -1506,6 +1524,7 @@ onBeforeUnmount(() => {
             {{ statusLabel(meeting.status) }}
           </span>
         </div>
+        <p v-if="filteredMeetings.length" class="meeting-list-end">共 {{ filteredMeetings.length }} 条听记</p>
       </div>
     </template>
   </div>

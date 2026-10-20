@@ -1,5 +1,5 @@
 // 预览专用 Wails 打桩：只在浏览器里跑界面时使用，不参与桌面端打包。
-// 场景由 ?scene= 选择（overview / devices / transfers / cloud / knowledge / meetings / settings / admin / empty），
+// 场景由 ?scene= 选择（overview / devices / transfers / cloud / knowledge / meetings / settings / admin / empty / login），
 // 供截图工具切换状态；真实产品里这些数据全部来自 Core。
 const scene = new URLSearchParams(location.search).get('scene') || 'overview'
 
@@ -11,6 +11,7 @@ const users: Record<string, any> = {
   overview: { loggedIn: true, userName: 'lifeng', nickName: '李丰', avatar: '', isAdmin: true },
   admin: { loggedIn: true, userName: 'lifeng', nickName: '李丰', avatar: '', isAdmin: true },
   empty: { loggedIn: true, userName: 'zhaomin', nickName: '赵敏', avatar: '', isAdmin: false },
+  login: { loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false },
 }
 const user = users[scene] ?? users.overview
 
