@@ -243,6 +243,35 @@ export interface MeetingChapter {
   gist?: string
 }
 
+// 可视化报告（汇报卡）单卡：LLM 结构化输出，导出与前端预览都按 layout 排布
+export interface MeetingVisualItem {
+  title: string
+  tag?: string
+  bullets?: string[]
+  note?: string
+}
+
+export interface MeetingVisualSection {
+  title: string
+  // cards=并列色卡 duo=两栏 flow=左右进程 list=清单 closing=单条共识
+  layout?: 'cards' | 'duo' | 'flow' | 'list' | 'closing' | 'lists' | string
+  // rose/blue/teal/amber/green：与后端色带轮转一致
+  accent?: string
+  items: MeetingVisualItem[]
+}
+
+export interface MeetingVisualReport {
+  summary?: string
+  sections: MeetingVisualSection[]
+}
+
+// 核心发言提炼（AI 洞察之外的另一条：谁说了什么、原话引用）
+export interface MeetingQuoteKp {
+  speaker?: string
+  points?: string[]
+  quotes?: string[]
+}
+
 export interface MeetingSummary {
   // 默认模板（会议纪要）：旧固定字段
   minutes?: string
@@ -251,6 +280,10 @@ export interface MeetingSummary {
   sections?: MeetingSection[]
   // 智能切片：按话题切段的时间锚点
   chapters?: MeetingChapter[]
+  // 汇报卡（对标钉钉可视化报告）：色卡结构 + AI 洞察 + 核心发言提炼
+  visual?: MeetingVisualReport
+  insights?: string[]
+  quote_kp?: MeetingQuoteKp
 }
 
 // AI 区块独立状态（对标钉钉分任务状态）：某块失败只补跑那块

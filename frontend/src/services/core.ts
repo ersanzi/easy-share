@@ -24,6 +24,8 @@ import {
   CfapiMountPath,
   ClearHistory,  CloudDelete,
   CloudDownload,
+  CloudFreeUpSpace,
+  CloudKeepOnDevice,
   CloudRename,
   CloudMove,
   CloudMkdir,
@@ -200,6 +202,10 @@ export const core = {
   cloudMove: CloudMove,
   // 新建文件夹：targetDir='' 表示当前根；重复创建同名幂等成功
   cloudMkdir: CloudMkdir,
+  // 本地保留两个开关：作用于「本地挂载」的占位符，只在 CfapiMountPath 非空时可点
+  // （Go 侧按云端路径映射到同步根下的本地文件，越界路径一律拒绝）
+  cloudKeepOnDevice: CloudKeepOnDevice,
+  cloudFreeUpSpace: CloudFreeUpSpace,
   // 星标：用户 × 路径的标记；最近访问是埋点，失败可忽略
   cloudStar: CloudStar,
   cloudStars: CloudStars,

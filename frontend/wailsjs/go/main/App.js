@@ -110,6 +110,14 @@ export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }
 
+export function CloudFreeUpSpace(arg1) {
+  return window['go']['main']['App']['CloudFreeUpSpace'](arg1);
+}
+
+export function CloudKeepOnDevice(arg1) {
+  return window['go']['main']['App']['CloudKeepOnDevice'](arg1);
+}
+
 export function CloudList() {
   return window['go']['main']['App']['CloudList']();
 }

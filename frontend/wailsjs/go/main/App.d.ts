@@ -65,6 +65,10 @@ export function CloudDelete(arg1:string):Promise<void>;
 
 export function CloudDownload(arg1:string):Promise<void>;
 
+export function CloudFreeUpSpace(arg1:string):Promise<void>;
+
+export function CloudKeepOnDevice(arg1:string):Promise<void>;
+
 export function CloudList():Promise<Array<cloud.File>>;
 
 export function CloudMkdir(arg1:string,arg2:string):Promise<void>;

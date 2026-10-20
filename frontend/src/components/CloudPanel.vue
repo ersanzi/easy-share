@@ -9,7 +9,7 @@ import { core } from '../services/core'
 
 
 defineProps<{ enabled: boolean }>()
-const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir: string]; download: [key: string]; delete: [key: string]; share: [key: string] }>()
+const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir: string]; download: [key: string]; delete: [key: string, subCount?: number, subDirCount?: number]; share: [key: string] }>()
 
 const files = ref<CloudFile[]>([])
 const loading = ref(false)
@@ -293,15 +293,16 @@ const commitMkdir = async () => {
   }
 }
 
-// 删除文件夹（只针对空文件夹）：非空时拒绝——递归删子树的事务边界没解决之前，
-// 不给用户一个「看起来删掉了、实际文件还在」的入口。确认框与真删语义在 App.vue。
-const requestDeleteFolder = (folder: { name: string; path: string }) => {
+// 删除文件夹：连同子树一起删（后端 recursive 语义）。
+// 确认框与真删在 App.vue，这里只把「里面有多少个文件、几个子文件夹」报给它——
+// 不报数量的确认框等于让用户猜自己删了什么。目录标记也在这份清单里
+// （cloudList 带目录），要按尾斜杠分开数，否则子文件夹会被说成文件。
+const requestDeleteFolder = (folder: { path: string }) => {
   const prefix = `${folder.path}/`
-  if (files.value.some(f => f.key.startsWith(prefix))) {
-    showNotice(`「${folder.name}」不为空，请先删除或移出其中的文件`)
-    return
-  }
-  emit('delete', prefix)
+  // 排除自身标记：「photos/」也满足 startsWith('photos/')，不去掉会把子文件夹多数一个
+  const under = files.value.filter(f => f.key.startsWith(prefix) && f.key !== prefix)
+  const subDirs = under.filter(f => f.key.endsWith('/')).length
+  emit('delete', prefix, under.length - subDirs, subDirs)
 }
 
 // ─── 批量选择 ───
@@ -451,7 +452,7 @@ const openCtxMenu = (event: MouseEvent, file: CloudFile) => {
   selectedFile.value = file
   // 贴边翻转，避免菜单被窗口边缘裁掉
   const width = 184
-  const height = 236
+  const height = cfapiPath.value ? 300 : 236
   ctxMenu.value = {
     x: Math.min(event.clientX, window.innerWidth - width - 8),
     y: Math.min(event.clientY, window.innerHeight - height - 8),
@@ -477,6 +478,28 @@ const ctxMove = () => runCtx(() => {
   moveOpen.value = true
 })
 const ctxDelete = () => runCtx(file => emit('delete', file.key))
+
+// ─── 本地保留（占位符专属）───
+// 对标 WPS / 钉盘的桌面标配：「始终保留在这台电脑上」与「释放空间」
+// （WPS 取证 §3.5 的 freeUpPlaceholder 同族动作）。两项只在占位符目录挂载时出现——
+// 没挂载就没有「本地副本」这个概念，藏起来比点了报错好。
+// 「释放空间」只退回空壳，云上的文件不受影响，重新点开会自动拉回来。
+const runPlaceholderOp = async (
+  label: string,
+  op: (key: string) => Promise<void>,
+  key: string,
+) => {
+  try {
+    await op(key)
+    showNotice(`${label}：已对「${key.split('/').pop() || key}」生效`)
+  } catch (err) {
+    showNotice(err instanceof Error ? err.message : `${label}失败`)
+  }
+}
+const ctxKeepOnDevice = () =>
+  runCtx(file => { void runPlaceholderOp('始终保留在这台电脑上', core.cloudKeepOnDevice, file.key) })
+const ctxFreeUpSpace = () =>
+  runCtx(file => { void runPlaceholderOp('释放空间', core.cloudFreeUpSpace, file.key) })
 
 // ─── 键盘导航 ───
 // 只遍历文件：文件夹没有详情面板，选中它没有可展示的内容。
@@ -792,7 +815,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', closeCtxMenu)
   window.removeEventListener('scroll', closeCtxMenu, true)
 })
-defineExpose({ refresh: loadFiles })
+// openRecycle：供外壳的「网盘」面板当一等入口（状态仍是本组件的 recycleOpen，不复制一份）
+defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true } })
 </script>
 
 <template>
@@ -954,7 +978,7 @@ defineExpose({ refresh: loadFiles })
           <div class="cloud-size"></div>
           <div class="cloud-actions">
             <button class="secondary-button compact" type="button" title="打开" @click.stop="enterFolder(folder.path)">打开</button>
-            <button class="secondary-button compact destructive-text" type="button" title="删除此空文件夹" @click.stop="requestDeleteFolder(folder)">删除</button>
+            <button class="secondary-button compact destructive-text" type="button" title="删除文件夹及其中的文件" @click.stop="requestDeleteFolder(folder)">删除</button>
           </div>
         </article>
 
@@ -1091,6 +1115,11 @@ defineExpose({ refresh: loadFiles })
     <button class="ctx-item" type="button" @click="ctxRename">重命名</button>
     <button class="ctx-item" type="button" @click="ctxMove">移动到…</button>
     <div class="ctx-sep"></div>
+    <template v-if="cfapiPath">
+      <button class="ctx-item" type="button" title="占位符会下载并留在本机，之后断网也能打开" @click="ctxKeepOnDevice">始终保留在这台电脑上</button>
+      <button class="ctx-item" type="button" title="只退回本地内容，云上的文件不受影响" @click="ctxFreeUpSpace">释放空间</button>
+      <div class="ctx-sep"></div>
+    </template>
     <button class="ctx-item danger" type="button" @click="ctxDelete">删除</button>
   </div>
 
