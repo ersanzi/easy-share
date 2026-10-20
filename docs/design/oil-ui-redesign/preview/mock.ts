@@ -57,6 +57,54 @@ const cloudFiles = [
   { key: '团队合影.jpg', name: '团队合影.jpg', size: 4194304, contentType: 'image/jpeg', lastModified: iso(5760), previewKind: 'image', fileId: 9, uploadByName: '赵敏' },
 ]
 
+// 听记详情样例：发言人区块、章节、待办、问答都需要真实形状的数据才能点验
+const meetingDetailMock: any = {
+  id: 'm1',
+  title: 'Q4 产品规划评审',
+  created_at: iso(120),
+  owner: '李丰',
+  status: 'completed',
+  error: null,
+  duration_seconds: 3725,
+  speaker_count: 4,
+  speaker_names: { '0': '李丰', '1': '赵敏', '2': '王强', '3': '陈默' },
+  keywords: ['路线图', '定价', '灰度发布', '企业版'],
+  template_id: 'meeting-minutes',
+  blocks: { transcript: 'ready', keywords: 'ready', summary: 'ready', mindmap: 'ready' },
+  block_errors: {},
+  summary: {
+    minutes: '本次评审确认 Q4 主线是知识库与网盘联动，10 月底完成灰度，11 月进入企业客户试用。',
+    key_points: ['Q4 主线锁定知识库与网盘联动', '10 月底完成灰度发布', '企业版定价按席位计价'],
+    sections: [
+      { title: '路线图与节奏', text: '10 月底完成灰度发布，11 月进入企业客户试用；移动端跟随桌面端之后排期。' },
+      { title: '定价与商业化', text: '企业版按席位计价，首批客户给三个月试用期；具体价格由销售在评审后确认。' },
+      { title: '风险与依赖', text: '知识服务容量需要在灰度前扩容，依赖运维在本周内完成压测。' },
+    ],
+    chapters: [
+      { title: '开场与目标', start: 0, end: 320, gist: '确认本次评审范围' },
+      { title: '路线图排期', start: 320, end: 1500, gist: '灰度与企业版节奏' },
+      { title: '定价讨论', start: 1500, end: 2600, gist: '按席位计价' },
+      { title: '风险与待办', start: 2600, end: 3725, gist: '容量压测与跟进人' },
+    ],
+    insights: ['会议对灰度时间有明确共识，但企业版定价仍待销售确认。', '容量压测是当前唯一硬依赖，负责人已明确。'],
+    quote_kp: { speaker: '赵敏', points: ['先灰度再放量，避免一次性铺开'], quotes: ['我们先把 10 月底的灰度守住，企业版可以晚两周。'] },
+  },
+  todos: [
+    { id: 't1', task: '完成知识服务容量压测', owner_hint: '王强', due_hint: '本周五', done: false, source: 'ai' },
+    { id: 't2', task: '确认企业版席位报价', owner_hint: '赵敏', due_hint: '下周一', done: false, source: 'ai' },
+    { id: 't3', task: '输出灰度发布检查单', owner_hint: '陈默', due_hint: '10 月 25 日', done: true, source: 'manual' },
+  ],
+  segments: [
+    { start: 12.4, end: 26.8, speaker: '0', text: '今天主要确认 Q4 的路线图和灰度节奏，先把结论对齐，细节会后跟进。' },
+    { start: 27.2, end: 48.6, speaker: '1', text: '我建议 10 月底先完成灰度发布，企业版往后放两周，避免同时开两条战线。' },
+    { start: 49.0, end: 71.5, speaker: '2', text: '容量这块需要先压测，知识服务的检索和转写都会吃资源，我本周五前给结果。' },
+    { start: 72.1, end: 96.3, speaker: '0', text: '可以，灰度清单谁来出？发布前需要把回滚方案也写进去。' },
+    { start: 96.8, end: 121.2, speaker: '3', text: '我来出检查单，包含回滚和监控项，10 月 25 日发群里。' },
+    { start: 122.0, end: 149.4, speaker: '1', text: '企业版定价按席位走，首批客户给三个月试用，销售下周确认具体价格。' },
+  ],
+  mindmap: '# Q4 产品规划\n## 路线图\n### 10 月底灰度\n### 11 月企业试用\n## 定价\n### 按席位计价\n## 风险\n### 容量压测',
+}
+
 const ok = (data: unknown) => Promise.resolve(data)
 const noop = () => Promise.resolve(undefined)
 
@@ -90,6 +138,15 @@ const app: Record<string, (arg?: any) => Promise<any>> = {
     { id: 'm2', title: '设计系统周会', created_at: iso(1500), owner: '陈默', status: 'completed', error: null, duration_seconds: 1820, speaker_count: 3, speaker_names: { '0': '陈默', '1': '李丰', '2': '赵敏' }, segments: [], summary: null, keywords: ['组件', 'Token'], todos: [], mindmap: null, template_id: 'minutes', segment_count: 96 },
     { id: 'm3', title: '客户需求恳谈', created_at: iso(4300), owner: '赵敏', status: 'processing', error: null, duration_seconds: 2410, speaker_count: 2, speaker_names: { '0': '赵敏', '1': '客户代表' }, segments: [], summary: null, keywords: [], todos: [], mindmap: null, template_id: 'minutes' },
   ]),
+  MeetingDetail: (id: string) => ok(id === 'm1' ? { ...meetingDetailMock } : { ...meetingDetailMock, id, title: '设计系统周会' }),
+  MeetingSpeakerRename: (_id: string, speaker: string, name: string) => {
+    meetingDetailMock.speaker_names = { ...meetingDetailMock.speaker_names, [speaker]: name }
+    return ok({ ...meetingDetailMock })
+  },
+  MeetingHotwordsGet: () => ok({ words: ['EasyShare', '听记'], max: 100 }),
+  MeetingVoiceprintsGet: () => ok([{ name: '赵敏', sample_seconds: 35.1, updated_at: iso(1440) }]),
+  MeetingLivePoints: () => ok([]),
+  MeetingStreamWarm: noop,
   MySpaces: () => ok([{ spaceId: 's1', spaceType: 'personal', ownerId: 'u1', spaceName: '李丰的个人空间', quotaBytes: 1099511627776, usedBytes: 489626271744, status: '0', permission: 'owner' }]),
   CloudList: () => ok(cloudFiles),
   CloudStars: () => ok(['Q4产品路线图.pdf']),
