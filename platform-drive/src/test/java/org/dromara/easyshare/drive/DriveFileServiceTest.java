@@ -2,6 +2,7 @@ package org.dromara.easyshare.drive;
 
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.easyshare.drive.domain.EsFile;
+import org.dromara.easyshare.drive.domain.EsFileChangeLog;
 import org.dromara.easyshare.drive.mapper.EsFileMapper;
 import org.dromara.easyshare.drive.service.DriveChangeLogService;
 import org.dromara.easyshare.drive.service.DriveFileService;
@@ -21,6 +22,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -427,6 +429,34 @@ void markRecycledSnapshotsOriginPath() {
 void markRecycledMissingRowReturnsNull() {
     when(mapper.selectOne(any())).thenReturn(null);
     assertNull(service.markRecycled(EsFile.TYPE_PERSONAL, 1L, "ghost.txt"));
+    verify(mapper, never()).updateById(any(EsFile.class));
+}
+
+@Test
+void recycleSubtreeSoftDeletesEveryRowUnderDir() {
+    EsFile shallow = row(11L, "photos/a.jpg");
+    EsFile deep = row(12L, "photos/2024/b.jpg");
+    when(mapper.selectList(any())).thenReturn(List.of(shallow, deep));
+
+    int recycled = service.recycleSubtree(EsFile.TYPE_PERSONAL, 1L, "photos");
+
+    assertEquals(2, recycled);
+    assertEquals(EsFile.STATE_RECYCLED, shallow.getState());
+    assertEquals("photos/a.jpg", shallow.getOriginPath());
+    assertEquals(EsFile.STATE_RECYCLED, deep.getState());
+    assertNotNull(deep.getDeletedAt());
+    // 每个文件各记一条 deleted 变更：挂载盘按增量协议收删除事件，
+    // 漏一条就是本地留幽灵文件（钉盘子树删除同口径）
+    verify(changeLog, org.mockito.Mockito.times(2)).record(eq(EsFile.TYPE_PERSONAL), eq(1L),
+        eq(EsFileChangeLog.EVENT_DELETED), any(), any(), any(), any());
+}
+
+@Test
+void recycleSubtreeRejectsBlankDirPath() {
+    // 空目录路径会让 likeRight 退化成 "/" 前缀、命中整个空间——必须拒，
+    // 递归删这种破坏性操作不允许有「其实删了全盘」的解释空间
+    assertThrows(ServiceException.class,
+        () -> service.recycleSubtree(EsFile.TYPE_PERSONAL, 1L, ""));
     verify(mapper, never()).updateById(any(EsFile.class));
 }
 

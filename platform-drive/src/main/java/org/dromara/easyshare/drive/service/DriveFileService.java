@@ -404,6 +404,41 @@ public class DriveFileService {
         if (row == null) {
             return null;
         }
+        return markRowRecycled(spaceType, ownerId, row);
+    }
+
+    /**
+     * 递归软删一个目录的子树（对标钉盘 {@code deleteDentry} 的子树语义）：
+     * 目录内每个在用文件各自进回收站，对象保留、按 {@code origin_path} 逐个还原。
+     *
+     * <p>目录本身**不建行**——与 mkdir 同口径（目录没有内容哈希、版本与上传者，
+     * 补一行只会污染秒传判定）。目录标记对象由
+     * {@link DriveStorage#deleteDirectoryTree} 直接删；子文件还原后目录会按路径段
+     * 重新推导出来，不依赖标记对象复活。
+     *
+     * <p>扫描条件刻意带 {@code state IS NULL}：读侧把存量 NULL 行当在用
+     * （{@code normalizedState}），漏了它们就会出现「文件夹删了、里面的文件还在」。
+     *
+     * @param dirPath 目录相对路径，不含首尾斜杠（调用方剥掉尾斜杠再传）
+     * @return 进入回收站的文件数
+     */
+    public int recycleSubtree(String spaceType, Long ownerId, String dirPath) {
+        String normalized = DriveKeys.normalizeRelative(dirPath);
+        List<EsFile> rows = fileMapper.selectList(new LambdaQueryWrapper<EsFile>()
+            .eq(EsFile::getSpaceType, spaceType)
+            .eq(EsFile::getOwnerId, ownerId)
+            .and(w -> w.eq(EsFile::getState, EsFile.STATE_ACTIVE).or().isNull(EsFile::getState))
+            .likeRight(EsFile::getFilePath, normalized + "/"));
+        for (EsFile row : rows) {
+            markRowRecycled(spaceType, ownerId, row);
+        }
+        return rows.size();
+    }
+
+    /**
+     * 把一条在用行置进回收站（单文件与子树递归共用同一次状态迁移）。
+     */
+    private EsFile markRowRecycled(String spaceType, Long ownerId, EsFile row) {
         // 显式置 state：列上线前的存量行在库里是 NULL，置 recycled 必须先落成 active，
         // 否则 MyBatis-Plus 默认忽略 NULL 字段，行会带 NULL state 进回收站
         // （部分索引不收 NULL，restore 也查不到它）

@@ -319,7 +319,11 @@ public class DriveController {
      * 删除指定空间内的文件。共享空间需要写权限。
      * 支持 fileId（优先，稳定身份链路）或路径（过渡期兼容）；两者都给时以 fileId 为准。
      *
-     * @param body 相对路径（或 fileId）与空间
+     * <p>目录带 {@code recursive=true} 时删整棵子树（对标钉盘 {@code deleteDentry}：
+     * 子文件逐个软删进回收站、内部目录标记对象一并清掉）。不带该标记时**只删目录自身**
+     * ——即只清标记对象，子文件不动，与挂载盘/WebDAV 的既有语义一致。
+     *
+     * @param body 相对路径（或 fileId）、空间，以及目录是否递归
      * @return 操作结果
      */
     @DeleteMapping("/object")
@@ -335,6 +339,14 @@ public class DriveController {
         boolean isDir = body.path() != null && body.path().endsWith("/");
         String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(),
             isDir ? body.path().replaceAll("/+$", "") : body.path());
+        if (isDir && body.fileId() == null && Boolean.TRUE.equals(body.recursive())) {
+            // 递归删：先软删子树里的每个文件行（对象保留、可还原），再清掉整棵
+            // 目录标记。顺序不能反——反了中途失败会留下「标记没了但文件还在」的孤儿。
+            fileService.recycleSubtree(body.space(), ownerId, path);
+            storage.deleteDirectoryTree(prefix, path);
+            usageService.invalidate(prefix);
+            return R.ok();
+        }
         // 软删（P1 回收站）：RustFS 对象保留，目录行置 recycled + 原路径快照。
         // 还原时同键复位，无需搬对象；彻底删除走 /recycle/purge 才真删对象。
         EsFile recycled = fileService.markRecycled(body.space(), ownerId, path);
@@ -832,10 +844,19 @@ public class DriveController {
         String space) {
     }
 
+    /**
+     * 路径类请求体（预签名下载 / 删除 / 打点共用）。
+     *
+     * @param path      空间内相对路径；目录以尾斜杠标识
+     * @param space     personal / shared，空则按个人空间
+     * @param fileId    稳定身份（优先于 path）
+     * @param recursive 仅对目录生效：true 时连同子树一起删（子文件进回收站）
+     */
     public record PathBo(
         String path,
         String space,
-        Long fileId) {
+        Long fileId,
+        Boolean recursive) {
     }
     /**
      * 改名 / 移动请求体。

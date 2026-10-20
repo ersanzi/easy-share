@@ -275,6 +275,36 @@ public class DriveStorage {
     }
 
     /**
+     * 删除目录及其内部**所有目录标记对象**（递归删的存储侧一半，文件对象不碰）。
+     *
+     * <p>为什么只删标记对象：文件对象此刻已归回收站里的行所有，
+     * 由 {@code /recycle/purge} 或 30 天巡检负责真删；这里若一起删，
+     * 还原出来的就是「目录在、内容空」的幽灵文件。
+     *
+     * <p>先收集再删：{@link #eachObject} 是分页遍历，边删边翻页会让后续页
+     * 的 continuationToken 指向已经变动的结果集。
+     *
+     * @param prefix   空间前缀
+     * @param relative 目录相对路径（不含首尾斜杠）
+     * @return 删除的子目录标记对象数（不含目录自身）
+     */
+    public int deleteDirectoryTree(String prefix, String relative) {
+        ensureReady();
+        String dirKey = DriveKeys.keyAt(prefix, relative) + "/";
+        List<String> markers = new ArrayList<>();
+        eachObject(dirKey, (key, size, modified) -> {
+            if (key.endsWith("/") && !key.equals(dirKey)) {
+                markers.add(key);
+            }
+        });
+        for (String marker : markers) {
+            join(client.deleteObject(b -> b.bucket(properties.getBucket()).key(marker)));
+        }
+        join(client.deleteObject(b -> b.bucket(properties.getBucket()).key(dirKey)));
+        return markers.size();
+    }
+
+    /**
      * 服务端复制对象（改名的第一步）：字节不出对象存储，不经过控制面，也不占客户端带宽。
      *
      * <p>S3 的 CopyObject 是**服务端操作**，这对「资源管理器里改个名」很关键——
