@@ -97,6 +97,7 @@ macOS **⌘⇧V**），加载剪切板插件的 `index.html?panel=1`——同一
 | 适配快捷面板第二形态 | URL 带 `?panel=1` 时走紧凑布局分支（见上「快捷面板」） |
 | 本地调试 | `plugins\dev.ps1 -Plugin <id>`（junction 热调回路） |
 | 上架商城 / 发布新版本 | `scripts/publish-plugin.ps1`（manifest 版本号递增即新版） |
+| 一次补齐全部官方插件 | `scripts/publish-official-plugins.ps1`（随 `ship-control-plane.ps1` 自动执行，见下「官方插件默认在架」） |
 | 需要宿主尚不存在的能力 | 跨仓改动：主仓 `internal/plugin` 能力注册表加 Provider + 权限常量 + SDK 分发，走主仓迭代流程（能力新增须谨慎：权限面即攻击面） |
 
 ## SDK 速查
@@ -161,6 +162,17 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-plugin.ps1 -PluginDir p
 流程：读 manifest → 打 zip → 登录 → 预签名直传 RustFS → 发布校验 → 匿名验证。
 同版本重传 = 覆盖发布；版本号递增 = 新版成为 latest，客户端启动检查发现后亮
 「插件中心」红点，用户确认权限变更后完成升级。
+
+### 官方插件默认在架
+
+商城是控制面数据库驱动的，货架不能靠人记得去发。`scripts/publish-official-plugins.ps1`
+一次上架 `plugins/` 下**全部**含 manifest.json 的目录（`template` 除外）——新插件建目录
+即自动纳入，无需改脚本；结束时匿名拉 `/easyshare/plugins` 自证每一项都在架且带 zip 资产。
+该脚本已挂在 `scripts/ship-control-plane.ps1` 的探活之后（`-SkipMarketSeed` 可跳过），
+每次投递控制面都会把官方插件补到最新，新用户打开插件中心不会看到空商城。
+
+单插件带版本说明的正式发布仍用 `publish-plugin.ps1 -Notes`；批量上架留空 `-Notes`，
+不会抹掉既有版本的更新说明（服务端只在 notes 非空时覆盖）。
 
 ## 新插件起步
 

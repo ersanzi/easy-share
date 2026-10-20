@@ -9,7 +9,9 @@ disable-model-invocation: true
 
 1. **Go**：仓库根目录 `go test ./...`
 2. **Python**：工作目录切到 `knowledge/`，执行 `.venv/Scripts/python.exe -m pytest -m "not integration"`（集成测试依赖 RustFS，不在内环）
-3. **前端**：`npm --prefix frontend test`；若用户要求含类型检查再加 `npm --prefix frontend run build`
+3. **前端与文档闸门**：`npm --prefix frontend test`（含设计 token 守卫）；若用户要求含类型检查再加 `npm --prefix frontend run build`（先跑 `vue-tsc --noEmit`）。
+   另加两条纪律闸门：`node scripts/diag/check-doc-refs.mjs --self-test` 与 `node scripts/diag/check-doc-refs.mjs docs`
+   ——后者会抓「代码改了、文档里的 `文件` · `符号` 证据没改」，本仓为此付过学费（见 KI 与 2026-10-18 迭代记录的教训一节）。
 4. **Java 控制面（platform-drive）**：`cd platform-drive && mvn -o clean test`
    （**必须带 `clean`**：增量构建会给出陈旧结果，见 KI-8 的踩坑记录）
 5. **活栈（真实控制面 + PG + RustFS）**——**仅当环境齐备时**：

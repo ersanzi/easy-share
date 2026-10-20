@@ -435,6 +435,16 @@ slot_fireFinished
 | 6 | `NOTIFY_DELETE` | `0x10057400` | ✅ 推断有 |
 | `0xFFFFFFFF` | `NONE` | `NULL` | ✅ 终止项 |
 
+> ⚠️ **2026-10-18 编号更正（照抄会出错）**：上表的 `Type` 数字是从 WPS 二进制里读出来的**原值**，
+> 名字则来自各回调函数体内的字面量（如 `0x100572b0` 含 `freeUpPlaceholder`，见 §3.5）——
+> 两者对 WPS 自身是自洽的。但**这套编号不等于我们运行环境的编号**：
+> 本机 `Windows Kits\10\Include\10.0.26100.0\um\cfapi.h`（第 488–503 行）里
+> `CF_CALLBACK_TYPE` 自 0 顺序编号，`NOTIFY_DEHYDRATE = 7`、`NOTIFY_DELETE = 9`、
+> `NOTIFY_RENAME = 11`、`NOTIFY_FILE_CLOSE_COMPLETION = 6`。
+> 也就是说按本表数字直接去订阅，会订到别的回调上。
+> 差异来源应是 SDK 版本间枚举重排（**具体哪个版本改的未取证**，不下结论）。
+> `internal/cfapi` 的 `CallbackType` 常量已改按本机 SDK 全量重写，并在注释里指回本节。
+
 **三点对 §3.2 的实质修正**：
 
 1. **没有 `NOTIFY_RENAME` / `NOTIFY_MOVE`。** §3.2 推断表里列了它们（依据是 `_handleCloudRenameTask` 字面量存在）——但**它们不在注册表里**。说明改名/移动走的是**别的路径**（可能是 `CfConnectSyncRoot` 之后的委托，或 `NOTIFY_DELETE+CREATE` 组合，或 `qingnse64.dll` 侧），**待查**。
@@ -1190,6 +1200,10 @@ vector too long / dstFolderPath is null / transFac is null
 ---
 
 ## 10. 与 EasyShare 现状的差距清单
+
+> ⚠️ **本表是 2026-10-15 的快照，到 10-18 已有 6 行过期**（桌面形态、占位符创建、按需下载回调、
+> 元数据只更不下载、内容哈希、读取节流都已落地）。现状一律以
+> [`docs/benchmark-absorption.md`](../benchmark-absorption.md) 为准，本表只作取证记录。
 
 | 能力 | WPS 云盘（本文证据） | 钉盘（对照） | EasyShare 现状 | 结论 |
 | --- | --- | --- | --- | --- |

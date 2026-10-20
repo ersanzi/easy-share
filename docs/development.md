@@ -155,7 +155,11 @@ docker compose up -d
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-该脚本依次执行 Go 测试、前端测试、前端构建、Core 编译和 Wails production 构建（含 NSIS 安装包）。脚本会自动检测 NSIS 安装路径。产物为 `build/bin/easyshare.exe`、`build/bin/easyshare-core.exe` 和 `build/bin/EasyShare-amd64-installer.exe`。
+该脚本依次执行文档证据引用检查（含检查器自检）、Go 测试、前端测试、前端构建、Core 编译和 Wails production 构建（含 NSIS 安装包）。脚本会自动检测 NSIS 安装路径。产物为 `build/bin/easyshare.exe`、`build/bin/easyshare-core.exe` 和 `build/bin/EasyShare-amd64-installer.exe`。
+
+前端两道闸门藏在本机命令里，不单独列出：`npm test`（vitest）内含设计 token 守卫 `frontend/src/__tests__/designTokens.test.ts`，裸色值、纯灰中性色、文字档掉到 WCAG AA 以下都会在这里变红；`npm run build` 先跑 `vue-tsc --noEmit`，Wails 绑定没同步（TS2305/TS2339）也在这里变红。
+
+文档证据引用的口径是：`docs/` 下凡写成 `文件路径` · `符号` 的证据，文件必须存在、符号必须能在该文件里命中；顺带查链接方括号里是不是空文本（空文字链接渲染出来是看不见的空串，只有图片允许空 alt）。检查器自身的正确性由 `node scripts/diag/check-doc-refs.mjs --self-test` 兜底（注入坏引用与空链接必须被抓到，六类该跳过的必须跳过）。
 
 Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 Core。
 
@@ -192,10 +196,11 @@ Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 
 2. `gofmt` 所有 Go 文件。
 3. 运行 `go test ./...`。
 4. 运行前端测试和构建。
-5. 运行 `scripts/build.ps1`。
-6. 涉及 Windows 集成时执行手工验收清单。
-7. 更新架构、排障或迭代文档。
-8. 检查日志和 diff 中没有 Token、密码、个人文件路径或测试残留映射。
+5. 运行 `node scripts/diag/check-doc-refs.mjs --self-test` 与 `node scripts/diag/check-doc-refs.mjs docs`。
+6. 运行 `scripts/build.ps1`。
+7. 涉及 Windows 集成时执行手工验收清单。
+8. 更新架构、排障或迭代文档。
+9. 检查日志和 diff 中没有 Token、密码、个人文件路径或测试残留映射。
 
 ## 7. 发布、CI 与运行数据
 
@@ -235,7 +240,7 @@ git push github dev
 
 ### CI 触发规则
 
-- `dev` 推送：仅触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）；桌面构建只在打 `v*` tag 时跑，日常验证靠本地 `scripts/build.ps1`。
+- `dev` 推送：触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）与 Quality Gates（`quality-gates.yml`：文档证据引用 + 设计 token 守卫 + `vue-tsc` 类型检查，不设路径过滤）；桌面构建只在打 `v*` tag 时跑，日常验证靠本地 `scripts/build.ps1`。
 - Windows / macOS CI（`build-windows.yml` / `build-mac.yml`）：仅 `v*` tag 推送自动触发，另有手动触发逃生通道；`master` 推送与 PR 不再触发。
 - Rolling Release（`rolling-release.yml`）：跟随上述 tag 构建跑，双平台对同一 tag 成功后删除重建 `latest` Release；手动触发的构建不重建 latest。注意 tag 触发的 run `head_branch` 是 tag 名，本工作流不能再用 `branches` 过滤，改用 job 级 `if` 判定 `v*` 前缀。
 

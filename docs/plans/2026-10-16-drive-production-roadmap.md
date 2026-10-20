@@ -173,6 +173,14 @@
 - ✅ 日志裁剪策略已做（2026-10-17）：`DriveChangeLogService.trim` 全量重建时保留最近 10000 条；
   日志不足时客户端退全量重建（接口已支持该形态，`spacedav` 的失败退路已在）。
 - ⏳ 裁剪未按空间分别保留（当前全局条数）；未做定时任务（仅全量重建时顺手裁）。
+- ✅ **第二个消费方接入（2026-10-18）**：按需占位符的同步根此前**每轮仍是一次全量列举**，
+  现在 `cfmount.List` 带 `ListState` 就走 `/changes`（首轮不带游标 = 全量重建，之后带空间版本）。
+  合并语义上收到 `internal/drive/changes_apply.go` 的 `ApplyChanges`，挂载盘与占位符共用一份
+  ——两份实现迟早分叉，分叉的后果是同一个空间在两个入口里内容不一样。
+  游标只在内存、不与 WebDAV 共用版本文件（共用会让一方把另一方的游标推前，另一方漏事件）。
+  真机 + 活栈双证：`TestIncrementalSyncAddsPlaceholder`、`TestLiveMountUsesIncrementalListing`
+  （后者断言旧的全量接口**一次都没被调用**）。详见
+  [`iterations/2026-10-18-递归删除非空文件夹.md`](../iterations/2026-10-18-递归删除非空文件夹.md) 第四节。
 
 ### 切片 2 — 增量列举（**P0，性能天花板**）
 
@@ -240,10 +248,21 @@
 > - ⏳ **第 1 项**代码完成，**已于本机等价环境（PG 16 + Redis + RustFS + 控制面）完成端到端**：
 >   软删 → 列表消失（KI-10）→ 回收站出现 → 还原（**fileId 不变**）→ 再软删 → 彻底删除（列表与回收站都不再有）。
 >   由 `TestLiveRecycleRestoreAndPurgeRoundTrip` 覆盖（0.74s）。**仍未做**：公司服务器 192.168.1.239 上的联调（不在同网段）。
-> - ⏳ **第 3 项**（目录对象落地）：**客户端侧已做**（2026-10-17，`dir_store.go` 落盘 `dirs.json`，
->   资源管理器新建的空文件夹重启后仍在，祖先链一起摘）——满足验收第 2 条。
->   **服务端目录对象模型仍未做**：同一账号换台机器看不到你建的空目录，`origin_parent_id` 恒 NULL；
->   真正的 `local_id`/`parent_id` 树是控制面的活。
+> - 🔄 **第 3 项**（目录对象落地）：**两个入口现在一致了**（2026-10-18）。客户端侧 2026-10-17 先落盘
+>   `dirs.json`（资源管理器新建的空文件夹重启后仍在，祖先链一起摘）；本日补上云端一侧——
+>   `internal/spacedav.Mkdir` 此前**只写本机**，于是「此电脑里建的文件夹」网盘页看不到、
+>   换台电脑也看不到；现在它同时向控制面建目录标记，`RemoveAll` 一并摘标记
+>   （服务端失败时退化为仅本机可见，不弹「拒绝访问」）。
+>   活栈用例 `TestLiveSpacedavDirectoryIsCloudEntity` 钉住这条链路。
+>   **服务端目录对象模型仍未做**：标记对象不是 `es_file` 行，没有 `parent_id`/目录 fileId，
+>   `origin_parent_id` 恒 NULL，目录本身没有回收站态；真正的 `local_id`/`parent_id` 树是控制面的活。
+> - ✅ **回收站补齐：非空文件夹可递归删除**（2026-10-18，见
+>   [`iterations/2026-10-18-递归删除非空文件夹.md`](../iterations/2026-10-18-递归删除非空文件夹.md)）。
+>   此前网盘页删文件夹只允许空目录（前端直接拒绝非空），挂载盘那条路早已自己遍历子树删——
+>   **同一个动作在两个入口语义不同**，就是「学了钉盘/WPS 却没用在界面上」的那类缺口。
+>   现在 `DELETE /object` 带 `recursive=true`：子树每个文件各自软删进回收站
+>   （对象保留、`origin_path` 快照、逐个 `deleted` 变更事件），目录标记对象按前缀一并清掉。
+>   **目录本身仍不进回收站**（无 `es_file` 行，与 mkdir 同口径）；还原任一子文件时目录按路径重新出现。
 
 **验收**
 1. 资源管理器里改名是**原子操作**且保留 `fileId`；
@@ -323,6 +342,28 @@
 6. `CfSetPinState` 固定 / `CfDehydratePlaceholder` 释放
 7. 本地 SQLite 元数据表（照抄 WPS 的 `fs_metadata_table` 列 + 三索引）
 8. **读取节流**（WPS 的进程名单 + 限流器）——不做这步会被杀软和索引器打爆
+
+> **第 6 步（固定与释放）已完成（2026-10-18）**：`internal/cfapi/state_ops_windows.go`
+> 提供 `SetPinState` / `Dehydrate` / `Hydrate`，枚举与原型逐字取自本机 SDK 头
+> `Windows Kits\10\Include\10.0.26100.0\um\cfapi.h`（860–914 行）。
+> **真机行为已验**：30 KiB 占位符「分配 0 → 读后 30030 → 钉住后脱水被拒
+> （`0x80070188`）→ 取消钉住 → 脱水回 0 → 再读内容一致且重新触发一次按需取数」，
+> 目录带 `RECURSE` 位后子文件脱水同样被拒（`state_ops_windows_test.go`）。
+> 应用内入口在网盘右键菜单（仅挂载时出现）。
+> ⚠️ 顺带纠出一处**会咬人的编号**：本包 `CallbackType` 原先抄的是 WPS 二进制里那套
+> （它编译期 SDK 的顺序），本机 7 才是 `NOTIFY_DEHYDRATE`、9 是 `NOTIFY_DELETE`、
+> 11 是 `NOTIFY_RENAME`；常量已按 SDK 全量重写。当前订阅表只用 0/2 两项（新旧一致），
+> 故未出故障，但**照旧编号去订阅就会订错**。
+> 仍未做：`CfReportProviderProgress`、自定义状态位（custom state）、
+> 本地元数据表（第 7 步，占位符身份目前用 `esf:<fileId>` 或路径哈希兜底）、
+> 双向写回调、以及**资源管理器自带菜单项是否出现未点验**。
+> **2026-10-18 更新**：`CfReportProviderProgress` 已接（切片 5 第 3 步的最后一块）——
+> 取数每读满 1 MiB 回报一次，单次区间 ≥ 8 MiB 才回报；真机 12 MiB 实测回报 12 次、
+> 内核零拒绝（`internal/cfapi/progress_windows.go` + `mount_windows.go`）。
+> **第 7 步（本地元数据表）判定为当前不值得做**：只读挂载不会发生本地改名/移动，
+> 那张表是给双向同步用的；而「身份从路径哈希翻成 fileId 会重建占位符」经代码核实不成立
+> （`tree_windows.updateExisting` 是原地 `CfUpdatePlaceholder` 带新身份，内容与钉住状态都不丢）。
+> 为假想需求先铺持久化，正是本仓明令不做的事。
 
 **验收**
 - 万级文件目录在本地占 **0 字节**，双击首开延迟可接受。

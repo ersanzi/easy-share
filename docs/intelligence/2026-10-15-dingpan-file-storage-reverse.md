@@ -429,6 +429,12 @@ default: memmove(param_2, "Unknown",     7);
 
 ## 9. 差距清单（钉盘证据 → 我们现状 file:line）
 
+> ⚠️ **本表是 2026-10-15 的快照，到 10-18 已有 8 行过期**（增量列举、按需占位符、冲突策略、
+> 内容哈希秒传、回收站、服务端改名移动、目录对象、进度回报都已落地）。
+> 现状一律以 [`docs/benchmark-absorption.md`](../benchmark-absorption.md) 为准——
+> 那张表的每条「文件 · 符号」引用都由 `scripts/diag/check-doc-refs.mjs` 校验，不会烂。
+> 留这张表只作取证记录，不作现状依据：**本轮就是照它说话才错了两次**。
+
 | 能力 | 钉盘 | EasyShare 现状 | 结论 |
 | --- | --- | --- | --- |
 | 条目身份 | `local_id`/`remote_id`，路径只是属性 | 唯一键含 `file_path`；`internal/drive/client.go:33-38` 有 `FileId` 但不参与写路径 | **半缺**：身份有了，写语义仍按路径 |

@@ -18,9 +18,10 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 
 - **架构**：Wails 桌面端 + Go Core 双进程（HTTP/WebSocket 127.0.0.1:19080）+ Python 知识服务（FastAPI，独立进程）+ RuoYi 账号控制面（Java，`platform-drive/` 模块，dev 见 `deploy/ruoyi-db/`）。进程图、端口、API 清单、生命周期 → [`docs/architecture.md`](docs/architecture.md)
 - **迭代流程**：先在 `docs/progress.md`「进行中」登记主题 → 建 `docs/iterations/YYYY-MM-DD-主题.md` → 实现与验证 → 更新 progress/README → 用户明确要求时才提交推送。模板与 DoD → [`docs/version-iteration.md`](docs/version-iteration.md)
-- **原生命令**（`.zcode/commands/`，随仓库版本化）：`/iterate <主题>` 一键完成开工登记（生成迭代文档骨架 + progress.md 挂牌）；`/verify` 跑 Go/Python/前端/Java 四层 + **活栈（真实控制面）**轻量回归（不含 NSIS 全量；活栈需环境齐备，未起则明确标注未跑）
+- **原生命令**（`.zcode/commands/`，随仓库版本化）：`/iterate <主题>` 一键完成开工登记（生成迭代文档骨架 + progress.md 挂牌）；`/verify` 跑 Go/Python/前端/Java 四层 + **活栈（真实控制面）**轻量回归（不含 NSIS 全量；活栈需环境齐备，未起则明确标注未跑）。前端那层同时跑设计 token 守卫和文档证据引用检查
+- **CI 闸门**：推 `dev` 会触发 `quality-gates.yml`（文档证据引用 + 设计 token 守卫 + `vue-tsc` 类型检查，不设路径过滤）；桌面安装包仍只在 `v*` tag 时构建
 - **构建/测试命令**：完整清单 → [`docs/development.md`](docs/development.md)；全量流水线 `powershell -ExecutionPolicy Bypass -File scripts/build.ps1`；Python 侧 `knowledge/.venv/Scripts/python.exe -m pytest -m "not integration"`
-- **文档规矩**：`docs/progress.md` 是进度与路线唯一真相源；架构/端口/API 变化必须同步 `architecture.md`；排障经验写入 `troubleshooting.md` 与迭代记录（"省的下次还有问题"）
+- **文档规矩**：`docs/progress.md` 是进度与路线唯一真相源；架构/端口/API 变化必须同步 `architecture.md`；排障经验写入 `troubleshooting.md` 与迭代记录（"省的下次还有问题"）；状态文档里的证据一律写成 `文件路径` · `符号`（不写行号），由 `node scripts/diag/check-doc-refs.mjs docs` 复算——代码改名而文档不动，这条闸门就变红
 
 **注意**：构建前须退出正在运行的 easyshare.exe，否则 Windows 锁定文件报错。
 
@@ -81,6 +82,8 @@ EasyShare 是面向普通消费者的 Windows 文件传输与云盘工具（对�
 2. **品牌色 S=76%，不用满饱和蓝**（`#1F69E0` 而非 `#007aff`）。大屏上满饱和会刺眼。
 3. **透明叠加用「深色基 + alpha」**：`--line-rgb`/`--fill-rgb` 都是 `38,46,62`。用浅色基配低 alpha（如 `228,230,235` + `.12`）在白底上会淡到看不见。
 4. **`var()` 不能直接塞进 `rgba()`**，必须拆 `--x-rgb: r,g,b` 三元组。
+
+这四条不是口头约定：规则实现在 `frontend/src/utils/designTokensLint.ts`，由 `frontend/src/__tests__/designTokens.test.ts` 在 `npm test` 与 CI（`quality-gates.yml`）里挡住回退——裸色值、纯灰中性色、文字档低于 WCAG AA 都会直接变红。改规则时同步改守卫用例，别把闸门关掉。
 
 ## 逆向取证：该用 REA 时必须用
 

@@ -377,3 +377,11 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 4. **8090 被他人业务占用**（本机裸跑着 `blade-api.jar`，/home/sub-delivery-pack）：控制面宿主端口改 8091，**三处必须同步**——compose 映射 `"8091:8090"`（容器内仍 8090）、知识服务 `.env` 的 `CONTROL_PLANE_URL=http://127.0.0.1:8091`（SSO 回调）、ship-control-plane.ps1 加 `-ControlPort 8091`；安装包烧录地址随之 `http://<IP>:8091`；deploy.sh 生成的「同事使用指引.txt」里的 8090 记得一并 sed。
 5. **Git Bash 调 PowerShell 脚本**：`-File scripts\build.ps1` 的反斜杠会被 MSYS 吃掉变成 `scriptsbuild.ps1`，结果是 PowerShell 交互式启动、exit 0 假成功——一律用正斜杠 `-File scripts/build.ps1`。
 6. **CentOS 7 systemd 是 219**：单元文件只能用基础指令（本仓的 easyshare-knowledge.service 兼容）；firewalld 未运行时 deploy.sh 防火墙段自动跳过，端口天然放行，验收以「同事网段 curl 200」为准。
+
+## 17. 本地活栈（开发机，2026-10-18 跑全量回归时收录）
+
+1. **本地 PG 卷会落后于 `deploy/ruoyi-db/*.sql`**：症状是 `POST /easyshare/drive/presign-put` 返回「发生未知异常，请联系管理员」，日志里是 `BadSqlGrammarException: relation "es_file_version" does not exist`（`FileVersionService.snapshot` 在覆盖上传时才被调到，所以**新建文件正常、覆盖才炸**——最容易误判成代码回归）。服务器侧不会遇到：`scripts/ship-control-plane.ps1` 每次投递都重放全部 DDL。本地修复：按序把 `deploy/ruoyi-db/easyshare-*.sql` 逐个 `docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < 文件` 灌一遍（全部幂等）。
+2. **改了 Java 必须重打 fat jar，活栈才吃得到**：`run-ruoyi-admin.ps1` 跑的是 `platform/ruoyi-admin/target/ruoyi-admin.jar`，只 `mvn -pl easyshare-drive install` 不会更新它。要 `cd platform && ./mvnw -o clean package -DskipTests -pl ruoyi-admin -am`（本机实测约 4 分钟），否则测的是旧字节码。
+3. **`mvn` 默认用系统 `JAVA_HOME`（本机指 JDK 17）**：编译报「不支持发行版本 21」。行内指定即可：`JAVA_HOME="D:\Develop\java21" mvn -o clean test`。
+4. **活栈用例靠环境变量放行**：`EASYSHARE_LIVE_DRIVE=1 EASYSHARE_LIVE_USER_A=… EASYSHARE_LIVE_PASS_A=…`（可选 `EASYSHARE_LIVE_BASE`，默认 `http://127.0.0.1:8090`）。没设就 `t.Skip`——**绿灯不等于跑过**，看 `-v` 里有没有 `--- PASS`。
+5. **自清理脚本要覆盖「还原过的行」**：`scripts/diag/recursive-delete-check.mjs` 第一版漏删已还原成 active 的文件，导致「测试数据已清干净」这条断言真红过一次（断言没错，是清理逻辑错）。残留数据会干扰后续活栈用例，写探针脚本时要把清理当断言来测。
