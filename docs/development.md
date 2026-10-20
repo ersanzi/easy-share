@@ -1,4 +1,4 @@
-﻿# EasyShare 开发手册
+# EasyShare 开发手册
 
 ## 1. 首次准备
 
@@ -197,10 +197,15 @@ Windows 正在运行的 EXE 可能被锁定，因此构建前先退出桌面和 
 3. 运行 `go test ./...`。
 4. 运行前端测试和构建。
 5. 运行 `node scripts/diag/check-doc-refs.mjs --self-test` 与 `node scripts/diag/check-doc-refs.mjs docs`。
-6. 运行 `scripts/build.ps1`。
-7. 涉及 Windows 集成时执行手工验收清单。
-8. 更新架构、排障或迭代文档。
-9. 检查日志和 diff 中没有 Token、密码、个人文件路径或测试残留映射。
+6. **改过 `engine/` 就跑 `python scripts/check_skill_sync.py`**（不一致时加 `--apply` 重新生成副本）。
+   `skills/minutes-from-transcript/scripts` 是 `engine/minutecraft` 的复制版（给别人整目录复制走），
+   两处并存必然漂移。**这一步按用户要求只在本地做，不进 CI**（2026-10-20）：
+   它拦的是「忘了同步副本」，与当次提交的改动质量无关，放进 CI 会在前端/文档都没问题时
+   单独变红、把人引向错误方向——实际已经发生过两次。忘记跑不会红，所以改引擎时先跑它。
+7. 运行 `scripts/build.ps1`。
+8. 涉及 Windows 集成时执行手工验收清单。
+9. 更新架构、排障或迭代文档。
+10. 检查日志和 diff 中没有 Token、密码、个人文件路径或测试残留映射。
 
 ## 7. 发布、CI 与运行数据
 

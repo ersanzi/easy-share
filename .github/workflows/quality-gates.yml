@@ -61,7 +61,7 @@ jobs:
         working-directory: frontend
         run: npx vue-tsc --noEmit
 
-      - name: skill 发布副本与 engine/ 一致
-        # skills/minutes-from-transcript/scripts 是 engine/ 的复制版（给别人整目录复制走）。
-        # 两处并存必然漂移：改了引擎忘记同步，复制出去的那份就落后于产品行为。
-        run: python scripts/check_skill_sync.py
+      # 这里刻意**不再**跑 scripts/check_skill_sync.py（skill 副本 vs engine/ 一致性）。
+      # 它拦的是「改了 engine/ 忘了同步副本」，属于作者本地的收尾动作，跟这次提交的
+      # 改动质量无关；放进 CI 会在前端/文档都没问题时单独变红，把人引向错误方向
+      # （2026-10-20 实际发生过两次）。现在只在本地检查，见 docs/development.md §6。
