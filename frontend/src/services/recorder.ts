@@ -32,6 +32,9 @@ registerProcessor('eshare-capture', EshareCapture);
 const TARGET_RATE = 16000
 // 实时推流单元：与知识服务流式模型对齐（600ms = 9600 样本 = 19200 字节 s16le）
 export const STREAM_CHUNK_SAMPLES = 9600
+// 单条推流调用时限：模型 RTF 实测 0.58（600ms 音频约 350ms 出结果），
+// 超过这个时间还没回包就按「卡住」处理——撤销这条请求，从会话快照续上，不阻塞后面的字
+export const STREAM_CALL_TIMEOUT_MS = 12000
 
 export type ChunkHandler = (pcm: Uint8Array) => void
 
@@ -43,13 +46,19 @@ export class MeetingRecorder {
   private source: MediaStreamAudioSourceNode | null = null
   private worklet: AudioWorkletNode | null = null
   private processor: ScriptProcessorNode | null = null
+  private silencer: GainNode | null = null
   private chunks: Int16Array[] = []
   private totalFrames = 0
+  private streamStartFrame = 0
   private startedAt = 0
   private lastLevelAt = 0
   private chunkHandler: ChunkHandler | null = null
-  private carry: Int16Array[] = []
-  private carryFrames = 0
+  // 实时推流只保留「尚未发出的尾巴」：不再每来一帧就把整个 carry 全量复制一遍
+  // （旧实现 1024 帧来一次就 new 一个累计数组，长会议下每秒几 MB 的垃圾，
+  //  加上 Wails 绑定是异步往返，主线程一忙上屏就跟着卡）
+  private carry = new Int16Array(0)
+  // 是否已经出过声；false 时静音帧不推流（避免开会长静音把模型空转）
+  private voiced = false
 
   recording = false
 
@@ -63,8 +72,7 @@ export class MeetingRecorder {
   ): Promise<void> {
     if (this.recording) return
     this.chunkHandler = onChunk ?? null
-    this.carry = []
-    this.carryFrames = 0
+    this.carry = new Int16Array(0)
     this.micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     })
@@ -93,11 +101,18 @@ export class MeetingRecorder {
     this.stream = sampled
     this.bindEndedSignal(source === 'system' ? this.displayStream : this.micStream)
 
+    // 自动播放策略会把挂起的 AudioContext 冻结在 currentTime=0，采集就再也没有数据——
+    // 先尝试恢复（桌面端无用户手势限制，通常直接成功；失败也不阻断录音）
+    if (context.state === 'suspended') await context.resume().catch(() => {})
+
     this.source = context.createMediaStreamSource(sampled)
     this.source.channelCount = 1
     this.source.channelCountMode = 'explicit'
     this.chunks = []
     this.totalFrames = 0
+    // 实时推流的分片基准从真正开始采集算起（否则开头会补一片静音）
+    this.streamStartFrame = 0
+    this.voiced = false
     this.startedAt = Date.now()
 
     const handler: CaptureHandler = samples => this.consume(samples, context.sampleRate, onLevel)
@@ -110,6 +125,13 @@ export class MeetingRecorder {
         const node = new AudioWorkletNode(context, 'eshare-capture')
         node.port.onmessage = event => handler(event.data as Float32Array)
         this.source.connect(node)
+        // AudioWorklet 节点没有输出时可能被浏览器判定为「无消费者」而不调度；
+        // 接一个零增益到 destination 只为拿到稳定的处理时钟，听不到声音
+        const mute = context.createGain()
+        mute.gain.value = 0
+        node.connect(mute)
+        mute.connect(context.destination)
+        this.silencer = mute
         this.worklet = node
         workletReady = true
       } catch {
@@ -126,6 +148,7 @@ export class MeetingRecorder {
       processor.onaudioprocess = event => handler(event.inputBuffer.getChannelData(0))
       this.source.connect(processor)
       processor.connect(mute)
+      this.silencer = mute
       this.processor = processor
     }
     this.recording = true
@@ -183,32 +206,33 @@ export class MeetingRecorder {
 
   async stop(): Promise<MeetingRecording> {
     this.recording = false
-    this.worklet?.disconnect()
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.releaseStreams()
+    this.teardown()
     const durationSeconds = this.totalFrames / TARGET_RATE
     await this.context?.close()
-    this.worklet = null
-    this.processor = null
-    this.source = null
     this.context = null
     return { blob: encodeWav(this.chunks, TARGET_RATE), durationSeconds }
   }
 
   abort(): void {
     this.recording = false
-    this.worklet?.disconnect()
-    this.processor?.disconnect()
-    this.source?.disconnect()
-    this.releaseStreams()
+    this.teardown()
     void this.context?.close()
-    this.worklet = null
-    this.processor = null
-    this.source = null
     this.context = null
     this.chunks = []
     this.totalFrames = 0
+    this.carry = new Int16Array(0)
+  }
+
+  private teardown(): void {
+    this.worklet?.disconnect()
+    this.processor?.disconnect()
+    this.silencer?.disconnect()
+    this.source?.disconnect()
+    this.releaseStreams()
+    this.worklet = null
+    this.processor = null
+    this.silencer = null
+    this.source = null
   }
 
   // 混流模式下 this.stream 是 destination 的合成流（停它没用），必须停掉来源轨道；
@@ -247,26 +271,38 @@ export class MeetingRecorder {
     }
   }
 
-  // 攒够 600ms 就吐一片给实时推流（不足一片的尾巴留在 carry 里，下次补齐）
+  // 实时推流的分片以「离开静音之后」为基准：说一句话就从第一个字开始攒 600ms，
+  // 不会因为前面几分钟静音让开机时刻整片整片地错位（静音片不推，省掉模型空转）。
   private emitChunk(pcm: Int16Array): void {
     if (!this.chunkHandler || pcm.length === 0) return
-    this.carry.push(pcm)
-    this.carryFrames += pcm.length
-    while (this.carryFrames >= STREAM_CHUNK_SAMPLES) {
-      const merged = new Int16Array(this.carryFrames)
-      let offset = 0
-      for (const piece of this.carry) {
-        merged.set(piece, offset)
-        offset += piece.length
-      }
-      const take = merged.subarray(0, STREAM_CHUNK_SAMPLES)
-      const rest = merged.subarray(STREAM_CHUNK_SAMPLES)
-      this.carry = rest.length ? [new Int16Array(rest)] : []
-      this.carryFrames = rest.length
+    if (!this.voiced) {
+      if (!hasVoice(pcm)) return
+      this.voiced = true
+      this.streamStartFrame = this.totalFrames - pcm.length
+    }
+    const merged = new Int16Array(this.carry.length + pcm.length)
+    merged.set(this.carry, 0)
+    merged.set(pcm, this.carry.length)
+    let offset = 0
+    while (merged.length - offset >= STREAM_CHUNK_SAMPLES) {
+      const take = merged.subarray(offset, offset + STREAM_CHUNK_SAMPLES)
+      offset += STREAM_CHUNK_SAMPLES
       // Int16Array → 小端字节流（WebAudio 与知识服务口径一致，不做字节序转换）
       this.chunkHandler(new Uint8Array(take.buffer, take.byteOffset, take.byteLength).slice())
     }
+    this.carry = merged.slice(offset) // 只留尾巴，复制量恒等于一帧
   }
+}
+
+// 这一帧里有没有「像人声」的能量：RMS 低于阈值即视为静音。
+// 阈值取得很低（约 -46dBFS）：只用来跳过彻底的静音，不参与降噪判断。
+function hasVoice(pcm: Int16Array): boolean {
+  let sumSquares = 0
+  for (let i = 0; i < pcm.length; i++) {
+    const value = pcm[i] / 0x8000
+    sumSquares += value * value
+  }
+  return Math.sqrt(sumSquares / pcm.length) > 0.005
 }
 
 // 线性插值降采样（48k→16k 质量足够语音）

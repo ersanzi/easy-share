@@ -149,13 +149,16 @@ def _stream_meeting_or_404(service, meeting_id: str, request: Request) -> dict:
 
 @router.post("/meetings/{meeting_id}/stream")
 async def feed_stream(meeting_id: str, request: Request) -> dict:
-    """推一段 PCM16/16kHz/单声道，回当前已上屏行与进行中的一句。"""
+    """推一段 PCM16/16kHz/单声道，回当前已上屏行与进行中的一句。
+
+    owner 从记录里读：热词按录制者自己的词表增强（与离线转写同口径）。
+    """
     service = _meetings(request)
-    _stream_meeting_or_404(service, meeting_id, request)
+    meta = _stream_meeting_or_404(service, meeting_id, request)
     body = await request.body()
     if len(body) > _STREAM_MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "单次推流片段过大")
-    return service.feed_stream(meeting_id, body)
+    return service.feed_stream(meeting_id, body, owner=meta.get("owner"))
 
 
 @router.post("/meetings/{meeting_id}/stream/stop")
@@ -170,10 +173,10 @@ def stop_stream(meeting_id: str, request: Request) -> dict:
 def stream_live(meeting_id: str, request: Request) -> dict:
     """不推音频也能取当前上屏状态（前端断线重连/切走再回来时用）。"""
     service = _meetings(request)
-    _stream_meeting_or_404(service, meeting_id, request)
-    return service.streamer.snapshot(meeting_id) if service.streamer else {
-        "lines": [], "current": "", "elapsed_seconds": 0
-    }
+    meta = _stream_meeting_or_404(service, meeting_id, request)
+    if service.streamer is None:
+        return {"lines": [], "current": "", "elapsed_seconds": 0, "last_line_at": 0.0}
+    return service.live_snapshot(meeting_id, owner=meta.get("owner"))
 
 
 @router.post("/meetings/{meeting_id}/live-points")
@@ -182,6 +185,14 @@ def live_points(meeting_id: str, request: Request) -> dict:
     service = _meetings(request)
     _stream_meeting_or_404(service, meeting_id, request)
     return {"points": service.live_points(meeting_id)}
+
+
+@router.post("/meetings/{meeting_id}/live-check")
+def live_check(meeting_id: str, request: Request) -> dict:
+    """会中快检：只看刚上屏的最近几行，核对数字/期限/人名等事实口径（秒级 LLM 调用）。"""
+    service = _meetings(request)
+    _stream_meeting_or_404(service, meeting_id, request)
+    return service.live_check(meeting_id)
 
 
 # --- 个性化热词（必须先于 /meetings/{meeting_id} 注册，否则 "hotwords" 会被当成会议 id） ---
@@ -324,6 +335,53 @@ def rename_speaker(meeting_id: str, req: SpeakerRenameRequest, request: Request)
     if not name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "发言人名称不能为空")
     return service.rename_speaker(meeting_id, req.speaker.strip(), name)
+
+
+class SpeakerMergeRequest(BaseModel):
+    """合并发言人：把 from_speaker 的轮次全并进 into_speaker。"""
+
+    from_speaker: str
+    into_speaker: str
+
+
+@router.post("/meetings/{meeting_id}/speakers/merge")
+def merge_speakers(meeting_id: str, req: SpeakerMergeRequest, request: Request) -> dict:
+    """合并两位发言人（对标钉钉「合并发言人」：同一人被拆成两簇时一键并回）。"""
+    service = _meetings(request)
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_manageable(meta, _current_user(request))
+    try:
+        return service.merge_speakers(meeting_id, req.from_speaker, req.into_speaker)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "发言人不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
+class SegmentEditRequest(BaseModel):
+    """改一句转写：text 为该句新内容。"""
+
+    text: str
+
+
+@router.patch("/meetings/{meeting_id}/segments/{index}")
+def update_segment(meeting_id: str, index: int, req: SegmentEditRequest, request: Request) -> dict:
+    """编辑转写正文的某一句（对标钉钉逐字稿可编辑），返回更新后的完整记录。"""
+    service = _meetings(request)
+    try:
+        meta = service.store.get(meeting_id)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "会议不存在") from exc
+    _ensure_manageable(meta, _current_user(request))
+    try:
+        return service.update_segment(meeting_id, index, req.text)
+    except KeyError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "该句不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 @router.post("/meetings/{meeting_id}/keywords")

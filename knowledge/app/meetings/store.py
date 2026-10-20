@@ -140,6 +140,56 @@ class MeetingStore:
             self._write_meta(meta)
             return meta
 
+    def merge_speakers(self, meeting_id: str, from_speaker: str, into_speaker: str) -> dict:
+        """把 from_speaker 的所有轮次并进 into_speaker，并从发言人表里删掉来源。
+
+        合并后相邻同人且紧挨着的轮次顺手拼起来（否则转写里会出现连续两条同一个人）。
+        """
+        with self._lock:
+            meta = self.get(meeting_id)
+            speakers = {str(segment.get("speaker")) for segment in meta.get("segments") or []}
+            speakers |= {str(key) for key in (meta.get("speaker_names") or {})}
+            for target in (from_speaker, into_speaker):
+                if target not in speakers:
+                    raise KeyError(target)
+            segments = [
+                {**segment, "speaker": into_speaker} if str(segment.get("speaker")) == from_speaker else dict(segment)
+                for segment in meta.get("segments") or []
+            ]
+            merged: list[dict] = []
+            for segment in segments:
+                previous = merged[-1] if merged else None
+                if (
+                    previous
+                    and previous["speaker"] == segment["speaker"]
+                    and float(segment["start"]) - float(previous["end"]) <= 1.0
+                ):
+                    previous["text"] = str(previous["text"]) + str(segment["text"])
+                    previous["end"] = segment["end"]
+                else:
+                    merged.append(segment)
+            names = {key: value for key, value in (meta.get("speaker_names") or {}).items() if key != from_speaker}
+            meta["segments"] = merged
+            meta["speaker_names"] = names
+            meta["speaker_count"] = len({str(segment["speaker"]) for segment in merged})
+            self._write_meta(meta)
+            return meta
+
+    def update_segment_text(self, meeting_id: str, index: int, text: str) -> dict:
+        """改一句转写文字（对标钉钉逐字稿可编辑）。
+
+        只动这一句：说话人、时间轴原样保留——用户改的是「字」，不是「谁在什么时候说的」。
+        """
+        with self._lock:
+            meta = self.get(meeting_id)
+            segments = list(meta.get("segments") or [])
+            if index < 0 or index >= len(segments):
+                raise KeyError(index)
+            segments[index] = {**segments[index], "text": text}
+            meta["segments"] = segments
+            self._write_meta(meta)
+            return meta
+
     # --- 区块状态（转写/关键词/总结/导图各自独立，某块失败只重跑那块） ---
 
     def set_block(self, meeting_id: str, block: str, state: str, error: str | None = None) -> dict:

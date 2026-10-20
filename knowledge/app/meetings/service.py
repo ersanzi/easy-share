@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.meetings.engine import (  # 薄壳：实现见 engine/minutecraft
@@ -21,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 # 落盘拷贝的分块大小（FastAPI UploadFile 的 SpooledTemporaryFile → 目标 wav）
 _COPY_CHUNK = 1024 * 1024
+
+# 引擎给的默认占位名（“说话人 1”）：改回它不视为真人标注，不沉淀声纹
+_DEFAULT_SPEAKER_NAME = re.compile(r"^说话人\s*\d+$")
 
 
 class MeetingService:
@@ -94,18 +99,46 @@ class MeetingService:
         if self.streamer is None:
             raise ValueError("实时转写未启用（流式模型不可用）")
         meta = self.store.create(title=title, owner=owner, template_id=template_id, status="recording")
-        self.streamer.start(meta["id"])
+        # 带上 owner：推流时按他的热词表做识别增强（与离线转写同口径）
+        self.streamer.start(meta["id"], owner=owner)
         return meta
 
-    def feed_stream(self, meeting_id: str, pcm: bytes) -> dict:
+    def feed_stream(self, meeting_id: str, pcm: bytes, owner: str | None = None) -> dict:
         if self.streamer is None:
             raise ValueError("实时转写未启用（流式模型不可用）")
-        return self.streamer.feed(meeting_id, pcm)
+        return self.streamer.feed(meeting_id, pcm, hotword=self.hotword_phrase(owner))
 
     def close_stream(self, meeting_id: str) -> dict:
         if self.streamer is None:
             raise ValueError("实时转写未启用（流式模型不可用）")
         return self.streamer.stop(meeting_id)
+
+    def live_snapshot(self, meeting_id: str, owner: str | None = None) -> dict:
+        """不推音频也能取当前上屏状态（前端轮询兜底：推流断了字也不会停在半路）。"""
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        return self.streamer.snapshot(meeting_id, hotword=self.hotword_phrase(owner))
+
+    def live_check(self, meeting_id: str) -> dict:
+        """会中快检：拿**最近几行**（不是整场）让 LLM 核对事实口径，几秒内返回。
+
+        对标钉钉听记「边说边问答/事实核对」的价值位：整场级要点要等总结，
+        会中真正能救场的是「刚才这句话里数字对不上」。这里刻意只看尾部，
+        既省 token 也让结果跟着话题走。
+        """
+        if self.streamer is None:
+            raise ValueError("实时转写未启用（流式模型不可用）")
+        material, last_at = self.streamer.recent_text(meeting_id, count=4)
+        checked_at = time.strftime("%H:%M:%S")
+        if not material.strip():
+            return {"verdict": "unclear", "note": "还没有听到可核对的内容", "points": [],
+                    "last_line_at": last_at, "checked_at": checked_at}
+        checker = getattr(self.summarizer, "live_check", None)
+        result = checker(material) if callable(checker) else None
+        if result is None:
+            return {"verdict": "unavailable", "note": "AI 快检暂不可用（未配置模型或调用失败）", "points": [],
+                    "last_line_at": last_at, "checked_at": checked_at}
+        return {**result, "last_line_at": last_at, "checked_at": checked_at}
 
     def live_points(self, meeting_id: str) -> list[str]:
         """会中要点（对标钉钉实时摘要树）：拿已上屏的行让 LLM 归纳几条，随录随长。"""
@@ -140,7 +173,15 @@ class MeetingService:
     # --- 内部：worker 线程执行 ---
 
     def initial_speaker_names(self, meta: dict, segments: list[dict]) -> dict[str, str]:
-        """说话人展示名：默认「说话人 N」，重新转写时保住用户已改过的名字。"""
+        """说话人展示名：默认「说话人 N」。
+
+        重新转写时保住用户改过的名字——但有前提：**不能把人工标注张冠李戴**。
+        引擎会重新聚类、跨场按声纹认领，序号的含义不保证和上次一样；
+        无脑沿用旧名字会让「张三」安到别人头上。所以：
+          1. 声纹认领到的人优先（同一人跨场通常序号也会一致，但仍以声纹为准）；
+          2. 旧名字与声纹冲突的一律不沿用；
+          3. 没有冲突证据时才沿用用户标注（避免一次重跑把人工工作全抹掉）。
+        """
         previous = meta.get("speaker_names") or {}
         names: dict[str, str] = {}
         for speaker in sorted({str(segment["speaker"]) for segment in segments}):
@@ -149,7 +190,13 @@ class MeetingService:
         return names
 
     def apply_voiceprints(self, owner: str | None, wav, segments: list[dict], names: dict[str, str]) -> int:
-        """用已登记声纹自动认领发言人（轻口径：只填仍是默认名的，不覆盖人工改名）。"""
+        """用已登记声纹自动认领发言人。
+
+        - 仍是默认名（「说话人 N」）的：命中也写上；
+        - 有个人工标注但与声纹**指向另一人**的：以声纹为准（模型重聚类后序号变了，
+          硬留旧名就是张冠李戴），并记一条日志方便排查；
+        - 与声纹一致的标注：保持不动。
+        """
         if self.voiceprints is None or not segments:
             return 0
         try:
@@ -159,7 +206,12 @@ class MeetingService:
             return 0
         applied = 0
         for speaker, name in matched.items():
-            if not names.get(speaker) or names[speaker].startswith("说话人 "):
+            current = names.get(speaker) or ""
+            if not current or current.startswith("说话人 "):
+                names[speaker] = name
+                applied += 1
+            elif current != name:
+                logger.info("声纹覆盖人工标注（序号已重排）: owner=%s 说话人%s %s→%s", owner, speaker, current, name)
                 names[speaker] = name
                 applied += 1
         if applied:
@@ -169,7 +221,9 @@ class MeetingService:
     def rename_speaker(self, meeting_id: str, speaker: str, name: str) -> dict:
         """改名，并把这次标注沉淀成声纹（样本时长不足则只改名，不报错）。"""
         meta = self.store.rename_speaker(meeting_id, speaker, name)
-        if self.voiceprints is not None:
+        # 「说话人 N」是默认占位名，不是真人标注：改回默认名时不该生成同名声纹，
+        # 否则以后每场都会多出一条叫「说话人 1」的声纹，列表越用越脏。
+        if self.voiceprints is not None and not _DEFAULT_SPEAKER_NAME.match(name):
             try:
                 self.voiceprints.enroll(
                     meta.get("owner"), name, self.store.audio_path(meeting_id), meta.get("segments") or [], speaker
@@ -177,6 +231,36 @@ class MeetingService:
             except Exception:  # noqa: BLE001 - 声纹沉淀失败不影响改名本身
                 logger.warning("声纹登记失败: meeting=%s speaker=%s", meeting_id, speaker, exc_info=True)
         return meta
+
+    def merge_speakers(self, meeting_id: str, from_speaker: str, into_speaker: str) -> dict:
+        """把一位发言人的全部轮次并给另一位（对标钉钉「合并发言人」）。
+
+        用途：说话人分离偶尔把人拆成两簇（同一人 0/3），或两簇其实是同一人。
+        合并只动转写分段与发言人表：不动音频、不动已经生成好的总结
+        （两者都被改过，提示用户重生成即可）。
+        """
+        from_speaker = str(from_speaker or "").strip()
+        into_speaker = str(into_speaker or "").strip()
+        if not from_speaker or not into_speaker:
+            raise ValueError("请指定要合并的两位发言人")
+        if from_speaker == into_speaker:
+            raise ValueError("不能把发言人合并到他自己身上")
+        return self.store.merge_speakers(meeting_id, from_speaker, into_speaker)
+
+    def update_segment(self, meeting_id: str, index: int, text: str) -> dict:
+        """改一句转写文字（对标钉钉逐字稿可编辑）。
+
+        「说话人 N」与别的展示口径都在别处，这里只改字；顺带把改过的句子
+        记进 `edited_segments`，重新转写时不会被整段覆盖得无声无息。
+        """
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("转写内容不能为空")
+        meta = self.store.update_segment_text(meeting_id, index, text)
+        edited = list(meta.get("edited_segments") or [])
+        if index not in edited:
+            edited.append(index)
+        return self.store.update(meeting_id, edited_segments=sorted(edited))
 
     def _process(self, meeting_id: str) -> None:
         meta = self.store.get(meeting_id)

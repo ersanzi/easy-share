@@ -2,13 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
-import type { KnowledgeStatus, MeetingChatTurn, MeetingLiveLine, MeetingRecord, MeetingTodo, MeetingVoiceprint } from '../types/core'
-import { MeetingRecorder, decodeAudioFileToWav } from '../services/recorder'
-import type { RecordingSource } from '../services/recorder'
+import type { KnowledgeStatus, MeetingChatTurn, MeetingRecord, MeetingTodo, MeetingVoiceprint } from '../types/core'
+import { decodeAudioFileToWav } from '../services/recorder'
+import { meetingSession } from '../services/meetingSession'
 import MeetingPoster from './MeetingPoster.vue'
 import MeetingVisualReport from './MeetingVisualReport.vue'
 import MindMap from './MindMap.vue'
-
 // 会议听记：录音（前端 16k WAV）→ /kapi 同源网关上传 → 知识服务 FunASR 转写 +
 // 说话人分离 + LLM 总结。登录态与「知识」页同源（Core 网关）。
 
@@ -19,8 +18,6 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '' })
 const statusLoading = ref(true)
-const notice = ref('')
-const noticeKind = ref<'info' | 'error'>('info')
 
 const meetings = ref<MeetingRecord[]>([])
 const selected = ref<MeetingRecord | null>(null)
@@ -29,16 +26,26 @@ const detailLoading = ref(false)
 const archiving = ref(false)
 const confirmingDelete = ref(false)
 
-const recorder = new MeetingRecorder()
-const recording = ref(false)
-const elapsed = ref(0)
-const level = ref(0)
-const title = ref('')
-const uploading = ref(false)
-let timerHandle: number | null = null
-
-// 音源：mic=麦克风；system=系统声音+麦克风混流（Windows；共享选择器里勾「同时分享系统音频」）
-const audioSource = ref<RecordingSource>('mic')
+// 录音会话在模块级单例里：切页只卸载本组件，采集与推流继续
+const {
+  recording,
+  uploading,
+  elapsed,
+  level,
+  title,
+  templateId,
+  audioSource,
+  liveSessionId,
+  liveLines,
+  liveCurrent,
+  livePoints,
+  liveState,
+  liveError,
+  liveUpdatedAt,
+  modelReady,
+  checks: liveChecks,
+  checking: liveChecking,
+} = meetingSession
 
 // 总结模板（与知识服务 templates.py 内置清单同步；对标钉钉「选择模板发起听记」：
 // 模板先行、带场景描述，录制前选定输出形态）
@@ -51,21 +58,15 @@ const TEMPLATES = [
   { id: 'training', name: '培训笔记', emoji: '📚', desc: '培训要点与学习收获' },
   { id: 'brainstorm', name: '头脑风暴会', emoji: '💡', desc: '想法分组、评估与跟进清单' },
 ] as const
-const templateId = ref('meeting-minutes')
-
-// 用户在共享条点「停止共享」→ 音频轨结束，自动收尾本次录音并转写
-recorder.onAudioEnded = () => {
-  if (recording.value) void stop()
-}
 
 const renamingSpeaker = ref('')
 const renamingName = ref('')
+const renamingBusy = ref(false)
 
-const showNotice = (message: string, kind: 'info' | 'error' = 'info') => {
-  notice.value = message
-  noticeKind.value = kind
-  if (kind === 'info') window.setTimeout(() => { if (notice.value === message) notice.value = '' }, 6000)
-}
+const showNotice = meetingSession.notify
+const dismissNotice = meetingSession.dismissNotice
+const notice = meetingSession.notice
+const noticeKind = meetingSession.noticeKind
 
 const refreshStatus = async () => {
   try {
@@ -75,94 +76,60 @@ const refreshStatus = async () => {
   }
 }
 
+// 连接失败时给能执行的下一步，而不是只抛一条 "无法连接知识服务器"
+const serverError = ref('')
+const serverErrorKind = ref<'network' | 'auth' | 'asr'>('network')
+const retrying = ref(false)
+
+const explainServerError = (message: string) => {
+  if (message.includes('会议听记未启用')) {
+    serverErrorKind.value = 'asr'
+    return '知识服务没有开启会议听记能力（转写引擎未安装或未启用），请联系管理员开启。'
+  }
+  if (message.includes('登录已失效') || message.includes('请先登录')) {
+    serverErrorKind.value = 'auth'
+    return '登录已失效，请先重新登录知识服务。'
+  }
+  serverErrorKind.value = 'network'
+  return message
+}
+
 const refreshList = async () => {
   try {
     meetings.value = await core.meetingsList(50)
+    serverError.value = ''
   } catch (e) {
-    showNotice(e instanceof Error ? e.message : String(e), 'error')
+    serverError.value = explainServerError(e instanceof Error ? e.message : String(e))
   }
 }
 
-// ─── 录音 ───
-
-const liveSessionId = ref('')
-const liveLines = ref<MeetingLiveLine[]>([])
-const liveCurrent = ref('')
-const livePoints = ref<string[]>([])
-const liveFailed = ref(false)
-const liveBox = ref<HTMLElement | null>(null)
-
-// 推流队列：600ms 一片；网络卡顿时丢最旧，宁缺字也不无限积压
-const STREAM_QUEUE_MAX = 20
-let streamQueue: Uint8Array[] = []
-let streamPumping = false
-let pointsBusy = false
-let lastPointsLines = 0
-
-const toBase64 = (bytes: Uint8Array) => {
-  let binary = ''
-  const step = 0x8000
-  for (let start = 0; start < bytes.length; start += step) {
-    binary += String.fromCharCode(...bytes.subarray(start, start + step))
-  }
-  return btoa(binary)
-}
-
-const refreshLivePoints = async () => {
-  const id = liveSessionId.value
-  if (!id || pointsBusy) return
-  pointsBusy = true
+const retryConnect = async () => {
+  if (retrying.value) return
+  retrying.value = true
   try {
-    livePoints.value = await core.meetingLivePoints(id)
-  } catch {
-    // 会中要点是增值层：失败下一轮再试，不打断录音与字幕
-  } finally {
-    pointsBusy = false
-  }
-}
-
-const pumpStream = async () => {
-  if (streamPumping) return
-  streamPumping = true
-  try {
-    while (streamQueue.length && liveSessionId.value) {
-      const piece = streamQueue.shift()
-      if (!piece) break
-      try {
-        const view = await core.meetingStreamChunk(liveSessionId.value, toBase64(piece))
-        liveLines.value = view.lines
-        liveCurrent.value = view.current
-        if (view.lines.length - lastPointsLines >= 8) {
-          lastPointsLines = view.lines.length
-          void refreshLivePoints()
-        }
-      } catch {
-        // 推流断了就收摊：剩下的音频仍会在录制结束后整段离线转写
-        liveFailed.value = true
-        streamQueue = []
-        break
-      }
+    await refreshStatus()
+    if (!status.value.loggedIn) return
+    await refreshList()
+    if (!serverError.value) {
+      showNotice('已连接知识服务')
+      void core.meetingStreamWarm().catch(() => {})
     }
   } finally {
-    streamPumping = false
+    retrying.value = false
   }
 }
 
-const enqueueChunk = (pcm: Uint8Array) => {
-  streamQueue.push(pcm)
-  if (streamQueue.length > STREAM_QUEUE_MAX) streamQueue.splice(0, streamQueue.length - STREAM_QUEUE_MAX)
-  void pumpStream()
+const guardedStart = async () => {
+  if (serverError.value) {
+    showNotice(serverError.value, 'error')
+    return
+  }
+  await meetingSession.start()
 }
 
-const resetLive = () => {
-  liveSessionId.value = ''
-  liveLines.value = []
-  liveCurrent.value = ''
-  livePoints.value = []
-  liveFailed.value = false
-  streamQueue = []
-  lastPointsLines = 0
-}
+// ─── 录音（状态与采集在 meetingSession 单例里，切页不中断） ───
+
+const liveBox = ref<HTMLElement | null>(null)
 
 // 字幕跟随最新一行（像钉钉那样贴着底部滚动）
 watch(
@@ -173,92 +140,18 @@ watch(
   },
 )
 
-const fallbackTitle = () => new Date().toLocaleString('zh-CN', { hour12: false }) + ' 的会议'
+const stop = meetingSession.stop
+const cancelRecording = meetingSession.cancel
 
-const start = async () => {
-  notice.value = ''
-  resetLive()
-  // 先落一条 recording 记录当推流会话；录完的整段上传复用同一条，不落两条听记
-  try {
-    const session = await core.meetingStreamOpen(title.value.trim() || fallbackTitle(), templateId.value)
-    liveSessionId.value = session.id
-  } catch {
-    liveFailed.value = true
-    showNotice('实时上屏本次不可用（流式模型未就绪），仍可正常录音并转写', 'error')
-  }
-  try {
-    await recorder.start(
-      audioSource.value,
-      value => { level.value = value },
-      liveSessionId.value ? enqueueChunk : undefined,
-    )
-    recording.value = true
-    elapsed.value = 0
-    timerHandle = window.setInterval(() => { elapsed.value = recorder.elapsedSeconds() }, 500)
-  } catch (e) {
-    // 采集失败：把刚建的会话记录收掉，别留孤儿条目
-    if (liveSessionId.value) await core.meetingRemove(liveSessionId.value).catch(() => {})
-    resetLive()
-    // 采集层抛出的文案已面向用户（取消选择/未勾选音频/不支持），直接展示
-    showNotice(e instanceof Error ? e.message : String(e), 'error')
-  }
+// 录音上传受理后（可能发生在用户已切走的页面上）：回来后刷新列表并打开这条听记
+const consumeFinished = async () => {
+  const id = meetingSession.takeFinished()
+  if (!id) return
+  await refreshList()
+  await openDetail(id)
 }
 
-const stop = async () => {
-  if (!recording.value) return
-  stopTimer()
-  level.value = 0
-  recording.value = false
-  uploading.value = true
-  const sessionId = liveSessionId.value
-  try {
-    const { blob, durationSeconds } = await recorder.stop()
-    if (durationSeconds < 1) {
-      if (sessionId) await core.meetingRemove(sessionId).catch(() => {})
-      resetLive()
-      showNotice('录音太短（不足 1 秒），已丢弃', 'error')
-      return
-    }
-    if (sessionId) {
-      try {
-        const final = await core.meetingStreamStop(sessionId)
-        liveLines.value = final.lines
-      } catch {
-        // 收尾包失败不影响整段重跑
-      }
-    }
-    liveSessionId.value = ''
-    streamQueue = []
-    const created = await core.meetingUpload(blob, title.value.trim() || fallbackTitle(), templateId.value, sessionId)
-    title.value = ''
-    await refreshList()
-    await openDetail(created.id)
-    resetLive()
-    showNotice('录音已上传，正在转写…')
-  } catch (e) {
-    resetLive()
-    showNotice(e instanceof Error ? e.message : String(e), 'error')
-  } finally {
-    uploading.value = false
-  }
-}
-
-const cancelRecording = async () => {
-  stopTimer()
-  recording.value = false
-  level.value = 0
-  recorder.abort()
-  const sessionId = liveSessionId.value
-  resetLive()
-  if (sessionId) await core.meetingRemove(sessionId).catch(() => {})
-}
-
-const stopTimer = () => {
-  if (timerHandle !== null) {
-    window.clearInterval(timerHandle)
-    timerHandle = null
-  }
-}
+watch(() => meetingSession.finishedMeetingId.value, () => { void consumeFinished() })
 
 // ─── 详情与轮询 ───
 
@@ -274,7 +167,10 @@ const openDetail = async (id: string) => {
     selected.value = detail
     regenTemplateId.value = detail.template_id || 'meeting-minutes'
     if (detail.status === 'completed' && !audioUrl.value) {
-      audioUrl.value = await core.meetingAudioObjectUrl(id)
+      // 音频是增强项：拿不到（老记录没留 wav/服务端暂时失败）不该挡住纪要阅读
+      void core.meetingAudioObjectUrl(id)
+        .then(url => { if (selected.value?.id === id) audioUrl.value = url })
+        .catch(() => {})
     }
     ensurePolling()
   } catch (e) {
@@ -318,9 +214,30 @@ const closeDetail = () => {
   confirmingDelete.value = false
 }
 
-// ─── 发言人改名（行内编辑） ───
+// ─── 发言人（改名 / 标注真名） ───
+//
+// 钉钉听记的做法是把「说话人」当一等对象：详情页列出本场所有发言人，
+// 点开就能标注真名，之后的转写行与导出都跟着变。这里同样先给一份
+// 发言人清单，而不是让用户去转写正文里找那个小小的名字芯片。
 
 const nameOf = (speaker: string) => selected.value?.speaker_names?.[speaker] || `说话人 ${Number(speaker) + 1}`
+
+const speakerRows = computed(() => {
+  const meeting = selected.value
+  if (!meeting) return [] as { speaker: string; name: string; count: number; seconds: number }[]
+  const rows = new Map<string, { speaker: string; name: string; count: number; seconds: number }>()
+  const ensure = (speaker: string) => {
+    if (!rows.has(speaker)) rows.set(speaker, { speaker, name: nameOf(speaker), count: 0, seconds: 0 })
+    return rows.get(speaker)!
+  }
+  for (const segment of meeting.segments) {
+    const row = ensure(String(segment.speaker))
+    row.count += 1
+    row.seconds += Math.max(0, Number(segment.end) - Number(segment.start))
+  }
+  for (const speaker of Object.keys(meeting.speaker_names || {})) ensure(speaker)
+  return [...rows.values()].sort((left, right) => Number(left.speaker) - Number(right.speaker))
+})
 
 const beginRename = (speaker: string) => {
   renamingSpeaker.value = speaker
@@ -330,21 +247,136 @@ const beginRename = (speaker: string) => {
 const confirmRename = async () => {
   const speaker = renamingSpeaker.value
   const name = renamingName.value.trim()
-  if (!selected.value || !speaker || !name) {
-    renamingSpeaker.value = ''
+  if (!selected.value || !speaker || !name || renamingBusy.value) {
+    if (!name) renamingSpeaker.value = ''
     return
   }
+  renamingBusy.value = true
   try {
+    const before = nameOf(speaker)
     selected.value = await core.meetingSpeakerRename(selected.value.id, speaker, name)
     await refreshList()
+    showNotice(before === name ? '发言人名称未变化' : `已把「${before}」标注为「${name}」`)
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
+    renamingBusy.value = false
     renamingSpeaker.value = ''
   }
 }
 
-// ─── 导入已有音频文件（浏览器解码 → 16k WAV → 复用上传通道）───
+// 合并发言人（对标钉钉「合并发言人」）：说话人分离偶尔把同一个人拆成两簇，
+// 或者两簇其实是一个人——把来源那位的全部轮次并进目标那位即可，改名/导出立刻跟着变。
+const mergeFrom = ref('')
+
+const beginMerge = (speaker: string) => {
+  mergeFrom.value = speaker
+}
+
+const confirmMerge = async () => {
+  if (!selected.value || !mergeFrom.value || renamingBusy.value) return
+  const target = speakerRows.value.find(row => row.speaker !== mergeFrom.value)?.speaker
+  if (!target) {
+    showNotice('本场只有一位发言人，无需合并', 'error')
+    mergeFrom.value = ''
+    return
+  }
+  renamingBusy.value = true
+  try {
+    const fromName = nameOf(mergeFrom.value)
+    const intoName = nameOf(target)
+    selected.value = await core.meetingSpeakerMerge(selected.value.id, mergeFrom.value, target)
+    await refreshList()
+    showNotice(`已把「${fromName}」的发言并进「${intoName}」，需要的话点「按模板重生成」刷新纪要`)
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    renamingBusy.value = false
+    mergeFrom.value = ''
+  }
+}
+
+// ─── 逐字稿编辑（对标钉钉逐字稿可编辑：识别错了直接改，不用重新转写整场）───
+
+const editingSegment = ref(-1)
+const editingText = ref('')
+const segmentBusy = ref(false)
+
+const beginEditSegment = (index: number, event?: Event) => {
+  event?.stopPropagation()
+  editingSegment.value = index
+  editingText.value = selected.value?.segments[index]?.text ?? ''
+}
+
+const confirmEditSegment = async (event?: Event) => {
+  event?.stopPropagation()
+  const meeting = selected.value
+  const index = editingSegment.value
+  const text = editingText.value.trim()
+  if (!meeting || index < 0 || segmentBusy.value) return
+  if (!text) {
+    showNotice('转写内容不能为空', 'error')
+    return
+  }
+  if (text === meeting.segments[index]?.text) {
+    editingSegment.value = -1
+    return
+  }
+  segmentBusy.value = true
+  try {
+    selected.value = await core.meetingSegmentUpdate(meeting.id, index, text)
+    showNotice('这一句已修改')
+  } catch (e) {
+    showNotice(e instanceof Error ? e.message : String(e), 'error')
+  } finally {
+    segmentBusy.value = false
+    editingSegment.value = -1
+  }
+}
+
+// ─── 实时上屏的辅助展示 ───
+//
+// 用户判断「流式到底通不通」靠两件事：字在长、并且「N 秒前出过字」在走。
+// 只给转圈不给时间的话，模型冷加载或麦克风静音会让界面和卡死长得一模一样。
+
+const nowTick = ref(Date.now())
+let nowTimer: number | null = null
+watch(recording, value => {
+  if (value && nowTimer === null) {
+    nowTimer = window.setInterval(() => { nowTick.value = Date.now() }, 1000)
+  } else if (!value && nowTimer !== null) {
+    window.clearInterval(nowTimer)
+    nowTimer = null
+  }
+})
+
+const secondsSinceLive = computed(() =>
+  liveUpdatedAt.value ? Math.max(0, Math.round((nowTick.value - liveUpdatedAt.value) / 1000)) : -1,
+)
+
+const liveHint = computed(() => {
+  if (liveState.value === 'warming') {
+    return modelReady.value ? '实时模型已就绪，说几句话就出字' : '正在加载实时识别模型（首次约 30 秒），录音已经开始不耽误'
+  }
+  if (liveState.value === 'degraded') return '推流链路不稳，已改为每 3 秒拉取服务端已识别内容，录音不受影响'
+  if (liveState.value === 'unavailable') return '实时上屏不可用，录音结束后照常生成完整转写'
+  if (liveState.value !== 'live') return ''
+  if (secondsSinceLive.value < 0) return '正在听…说几句话就出字'
+  if (secondsSinceLive.value <= 6) return '识别中，说完一句会立刻上屏'
+  return `已 ${secondsSinceLive.value} 秒没有新内容（可能在停顿，或麦克风没收到声音）`
+})
+
+const checkLabel = (verdict: string) => {
+  if (verdict === 'attention') return '需要核对'
+  if (verdict === 'ok') return '没发现问题'
+  if (verdict === 'unavailable') return 'AI 不可用'
+  return '内容不足'
+}
+
+// 会中快检最近一条（列表按时间倒序，第一条就是最新）
+const latestCheck = computed(() => liveChecks.value[0] || null)
+
+const askLiveCheck = () => { void meetingSession.checkNow() }
 
 const importingFile = ref(false)
 const audioFileInput = ref<HTMLInputElement | null>(null)
@@ -973,14 +1005,19 @@ onMounted(async () => {
     void loadVoiceprints()
     // 流式模型冷加载实测约 70s，进页面就后台预热，别让用户在按下录音后等首片
     void core.meetingStreamWarm().catch(() => {})
+    // 用户切走期间录音上传完成的情况：回来后直接打开那条听记
+    void consumeFinished()
   }
 })
 
 onBeforeUnmount(() => {
-  stopTimer()
+  // 只收页面自己的轮询、音频 URL 与本地计时器；录音在 meetingSession 单例里，切页不中断
   stopPolling()
   releaseAudio()
-  if (recording.value) recorder.abort()
+  if (nowTimer !== null) {
+    window.clearInterval(nowTimer)
+    nowTimer = null
+  }
 })
 </script>
 
@@ -996,7 +1033,7 @@ onBeforeUnmount(() => {
 
     <div v-if="notice" :class="['alert', { 'alert-error': noticeKind === 'error' }]" role="alert">
       <span class="alert-copy"><b>{{ notice }}</b></span>
-      <button type="button" aria-label="关闭" @click="notice = ''">×</button>
+      <button type="button" aria-label="关闭" @click="dismissNotice">×</button>
     </div>
 
     <!-- 未登录知识服务：听记数据在服务端，必须登录 -->
@@ -1007,6 +1044,19 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else-if="status.loggedIn">
+      <!-- 连不上知识服务时先给可执行的下一步，别让用户按了录音才发现上传不了 -->
+      <div v-if="serverError && !recording && !uploading" class="card meeting-server-error" role="alert">
+        <div class="meeting-server-error-copy">
+          <strong>暂时连不上知识服务</strong>
+          <span>{{ serverError }}</span>
+          <span v-if="status.serverUrl" class="meeting-hint">当前地址：{{ status.serverUrl }}</span>
+        </div>
+        <button v-if="serverErrorKind === 'auth'" class="primary-button" type="button" @click="emit('goto-knowledge')">去「知识」页登录</button>
+        <button v-else class="primary-button" type="button" :disabled="retrying" @click="retryConnect">
+          {{ retrying ? '重试中…' : '重试连接' }}
+        </button>
+      </div>
+
       <!-- 录音控制卡 -->
       <div class="card meeting-record-card">
         <div v-if="!recording && !uploading" class="meeting-record-idle">
@@ -1043,12 +1093,12 @@ onBeforeUnmount(() => {
                 @click="audioSource = 'system'"
               >系统声音+麦克风</button>
             </div>
-            <input v-model="title" class="setting-input meeting-title-input" type="text" placeholder="会议主题（可选，默认用当前时间）" @keydown.enter="start" />
+            <input v-model="title" class="setting-input meeting-title-input" type="text" placeholder="会议主题（可选，默认用当前时间）" @keydown.enter="guardedStart" />
             <input ref="audioFileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.flac,.ogg" hidden @change="onImportFile" />
-            <button class="text-button" type="button" :disabled="importingFile" @click="audioFileInput?.click()">
+            <button class="text-button" type="button" :disabled="importingFile || !!serverError" :title="serverError ? '知识服务未连接，暂时无法导入' : ''" @click="audioFileInput?.click()">
               {{ importingFile ? '导入中…' : '导入文件' }}
             </button>
-            <button class="primary-button meeting-record-button" type="button" @click="start">
+            <button class="primary-button meeting-record-button" type="button" :disabled="!!serverError" :title="serverError ? '知识服务未连接，暂时无法开始录音' : ''" @click="guardedStart">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>
               开始录音
             </button>
@@ -1096,41 +1146,82 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
+          <!-- 提示必须在空闲分支内部：放到 v-if/v-else 链中间会把「空闲」与「上传中」拆成两支 -->
+          <p v-if="audioSource === 'system'" class="setting-hint meeting-source-hint">
+            线上会议用这个：同时录下电脑正在播放的声音（对方发言）与你自己说的话，两路在本地合成一路音再转写。点「开始录音」后会弹出共享选择器：选「整个屏幕」并勾选「同时分享系统音频」（选单个窗口目前拿不到系统声音）。
+          </p>
         </div>
-        <p v-if="!recording && !uploading && audioSource === 'system'" class="setting-hint meeting-source-hint">
-          线上会议用这个：同时录下电脑正在播放的声音（对方发言）与你自己说的话，两路在本地合成一路音再转写。点「开始录音」后会弹出共享选择器：选「整个屏幕」并勾选「同时分享系统音频」（选单个窗口目前拿不到系统声音）。
-        </p>
         <div v-else-if="recording" class="meeting-record-active">
           <span class="meeting-level" aria-hidden="true">
             <span v-for="(on, index) in levelBars" :key="index" :class="['meeting-level-bar', { on }]" />
           </span>
           <span class="meeting-timer">{{ formatTime(elapsed) }}</span>
           <span class="meeting-recording-dot" aria-hidden="true" />
-          <span class="meeting-hint">正在录音，请保持应用打开</span>
+          <span class="meeting-hint">正在录音，切到其他页面也不会中断</span>
           <button class="primary-button" type="button" @click="stop">完成并转写</button>
           <button class="text-button" type="button" @click="cancelRecording">取消</button>
-          <!-- 实时上屏（对标钉钉边说边出字 + 会中要点）：预览性质，终态以录制后的整段转写为准 -->
-          <div v-if="liveSessionId" ref="liveBox" class="meeting-live">
-            <div v-if="livePoints.length" class="meeting-live-points">
-              <div class="meeting-live-title">会中要点</div>
-              <ul>
-                <li v-for="(point, index) in livePoints" :key="index">{{ point }}</li>
-              </ul>
-            </div>
-            <div class="meeting-live-title">实时字幕</div>
-            <div class="meeting-live-lines">
-              <p v-for="(line, index) in liveLines" :key="index" class="meeting-live-line">
-                <span class="meeting-segment-time">{{ formatTime(line.at) }}</span>{{ line.text }}
-              </p>
-              <p v-if="liveCurrent" class="meeting-live-line is-current">{{ liveCurrent }}</p>
-              <p v-if="!liveLines.length && !liveCurrent" class="meeting-hint">正在听…说几句话就出字</p>
-            </div>
-          </div>
-          <p v-else-if="liveFailed" class="meeting-hint">实时上屏本次不可用，录完照常出完整转写</p>
         </div>
         <div v-else class="meeting-record-active">
           <span class="knowledge-spinner" aria-hidden="true" />
-          <span class="meeting-hint">正在上传录音…</span>
+          <span class="meeting-hint">正在上传录音并生成完整转写…</span>
+          <span v-if="liveLines.length" class="meeting-hint">实时字幕已记录 {{ liveLines.length }} 行</span>
+        </div>
+        <!-- 实时上屏（对标钉钉边说边出字 + 会中要点 + 会中快检）：预览性质，终态以录制后的整段转写为准。
+             录音中与上传中都保留，切页回来还能看到刚才说了什么 -->
+        <div
+          v-if="(recording || uploading) && liveSessionId"
+          class="meeting-live"
+        >
+          <div class="meeting-live-head">
+            <div class="meeting-live-title">
+              <span :class="['meeting-live-dot', liveState]" aria-hidden="true" />
+              实时字幕
+              <span v-if="liveState === 'live'" class="meeting-live-state">{{ liveLines.length }} 行 · 边说边出字</span>
+              <span v-else-if="liveState === 'warming'" class="meeting-live-state">模型准备中</span>
+              <span v-else-if="liveState === 'degraded'" class="meeting-live-state">轮询兜底</span>
+              <span v-else-if="liveState === 'unavailable'" class="meeting-live-state">不可用</span>
+            </div>
+            <button
+              class="text-button meeting-live-check-btn"
+              type="button"
+              :disabled="liveChecking || !liveLines.length"
+              :title="liveLines.length ? '只看最近几行，核对数字/期限/人名等口径' : '先等几句话上屏'"
+              @click="askLiveCheck"
+            >
+              {{ liveChecking ? '核对中…' : 'AI 快检' }}
+            </button>
+          </div>
+          <p v-if="liveHint" class="meeting-live-hint">{{ liveHint }}</p>
+          <p v-if="liveState === 'unavailable' || liveState === 'degraded'" class="meeting-live-error">
+            {{ liveError || (liveState === 'degraded' ? '推流中断，已改用轮询' : '实时上屏不可用') }}。录音不会中断，结束后照常生成完整转写。
+          </p>
+          <div ref="liveBox" class="meeting-live-lines">
+            <p v-for="(line, index) in liveLines" :key="index" class="meeting-live-line">
+              <span class="meeting-segment-time">{{ formatTime(line.at) }}</span>{{ line.text }}
+            </p>
+            <p v-if="liveCurrent" class="meeting-live-line is-current">{{ liveCurrent }}</p>
+            <p v-if="!liveLines.length && !liveCurrent" class="meeting-hint">
+              {{ liveState === 'warming' ? '模型加载完成后，说第一句话就会上屏' : '正在听…说几句话就出字' }}
+            </p>
+          </div>
+          <!-- 会中快检：整场纪要要等录音结束，会中能救场的只有「刚才这句的数字对不对」 -->
+          <div v-if="latestCheck" class="meeting-live-check" :class="`is-${latestCheck.verdict}`">
+            <div class="meeting-live-title">
+              会中快检 · {{ latestCheck.checked_at }}
+              <span class="meeting-live-check-verdict">{{ checkLabel(latestCheck.verdict) }}</span>
+            </div>
+            <p class="meeting-live-check-note">{{ latestCheck.note }}</p>
+            <ul v-if="latestCheck.points.length">
+              <li v-for="(point, index) in latestCheck.points" :key="index">{{ point }}</li>
+            </ul>
+            <p v-if="liveChecks.length > 1" class="meeting-hint">历史上共核对 {{ liveChecks.length }} 次，最近一次在最上方</p>
+          </div>
+          <div v-if="livePoints.length" class="meeting-live-points">
+            <div class="meeting-live-title">会中要点</div>
+            <ul>
+              <li v-for="(point, index) in livePoints" :key="index">{{ point }}</li>
+            </ul>
+          </div>
         </div>
       </div>
 
@@ -1383,11 +1474,60 @@ onBeforeUnmount(() => {
               </p>
             </section>
 
+            <!-- 发言人卡（对标钉钉听记的发言人清单）：把「说话人 N」标注成真名，或把被拆开的同一个人合并 -->
+            <section v-if="speakerRows.length" class="meeting-block">
+              <header class="meeting-block-head">
+                <h3>发言人</h3>
+                <span class="meeting-block-count">{{ speakerRows.length }} 位 · 点名字标注真名</span>
+              </header>
+              <div class="meeting-speakers">
+                <div v-for="row in speakerRows" :key="row.speaker" class="meeting-speaker-row">
+                  <span class="meeting-speaker-avatar" aria-hidden="true">{{ (row.name || '说').slice(0, 1) }}</span>
+                  <template v-if="renamingSpeaker === row.speaker">
+                    <input
+                      v-model="renamingName"
+                      class="setting-input meeting-rename-input"
+                      type="text"
+                      maxlength="20"
+                      placeholder="输入这位发言人的名字"
+                      :disabled="renamingBusy"
+                      @keydown.enter.stop="confirmRename"
+                      @keydown.esc.stop="renamingSpeaker = ''"
+                    />
+                    <button class="text-button" type="button" :disabled="renamingBusy || !renamingName.trim()" @click="confirmRename">
+                      {{ renamingBusy ? '保存中…' : '保存' }}
+                    </button>
+                    <button class="text-button" type="button" :disabled="renamingBusy" @click="renamingSpeaker = ''">取消</button>
+                  </template>
+                  <template v-else-if="mergeFrom === row.speaker">
+                    <span class="meeting-speaker-meta">把「{{ row.name }}」的 {{ row.count }} 句并进其他发言人？</span>
+                    <button class="text-button" type="button" :disabled="renamingBusy" @click="confirmMerge">
+                      {{ renamingBusy ? '合并中…' : '确认合并' }}
+                    </button>
+                    <button class="text-button" type="button" :disabled="renamingBusy" @click="mergeFrom = ''">取消</button>
+                  </template>
+                  <template v-else>
+                    <button class="meeting-speaker-name" type="button" title="点击标注真名" @click="beginRename(row.speaker)">{{ row.name }}</button>
+                    <span class="meeting-speaker-meta">{{ row.count }} 句 · {{ formatTime(row.seconds) }}</span>
+                    <button class="text-button" type="button" @click="beginRename(row.speaker)">改名</button>
+                    <button
+                      v-if="speakerRows.length > 1"
+                      class="text-button"
+                      type="button"
+                      title="同一人被拆成两簇时，把这一位的发言并进另一位"
+                      @click="beginMerge(row.speaker)"
+                    >合并</button>
+                  </template>
+                </div>
+              </div>
+              <p class="meeting-hint">标注后转写行、导出文件会立刻用新名字；同时会记下这个人的声纹，之后的会议自动认领。纪要或导图里若仍是旧称呼，点上方「按模板重生成」即可。声纹可在录音卡的「识别热词与声纹」里随时删除。</p>
+            </section>
+
             <!-- 转写卡 -->
             <section class="meeting-block">
               <header class="meeting-block-head">
                 <h3>转写记录</h3>
-                <span class="meeting-block-count">{{ selected.segments.length }} 句 · 点击句子跳转播放</span>
+                <span class="meeting-block-count">{{ selected.segments.length }} 句 · 点击句子跳转播放，点「改字」可修正识别错误</span>
               </header>
           <div class="meeting-transcript">
             <div
@@ -1395,11 +1535,11 @@ onBeforeUnmount(() => {
               :id="`meeting-segment-${index}`"
               :key="index"
               :class="['meeting-segment', { on: index === activeSegmentIndex }]"
-              :title="'点击跳转播放'"
+              :title="editingSegment === index ? '' : '点击跳转播放'"
               role="button"
               tabindex="0"
-              @click="seekTo(segment.start)"
-              @keydown.enter="seekTo(segment.start)"
+              @click="editingSegment === index ? null : seekTo(segment.start)"
+              @keydown.enter="editingSegment === index ? null : seekTo(segment.start)"
             >
               <template v-if="renamingSpeaker === segment.speaker">
                 <div class="meeting-segment-edit" @click.stop>
@@ -1407,19 +1547,46 @@ onBeforeUnmount(() => {
                     v-model="renamingName"
                     class="setting-input meeting-rename-input"
                     type="text"
-                    @keydown.enter="confirmRename"
-                    @keydown.esc="renamingSpeaker = ''"
+                    :disabled="renamingBusy"
+                    @keydown.enter.stop="confirmRename"
+                    @keydown.esc.stop="renamingSpeaker = ''"
                   />
-                  <button class="text-button" type="button" @click="confirmRename">确定</button>
-                  <button class="text-button" type="button" @click="renamingSpeaker = ''">取消</button>
+                  <button class="text-button" type="button" :disabled="renamingBusy" @click="confirmRename">{{ renamingBusy ? '保存中…' : '确定' }}</button>
+                  <button class="text-button" type="button" :disabled="renamingBusy" @click="renamingSpeaker = ''">取消</button>
+                </div>
+              </template>
+              <template v-else-if="editingSegment === index">
+                <div class="meeting-segment-edit" @click.stop>
+                  <button class="meeting-speaker-chip" type="button" @click="beginRename(segment.speaker)">
+                    {{ nameOf(segment.speaker) }}
+                  </button>
+                  <span class="meeting-segment-time">{{ formatTime(segment.start) }}</span>
+                  <textarea
+                    v-model="editingText"
+                    class="setting-input meeting-segment-textarea"
+                    rows="2"
+                    :disabled="segmentBusy"
+                    @keydown.enter.prevent="confirmEditSegment()"
+                    @keydown.esc.stop="editingSegment = -1"
+                  />
+                  <button class="text-button" type="button" :disabled="segmentBusy || !editingText.trim()" @click="confirmEditSegment">
+                    {{ segmentBusy ? '保存中…' : '保存' }}
+                  </button>
+                  <button class="text-button" type="button" :disabled="segmentBusy" @click="editingSegment = -1">取消</button>
                 </div>
               </template>
               <template v-else>
-                <button class="meeting-speaker-chip" type="button" :title="'点击改名'" @click="beginRename(segment.speaker)">
+                <button class="meeting-speaker-chip" type="button" :title="'点击改名'" @click.stop="beginRename(segment.speaker)">
                   {{ nameOf(segment.speaker) }}
                 </button>
                 <span class="meeting-segment-time">{{ formatTime(segment.start) }}</span>
                 <span class="meeting-segment-text">{{ segment.text }}</span>
+                <button
+                  class="text-button meeting-segment-edit-btn"
+                  type="button"
+                  title="修正这一句的识别错误"
+                  @click.stop="beginEditSegment(index, $event)"
+                >改字</button>
               </template>
             </div>
           </div>
@@ -1506,7 +1673,7 @@ onBeforeUnmount(() => {
           <h2>听记记录</h2>
           <input v-model="meetingQuery" class="setting-input meeting-search" type="text" placeholder="搜索标题或摘要…" aria-label="搜索听记记录" />
         </div>
-        <p v-if="!meetings.length" class="meeting-hint">还没有记录，点上方「开始录音」创建第一条听记。</p>
+        <p v-if="!meetings.length" class="meeting-hint">{{ serverError ? '连接恢复后会自动加载听记记录。' : '还没有记录，点上方「开始录音」创建第一条听记。' }}</p>
         <p v-else-if="!filteredMeetings.length" class="meeting-hint">没有匹配「{{ meetingQuery }}」的记录。</p>
         <div v-for="meeting in filteredMeetings" :key="meeting.id" class="meeting-item" role="button" tabindex="0" @click="openDetail(meeting.id)" @keydown.enter="openDetail(meeting.id)">
           <span class="meeting-thumb" :style="{ background: thumbColor(meeting.title) }" aria-hidden="true">{{ meeting.title.slice(0, 1) }}</span>

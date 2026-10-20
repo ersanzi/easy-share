@@ -1,4 +1,4 @@
-# 对标吸收清单 — WPS × 钉钉，学到什么 / 落地到哪 / 还有什么没用上
+﻿# 对标吸收清单 — WPS × 钉钉，学到什么 / 落地到哪 / 还有什么没用上
 
 > 这份表是回答「让你学 WPS 和钉钉，你学的是点啥」的唯一交付物。
 > 它取代两份取证文档末尾的「差距清单」（`docs/intelligence/2026-10-15-dingpan-file-storage-reverse.md` §9、
@@ -67,9 +67,9 @@
 | 37 | 区块级独立状态，某块失败只重跑那块 | 听记逆向 §4 选择1 | `knowledge/app/meetings/store.py` · `set_block` | 已落地 | 多一个 `skipped` 态；分块仍是整页轮询刷新 |
 | 38 | 待办是一等实体（负责人/期限/勾选） | §7 E15/E16 | `knowledge/app/meetings/store.py` · `add_todo` | 已落地 | 负责人与期限是自由文本，无日历同步与提醒 |
 | 39 | 关键词独立抽取、可单独补跑 | §7 E14 | `knowledge/app/meetings/service.py` · `_run_keywords_block` | 已落地 | — |
-| 40 | 改名即沉淀声纹，跨会自动认人 | §7 E17 | `knowledge/app/meetings/voiceprint.py` · `MATCH_THRESHOLD` | 已落地 | 阈值 0.67 是量出来的；无授权同意文案与合并发言人 |
-| 41 | 个性化热词提升专名识别 | §7 E18 | `knowledge/app/meetings/hotwords.py` · `validate` | 已落地 | 口径照抄钉钉（字数/条数上限） |
-| 42 | 实时上屏 + 会中要点 | §7 E7/E8/E21 | `knowledge/app/meetings/stream.py` | 部分 | 只做预览，终态以离线重跑为准；会中要点是一维列表，不是可编辑摘要树 |
+| 40 | 改名即沉淀声纹，跨会自动认人 | §7 E17 | `knowledge/app/meetings/voiceprint.py` · `MATCH_THRESHOLD` | 已落地 | 阈值 0.67 是量出来的；无授权同意文案。2026-10-20 补：发言人**合并**（`knowledge/app/meetings/service.py` · `merge_speakers`），重聚类后旧序号上的人工标注不再沿用（`apply_voiceprints` 以声纹为准） |
+| 41 | 个性化热词提升专名识别 | §7 E18 | `knowledge/app/meetings/hotwords.py` · `validate` | 已落地 | 口径照抄钉钉（字数/条数上限）；2026-10-20 起实时推流也吃热词（`knowledge/app/meetings/stream.py` · `_recognize`） |
+| 42 | 实时上屏 + 会中要点 | §7 E7/E8/E21 | `knowledge/app/meetings/stream.py` | 部分 | 只做预览，终态以离线重跑为准；会中要点是一维列表，不是可编辑摘要树。2026-10-20 补：句末/逗号级断行（`knowledge/app/meetings/livenow.py` · `should_break`）、会中快检（`engine/minutecraft/summarizer.py` · `live_check`）、推流自愈与轮询兜底（`frontend/src/services/meetingSession.ts` · `pumpStream`）。**实时无发言人**：流式模型不含说话人分离 |
 | 43 | 听记数据要能被外部 AI 工具读 | §7 E23（钉钉本机 MCP 六件套） | `internal/meetingsmcp/meetingsmcp.go` · `list_meetings` | 已落地 | 现有 7 个只读工具；单域授权，组织域与写回未做 |
 | 44 | 导出到在线文档、DIY 模板、换模型重跑、视频导入、分片续传 | §4、§7 E11/E12/E19/E22 | — | 未做 | 只有内置模板与音频导入；大文件仍一次性 multipart |
 

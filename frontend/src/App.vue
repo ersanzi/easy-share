@@ -17,6 +17,7 @@ import { RECYCLE_RETENTION_DAYS, type Peer, type TransferTask } from './types/co
 import { useEasyShare } from './composables/useEasyShare'
 import { useConfirm } from './composables/useConfirm'
 import { usePlugins } from './composables/usePlugins'
+import { meetingSession } from './services/meetingSession'
 import {
   compareTasks,
   formatBytes,
@@ -84,6 +85,33 @@ const openRecycleBin = async () => {
   cloudRef.value?.openRecycle()
 }
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
+// 听记录音在页面组件之外进行：切页后顶部仍显示计时，点一下回到听记
+const {
+  recording: meetingRecording,
+  uploading: meetingUploading,
+  elapsed: meetingElapsed,
+  liveState: meetingLiveState,
+  liveLines: meetingLiveLines,
+} = meetingSession
+const meetingClock = computed(() => {
+  const total = Math.floor(meetingElapsed.value)
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+})
+// 切页后用户看不到字幕区，顶部胶囊是他判断「识别还在不在」的唯一入口：
+// 出字行数跟着走才算在识别，只有计时在走说明在录但没出字（静音或降级）
+const meetingLiveLabel = computed(() => {
+  if (meetingLiveState.value === 'live') return `${meetingLiveLines.value.length} 行`
+  if (meetingLiveState.value === 'degraded') return '轮询兜底'
+  if (meetingLiveState.value === 'warming') return '识别准备中'
+  if (meetingLiveState.value === 'unavailable') return '仅录音'
+  return ''
+})
+const meetingPillTitle = computed(() =>
+  meetingRecording.value
+    ? `会议录音进行中${meetingLiveLabel.value ? `（${meetingLiveLabel.value}）` : ''}，点击回到会议听记`
+    : '录音已上传，正在生成转写，点击查看',
+)
 
 // 最大化/还原：按钮点击与拖拽区双击共用；切换后重新查询同步图标
 const isMaximised = ref(false)
@@ -246,6 +274,17 @@ const avatarText = computed(() => {
     <div v-if="app.currentUser.value.loggedIn" class="chrome-brand">EasyShare</div>
     <div class="drag-region" @dblclick="toggleMaximise" />
     <div v-if="app.currentUser.value.loggedIn" class="window-quick-actions">
+      <button
+        v-if="meetingRecording || meetingUploading"
+        class="meeting-rec-pill"
+        type="button"
+        :title="meetingPillTitle"
+        @click="view = 'meetings'"
+      >
+        <span :class="['meeting-rec-dot', { uploading: !meetingRecording }]" aria-hidden="true" />
+        <span>{{ meetingRecording ? `录音中 ${meetingClock}` : '听记转写中' }}</span>
+        <span v-if="meetingRecording && meetingLiveLabel" class="meeting-rec-live">{{ meetingLiveLabel }}</span>
+      </button>
       <button
         ref="activityTriggerRef"
         class="activity-trigger"

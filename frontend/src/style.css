@@ -1564,6 +1564,30 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .activity-trigger:hover { color: var(--blue); background: rgba(255,255,255,.9); }
 .activity-trigger:active { transform: scale(.96); }
 .activity-trigger svg { width: 14px; height: 14px; stroke-width: 1.75; }
+/* 跨页录音提示：切页不打断录音，但必须让用户随时看到还在录 */
+.meeting-rec-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 4px 10px;
+  color: var(--red-text);
+  background: rgba(var(--red-rgb),.08);
+  border: 1px solid rgba(var(--red-rgb),.22);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  animation: meeting-rec-in .18s ease-out;
+}
+.meeting-rec-pill:hover { background: rgba(var(--red-rgb),.14); }
+.meeting-rec-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); animation: meeting-rec-pulse 1.6s ease-in-out infinite; }
+.meeting-rec-dot.uploading { background: var(--amber); animation: none; }
+/* 顶栏胶囊里的识别状态（切页后这是用户判断「识别还在不在」的唯一入口） */
+.meeting-rec-live { margin-left: 2px; padding-left: 7px; border-left: 1px solid rgba(var(--red-rgb),.24); font-weight: 600; color: var(--red-text); font-variant-numeric: tabular-nums; }
+@keyframes meeting-rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes meeting-rec-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .activity-badge {
   min-width: 16px;
   padding: 2px 4px;
@@ -1767,12 +1791,22 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .knowledge-sources { font-size: 11px; color: var(--muted); }
 .knowledge-sources summary { cursor: pointer; color: var(--blue); }
 .knowledge-sources ul { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-.knowledge-sources li { padding: 8px 10px; background: rgba(var(--fill-rgb), 0.04); border-radius: 6px; }
+.knowledge-sources li { padding: 0; background: transparent; }
+.knowledge-source {
+  display: flex; flex-direction: column; gap: 4px; width: 100%;
+  padding: 8px 10px; border: 1px solid transparent; border-radius: var(--r-md);
+  background: rgba(var(--fill-rgb), 0.04); color: inherit; text-align: left;
+  cursor: pointer; transition: background 0.12s, border-color 0.12s;
+}
+.knowledge-source:hover { background: var(--bg); border-color: var(--border); }
+.knowledge-source:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.knowledge-source:disabled { cursor: default; }
 .knowledge-source-head { display: flex; align-items: baseline; gap: 8px; }
 .knowledge-source-head strong { color: var(--ink); font-size: 13px; }
 .knowledge-source-score { color: var(--blue); font-size: 11px; }
 .knowledge-source-date { margin-left: auto; font-size: 11px; }
-.knowledge-source-snippet { margin: 5px 0 0; font-size: 13px; line-height: 1.6; }
+.knowledge-source-snippet { display: block; margin: 0; font-size: 13px; line-height: 1.6; }
+.knowledge-source-open { font-size: 11px; color: var(--blue); }
 
 .knowledge-composer {
   display: flex; gap: 10px; padding: 13px 18px; border-top: 1px solid var(--border);
@@ -1784,6 +1818,165 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 }
 .knowledge-input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(var(--blue-rgb), 0.15); }
 .knowledge-input:disabled { opacity: 0.55; }
+
+/* ─── 知识库清单（问答 / 文档切换）─── */
+.knowledge-session-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px; }
+.knowledge-tabs { display: flex; gap: 4px; padding: 3px; width: fit-content; background: var(--soft-bg); border-radius: var(--r-md); }
+.knowledge-tabs button {
+  padding: 5px 16px; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.knowledge-tabs button:hover { color: var(--ink); }
+.knowledge-tabs button.active { background: var(--bg); color: var(--ink); box-shadow: var(--sh-sm); }
+.knowledge-doc-card { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.knowledge-doc-toolbar {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--border);
+}
+.knowledge-doc-toolbar h2 { margin: 0 0 2px; color: var(--ink); font-size: 14px; }
+.knowledge-doc-toolbar p { margin: 0; color: var(--faint); font-size: 11px; }
+.knowledge-doc-actions { display: flex; align-items: center; gap: 8px; }
+.knowledge-doc-search {
+  width: 200px; height: 30px; padding: 0 10px;
+  color: inherit; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-md); outline: none; font-size: 12px;
+}
+.knowledge-doc-search:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(var(--blue-rgb), 0.15); }
+.knowledge-doc-list {
+  flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 8px 10px 14px;
+  list-style: none; display: flex; flex-direction: column; gap: 2px;
+}
+.knowledge-doc-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; padding: 10px 12px; border: 1px solid transparent; border-radius: var(--r-md);
+  background: transparent; color: inherit; text-align: left; cursor: pointer;
+}
+.knowledge-doc-row:hover { background: var(--bg-panel); }
+.knowledge-doc-row:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.knowledge-doc-row:disabled { cursor: default; opacity: 0.72; }
+.knowledge-doc-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.knowledge-doc-title {
+  overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 500;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.knowledge-doc-meta { color: var(--faint); font-size: 11px; }
+.knowledge-doc-error { color: var(--red-text); font-size: 11px; line-height: 1.45; }
+.knowledge-doc-status { flex: none; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.knowledge-doc-status.is-ready { color: var(--green-text); background: var(--green-tint); }
+.knowledge-doc-status.is-busy { color: var(--blue); background: var(--blue-light); }
+.knowledge-doc-status.is-warn { color: var(--amber-text); background: var(--amber-tint); }
+.knowledge-doc-status.is-failed { color: var(--red-text); background: var(--red-tint); }
+.knowledge-doc-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 24px; text-align: center;
+}
+.knowledge-doc-empty strong { color: var(--ink); font-size: 14px; }
+.knowledge-doc-empty p { margin: 0; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 720px) {
+  .knowledge-doc-toolbar { align-items: flex-start; flex-direction: column; }
+  .knowledge-doc-actions { width: 100%; }
+  .knowledge-doc-search { flex: 1; width: auto; }
+}
+
+/* ─── 知识原文阅读页（引用 → 原文；只读，不做编辑）─── */
+.reader-overlay {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(var(--line-rgb), 0.38);
+}
+.reader-dialog {
+  display: flex; flex-direction: column;
+  width: min(1040px, 100%); height: min(86vh, 820px);
+  overflow: hidden; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--r-xl);
+  box-shadow: var(--sh-lg);
+  animation: reader-in 0.18s ease-out;
+}
+@keyframes reader-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.reader-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding: 18px 22px; border-bottom: 1px solid var(--border);
+}
+.reader-title { min-width: 0; }
+.reader-kicker { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--blue); }
+.reader-title h2 {
+  margin: 2px 0 4px; font-size: 18px; line-height: 1.35; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.reader-title p { margin: 0; font-size: 12px; color: var(--faint); }
+.reader-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.reader-close {
+  width: 30px; height: 30px; border: 0; border-radius: 50%;
+  background: var(--soft-bg); color: var(--muted);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.reader-close:hover { background: rgba(var(--fill-rgb), 0.14); color: var(--ink); }
+.reader-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr); }
+.reader-body--single { grid-template-columns: minmax(0, 1fr); }
+.reader-outline {
+  overflow-y: auto; padding: 18px 14px;
+  border-right: 1px solid var(--border); background: var(--bg-chrome);
+}
+.reader-outline-title {
+  display: block; margin: 0 8px 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--faint);
+}
+.reader-outline button {
+  display: block; width: 100%; padding: 6px 8px;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--muted); text-align: left; font-size: 12px; line-height: 1.45;
+  cursor: pointer;
+}
+.reader-outline button:hover { background: var(--soft-bg); color: var(--ink); }
+.reader-content { overflow-y: auto; padding: 28px 40px 60px; }
+.reader-block { max-width: 760px; margin-left: auto; margin-right: auto; }
+.reader-heading {
+  margin-top: 26px; margin-bottom: 10px;
+  color: var(--ink); font-weight: 600; line-height: 1.4;
+}
+.reader-heading:first-child { margin-top: 0; }
+.reader-level-1 { font-size: 24px; }
+.reader-level-2 { font-size: 19px; }
+.reader-level-3 { font-size: 16px; }
+.reader-level-4, .reader-level-5, .reader-level-6 { font-size: 14px; }
+.reader-paragraph {
+  margin-top: 0; margin-bottom: 12px;
+  color: var(--text); font-size: 14px; line-height: 1.85;
+  white-space: pre-wrap; word-break: break-word;
+}
+.reader-source {
+  display: inline-block; margin-right: 8px; padding: 1px 6px;
+  border-radius: var(--r-sm); background: var(--soft-bg);
+  color: var(--faint); font-size: 11px; vertical-align: 1px;
+}
+.reader-table-wrap { overflow-x: auto; margin: 12px auto 18px; }
+.reader-table { width: 100%; margin: 0; border-collapse: collapse; font-size: 13px; }
+.reader-table caption { caption-side: top; padding: 0 0 6px; color: var(--faint); font-size: 11px; text-align: left; }
+.reader-table th, .reader-table td { padding: 8px 10px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
+.reader-table th { background: var(--bg-panel); color: var(--ink); font-weight: 600; }
+.reader-table td { color: var(--text); }
+.reader-block.is-cited {
+  padding-left: 12px; padding-right: 10px;
+  background: var(--blue-light); border-left: 3px solid var(--blue);
+  border-radius: var(--r-sm);
+}
+.reader-status {
+  display: grid; place-items: center; min-height: 240px; padding: 24px;
+  color: var(--faint); font-size: 13px;
+}
+.reader-status--error { color: var(--red-text); }
+.reader-footer {
+  padding: 10px 22px; border-top: 1px solid var(--border);
+  background: var(--bg-chrome); color: var(--faint); font-size: 12px;
+}
+@media (max-width: 860px) {
+  .reader-body { grid-template-columns: 1fr; }
+  .reader-outline { display: none; }
+  .reader-content { padding: 22px 20px 40px; }
+}
 
 /* ─── 账号 chip（窗口控制条，P1 登录态）─── */
 .account-chip {
@@ -1900,7 +2093,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 
 .meeting-hint { font-size: 12px; color: var(--muted); }
 .meeting-record-card { display: flex; flex-direction: column; gap: 10px; }
-.meeting-record-idle { display: flex; align-items: center; gap: 10px; }
+.meeting-record-idle { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
 .meeting-title-input { flex: 1; }
 .meeting-record-button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .meeting-record-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1995,6 +2188,52 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-source-chip:disabled { opacity: .5; cursor: default; }
 .meeting-source-hint { margin: 2px 2px 0; }
 
+/* 会议听记·实时字幕状态（连接中 / 进行中 / 不可用都要说清楚，别让用户以为录音坏了） */
+.meeting-live-state { margin-left: 8px; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.meeting-live-error { margin: 2px 0 0; padding: 7px 9px; font-size: 12px; line-height: 1.5; color: var(--amber-text); background: rgba(var(--amber-rgb),.1); border-radius: 8px; }
+
+/* 会议听记·实时上屏头（状态点 + 快检按钮）：
+   状态点用语义色而不是文字堆叠——一眼看清「在出字 / 在准备 / 在兜底」 */
+.meeting-live-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.meeting-live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--muted); vertical-align: 1px; }
+.meeting-live-dot.live { background: var(--green); animation: meeting-live-pulse 1.4s ease-in-out infinite; }
+.meeting-live-dot.warming { background: var(--amber); animation: meeting-live-pulse 1.4s ease-in-out infinite; }
+.meeting-live-dot.degraded { background: var(--amber); }
+.meeting-live-dot.unavailable { background: var(--red); }
+@keyframes meeting-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .meeting-live-dot { animation: none !important; } }
+.meeting-live-check-btn { flex-shrink: 0; font-size: 12px; }
+.meeting-live-hint { margin: 2px 0 6px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+
+/* 会议听记·会中快检卡片（对标钉钉会中事实核对：只针对刚说完的几句） */
+.meeting-live-check { margin-top: 10px; padding: 9px 11px; border-radius: 10px; background: rgba(var(--fill-rgb),.05); border-left: 3px solid rgba(var(--line-rgb),.2); }
+.meeting-live-check.is-attention { background: rgba(var(--amber-rgb),.08); border-left-color: var(--amber); }
+.meeting-live-check.is-ok { background: rgba(var(--green-rgb),.06); border-left-color: var(--green); }
+.meeting-live-check.is-unavailable, .meeting-live-check.is-unclear { border-left-color: rgba(var(--line-rgb),.28); }
+.meeting-live-check-verdict { margin-left: 6px; font-size: 11px; font-weight: 700; color: var(--muted); }
+.meeting-live-check.is-attention .meeting-live-check-verdict { color: var(--amber-text); }
+.meeting-live-check.is-ok .meeting-live-check-verdict { color: var(--green-text); }
+.meeting-live-check-note { margin: 2px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.meeting-live-check ul { margin: 4px 0 0; padding-left: 16px; }
+.meeting-live-check li { font-size: 12px; line-height: 1.55; color: var(--text); }
+
+/* 会议听记·知识服务不可达：给原因、地址与一键重试 */
+.meeting-server-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; border-color: rgba(var(--red-rgb),.24); background: rgba(var(--red-rgb),.045); }
+.meeting-server-error-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.meeting-server-error-copy strong { font-size: 13px; color: var(--red-text); }
+.meeting-server-error-copy span { font-size: 12px; line-height: 1.5; color: var(--text); }
+.meeting-server-error-copy .meeting-hint { color: var(--muted); }
+
+/* 会议听记·发言人清单（对标钉钉听记：点名字即把「说话人 N」标注成真名） */
+.meeting-speakers { display: flex; flex-direction: column; gap: 2px; }
+.meeting-speaker-row { display: flex; align-items: center; gap: 9px; padding: 7px 4px; border-bottom: 1px solid rgba(var(--line-rgb),.08); }
+.meeting-speaker-row:last-child { border-bottom: 0; }
+.meeting-speaker-avatar { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; background: rgba(var(--blue-rgb),.12); color: var(--blue); font-size: 12px; font-weight: 700; }
+.meeting-speaker-name { border: 0; background: transparent; padding: 0; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.meeting-speaker-name:hover { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+.meeting-speaker-meta { margin-right: auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meeting-speaker-row .meeting-rename-input { width: 180px; }
+
 /* 会议听记·思维导图（markmap） */
 .meeting-mindmap { display: flex; flex-direction: column; gap: 6px; }
 .meeting-mindmap-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -2070,6 +2309,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .meeting-segment.on { background: rgba(var(--blue-rgb),.1); }
 .meeting-segment.on .meeting-speaker-chip { background: rgba(var(--blue-rgb),.18); }
 .meeting-segment-edit { display: flex; align-items: center; gap: 8px; }
+/* 逐字稿「改字」：平时低调，行悬停才明显，避免正文里到处是按钮 */
+.meeting-segment-edit-btn { margin-left: auto; flex-shrink: 0; font-size: 11px; opacity: 0; transition: opacity .14s ease; }
+.meeting-segment:hover .meeting-segment-edit-btn, .meeting-segment:focus-within .meeting-segment-edit-btn { opacity: 1; }
+.meeting-segment-textarea { flex: 1; min-width: 0; font-size: 13px; line-height: 1.55; resize: vertical; }
 .meeting-list-card .card-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .meeting-search { width: 220px; padding: 5px 10px; font-size: 12px; flex-shrink: 0; }
 

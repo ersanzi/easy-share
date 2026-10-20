@@ -278,7 +278,7 @@ def test_stream_batches_until_chunk_boundary(monkeypatch) -> None:
     monkeypatch.setattr(
         streamer,
         "_recognize",
-        lambda model, session, piece, is_final=False: calls.append(len(piece)) or f"字{len(calls)}",
+        lambda model, session, piece, is_final=False, hotword="": calls.append(len(piece)) or f"字{len(calls)}",
     )
 
     streamer.start("m1")
@@ -303,7 +303,7 @@ def test_stream_breaks_lines_on_punctuation_and_flushes_on_stop(monkeypatch) -> 
     monkeypatch.setattr(
         streamer,
         "_recognize",
-        lambda model, session, piece, is_final=False: "尾巴" if is_final else next(texts, ""),
+        lambda model, session, piece, is_final=False, hotword="": "尾巴" if is_final else next(texts, ""),
     )
 
     streamer.start("m2")
@@ -318,6 +318,174 @@ def test_stream_breaks_lines_on_punctuation_and_flushes_on_stop(monkeypatch) -> 
     assert final["lines"][-1]["text"] == "然后客户演示尾巴"  # 尾包内容并入同一行
     assert final["current"] == ""
     assert streamer.snapshot("m2")["lines"] == []  # 会话已回收
+
+
+def test_stream_breaks_on_comma_so_words_show_early(monkeypatch) -> None:
+    """用户反馈「不支持流式展示」：模型一句里带逗号就要落行，不能等 40 字才出。"""
+    from app.meetings.stream import CHUNK_SAMPLES, StreamingTranscriber
+
+    streamer = StreamingTranscriber()
+    pieces = iter(["各位同事，", "我们开始今天的周会，", "主要过一下部署情况"])
+    monkeypatch.setattr(streamer, "_ensure_model", lambda: object())
+    monkeypatch.setattr(
+        streamer, "_recognize", lambda model, session, piece, is_final=False, hotword="": next(pieces, "")
+    )
+    streamer.start("m3")
+    for _ in range(3):
+        view = streamer.feed("m3", _pcm(CHUNK_SAMPLES))
+    assert [line["text"] for line in view["lines"]] == ["各位同事", "我们开始今天的周会"]
+    assert view["current"] == "主要过一下部署情况"
+
+
+def test_stream_passes_hotword_to_model(monkeypatch) -> None:
+    """热词要进流式模型（与离线同口径），不是只在离线后处理。"""
+    from app.meetings.stream import StreamingTranscriber
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.kwargs: list[dict] = []
+
+        def generate(self, **kwargs):
+            self.kwargs.append(kwargs)
+            return [{"text": "好"}]
+
+    streamer = StreamingTranscriber()
+    fake = FakeModel()
+    monkeypatch.setattr(streamer, "_ensure_model", lambda: fake)
+    streamer.start("m4")
+    streamer.feed("m4", _pcm(9600), hotword="听记 钉钉")
+    assert fake.kwargs[-1]["hotword"] == "听记 钉钉"
+
+    # 不支持 hotword 参数的旧 funasr：吃掉 TypeError，照常出字
+    class PickyModel(FakeModel):
+        def generate(self, **kwargs):
+            if "hotword" in kwargs:
+                raise TypeError("unexpected keyword argument 'hotword'")
+            return super().generate(**kwargs)
+
+    picky = PickyModel()
+    monkeypatch.setattr(streamer, "_ensure_model", lambda: picky)
+    streamer.start("m5")
+    view = streamer.feed("m5", _pcm(9600), hotword="听记")
+    assert view["current"] == "好"
+
+
+def test_stream_sessions_do_not_block_each_other(monkeypatch) -> None:
+    """两场并发：A 会话推理中（慢），B 的 feed 不能被 A 卡住。"""
+    import threading
+
+    from app.meetings.stream import StreamingTranscriber
+
+    streamer = StreamingTranscriber()
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_recognize(model, session, piece, is_final=False, hotword=""):
+        if session.meeting_id == "a":
+            started.set()
+            release.wait(5)
+            return "A"
+        return "B"
+
+    monkeypatch.setattr(streamer, "_ensure_model", lambda: object())
+    monkeypatch.setattr(streamer, "_recognize", slow_recognize)
+    streamer.start("a")
+    streamer.start("b")
+    worker = threading.Thread(target=lambda: streamer.feed("a", _pcm(9600)), daemon=True)
+    worker.start()
+    assert started.wait(5)
+    view = streamer.feed("b", _pcm(9600))  # 不阻塞
+    assert view["current"] == "B"
+    release.set()
+    worker.join(5)
+
+
+def test_live_check_normalises_verdict(monkeypatch) -> None:
+    summarizer = MeetingSummarizer(base_url="http://x/v1", api_key="k", model="m")
+    monkeypatch.setattr(
+        summarizer,
+        "ask_json",
+        lambda system, user, max_tokens=8192: {"verdict": "ATTENTION", "note": "期限前后不一", "points": ["前面说周四", "后面说周五", ""]},
+    )
+    result = summarizer.live_check("刚才说周五之前给排期，后面又说周四")
+    assert result == {"verdict": "attention", "note": "期限前后不一", "points": ["前面说周四", "后面说周五"]}
+    # 太短不做快检；未配置返回 None
+    assert summarizer.live_check("好的") is None
+    assert MeetingSummarizer(base_url="", api_key="", model="").live_check("这是一段足够长的话") is None
+
+
+def test_live_check_endpoint_degrades_gracefully(tmp_path) -> None:
+    """会中快检：没上屏内容 / LLM 不可用都给出可展示的结论，不抛 500。"""
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary=None, keywords=None))
+
+    class StubStreamer:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def recent_text(self, _meeting_id, count=4):
+            return self.text, 0.0
+
+    stub = StubStreamer()
+    service.streamer = stub
+    empty = service.live_check("m1")
+    assert empty["verdict"] == "unclear"
+    stub.text = "刚才说的是周五还是周四，我记不清了"
+    unavailable = service.live_check("m1")
+    assert unavailable["verdict"] == "unavailable"  # FakeSummarizer 没有 live_check
+    assert "checked_at" in unavailable
+
+
+def test_restart_uses_voiceprint_over_stale_labels(tmp_path, monkeypatch) -> None:
+    """重新转写：序号被重排时，声纹认到的人优先，不沿用旧序号上的人工标注。"""
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+    meta = service.store.create(title="周会", owner="alice")
+    service.store.update(meta["id"], speaker_names={"0": "张三", "1": "说话人 2"})
+    segments = [
+        {"start": 0.0, "end": 3.0, "text": "改由李四先说", "speaker": "0"},
+        {"start": 3.5, "end": 6.0, "text": "张三补充", "speaker": "1"},
+    ]
+
+    class StubVoiceprints:
+        def recognize(self, owner, wav, segs):  # noqa: ANN001
+            return {"0": "李四", "1": "张三"}
+
+    service.voiceprints = StubVoiceprints()
+    names = service.initial_speaker_names(service.store.get(meta["id"]), segments)
+    assert names["0"] == "张三"  # 没有冲突证据时保住人工标注
+    service.apply_voiceprints("alice", None, segments, names)
+    assert names == {"0": "李四", "1": "张三"}
+
+
+def test_merge_speakers_joins_segments_and_names(tmp_path) -> None:
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+    meta = service.store.create(title="周会", owner=None)
+    service.store.update(
+        meta["id"],
+        segments=[
+            {"start": 0.0, "end": 2.0, "text": "我先说", "speaker": "0"},
+            {"start": 2.2, "end": 4.0, "text": "补充一句", "speaker": "2"},
+            {"start": 6.0, "end": 7.0, "text": "别的事", "speaker": "1"},
+        ],
+        speaker_names={"0": "张三", "2": "说话人 3", "1": "李四"},
+    )
+    merged = service.merge_speakers(meta["id"], "2", "0")
+    assert [segment["speaker"] for segment in merged["segments"]] == ["0", "1"]
+    assert merged["segments"][0]["text"] == "我先说补充一句"  # 相邻且间隔≤1s 直接拼上
+    assert "2" not in merged["speaker_names"]
+    assert merged["speaker_count"] == 2
+
+
+def test_update_segment_text_tracks_edits(tmp_path) -> None:
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+    meta = service.store.create(title="周会", owner=None)
+    service.store.update(meta["id"], segments=[{"start": 0.0, "end": 2.0, "text": "错字", "speaker": "0"}])
+    updated = service.update_segment(meta["id"], 0, "  正字  ")
+    assert updated["segments"][0]["text"] == "正字"
+    assert updated["edited_segments"] == [0]
+    with pytest.raises(KeyError):
+        service.update_segment(meta["id"], 9, "越界")
+    with pytest.raises(ValueError):
+        service.update_segment(meta["id"], 0, "   ")
 
 
 def test_live_points_normalises_and_caps(monkeypatch) -> None:
@@ -651,7 +819,8 @@ def test_apply_voiceprints_keeps_manual_names_and_rename_enrolls(tmp_path) -> No
 
     monkey_store = store
     monkey_store.enroll = fake_enroll  # type: ignore[method-assign]
-    monkey_store.recognize = lambda owner, wav_path, segments: {"0": "张三", "1": "李四"}  # type: ignore[assignment]
+    # 声纹认到的就是人工标注的那个人：不算冲突，标注保留
+    monkey_store.recognize = lambda owner, wav_path, segments: {"0": "张三", "1": "王五"}  # type: ignore[assignment]
 
     service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
     service.voiceprints = monkey_store
@@ -660,11 +829,120 @@ def test_apply_voiceprints_keeps_manual_names_and_rename_enrolls(tmp_path) -> No
         assert service.apply_voiceprints("alice", "wav", SEGMENTS, names) == 1
         assert names == {"0": "张三", "1": "王五"}  # 人工改过的名字不被声纹覆盖
 
+        # 声纹指向另一个人（重聚类后序号变了）时才覆盖人工标注，避免张冠李戴
+        names = {"0": "说话人 1", "1": "王五"}
+        monkey_store.recognize = lambda owner, wav_path, segments: {"0": "张三", "1": "李四"}  # type: ignore[assignment]
+        assert service.apply_voiceprints("alice", "wav", SEGMENTS, names) == 2
+        assert names == {"0": "张三", "1": "李四"}
+
         service.store.audio_path("x").parent.mkdir(parents=True, exist_ok=True)
         meta = service.store.create(title="周会", owner="alice")
         service.store.update(meta["id"], segments=SEGMENTS)
         updated = service.rename_speaker(meta["id"], "0", "赵六")
         assert updated["speaker_names"]["0"] == "赵六"
         assert recorded and recorded[0][0] == "alice" and recorded[0][2] == "0"
+
+        # 改回默认占位名不该沉淀声纹，否则声纹列表会堆满「说话人 N」
+        recorded.clear()
+        service.rename_speaker(meta["id"], "1", "说话人 2")
+        assert recorded == []
+    finally:
+        service.shutdown()
+
+
+# ─── HTTP 契约：推流状态、会中快检、发言人合并、逐字稿编辑（走真实路由，不起 FunASR）───
+
+
+def _api_client(tmp_path, service: MeetingService) -> "TestClient":
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.meetings.routes import router
+
+    app = FastAPI()
+
+    class _Services:
+        def __init__(self, meetings: MeetingService) -> None:
+            self.meetings = meetings
+
+    app.state.services = _Services(service)
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_api_stream_live_reports_sessions_and_check_degrades(tmp_path) -> None:
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+
+    class StubStreamer:
+        def __init__(self) -> None:
+            self.lines = [{"text": "先把排期定了", "at": 6}]
+
+        def start(self, meeting_id, owner=None):
+            return {"lines": [], "current": "", "elapsed_seconds": 0}
+
+        def feed(self, meeting_id, pcm, hotword=""):
+            return {"lines": self.lines, "current": "现在说的是", "elapsed_seconds": 8, "last_line_at": 6.0}
+
+        def stop(self, meeting_id):
+            return {"lines": self.lines, "current": "", "elapsed_seconds": 8}
+
+        def snapshot(self, meeting_id, hotword=""):
+            return {"recording": True, "lines": self.lines, "current": "", "elapsed_seconds": 8}
+
+        def recent_text(self, meeting_id, count=4):
+            return "先把排期定了\n现在说的是", 6.0
+
+    service.streamer = StubStreamer()
+    try:
+        with _api_client(tmp_path, service) as client:
+            opened = client.post("/meetings/stream/session", data={"title": "接口冒烟"})
+            assert opened.status_code == 201
+            meeting_id = opened.json()["id"]
+
+            live = client.get(f"/meetings/{meeting_id}/stream/live")
+            assert live.status_code == 200
+            assert live.json()["recording"] is True and live.json()["lines"][0]["text"] == "先把排期定了"
+
+            fed = client.post(f"/meetings/{meeting_id}/stream", content=bytes(19200))
+            assert fed.status_code == 200 and fed.json()["last_line_at"] == 6.0
+
+            # FakeSummarizer 不带 live_check：端点必须降级成可展示的结论，而不是 500
+            check = client.post(f"/meetings/{meeting_id}/live-check")
+            assert check.status_code == 200
+            assert check.json()["verdict"] == "unavailable"
+
+            # 未知会议 id：404，不是 500
+            assert client.get("/meetings/nope/stream/live").status_code == 404
+    finally:
+        service.shutdown()
+
+
+def test_api_merge_speakers_and_edit_segment(tmp_path) -> None:
+    service = _service(tmp_path, FakeTranscriber(), FakeSummarizer(summary={"minutes": "x"}, keywords=[]))
+    try:
+        meta = service.store.create(title="周会", owner=None)
+        service.store.update(
+            meta["id"],
+            segments=[
+                {"start": 0.0, "end": 2.0, "text": "我先说", "speaker": "0"},
+                {"start": 2.2, "end": 4.0, "text": "补充一句", "speaker": "2"},
+            ],
+            speaker_names={"0": "张三", "2": "说话人 3"},
+        )
+        with _api_client(tmp_path, service) as client:
+            merged = client.post(f"/meetings/{meta['id']}/speakers/merge", json={"from_speaker": "2", "into_speaker": "0"})
+            assert merged.status_code == 200
+            assert [item["speaker"] for item in merged.json()["segments"]] == ["0"]
+
+            same = client.post(f"/meetings/{meta['id']}/speakers/merge", json={"from_speaker": "0", "into_speaker": "0"})
+            assert same.status_code == 422
+
+            edited = client.patch(f"/meetings/{meta['id']}/segments/0", json={"text": "我先说一句"})
+            assert edited.status_code == 200
+            assert edited.json()["segments"][0]["text"] == "我先说一句"
+            assert edited.json()["edited_segments"] == [0]
+
+            missing = client.patch(f"/meetings/{meta['id']}/segments/9", json={"text": "越界"})
+            assert missing.status_code == 404
     finally:
         service.shutdown()

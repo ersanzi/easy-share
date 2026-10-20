@@ -638,6 +638,41 @@ class MeetingSummarizer:
                 points.append(text)
         return points[:6]
 
+    # --- 会中快检（对标钉钉「实时问答/事实核对」：只针对刚说完的一小段话） ---
+
+    _LIVE_CHECK_SYSTEM = (
+        "你是会议现场的事实核对助理。用户会给一段**刚说出口的会议片段**（可能因为语音识别而断句不全），"
+        "请核对其中值得当众提醒的事实性问题，输出严格 JSON 对象：\n"
+        '{"verdict": "ok|attention|unclear", "note": "一句话结论", "points": ["提示1"]}\n'
+        "规则：\n"
+        "1. 只核对**可验证的事实**：数字/金额/日期/期限是否与片段内其他说法冲突、人名职务是否有明显出入、"
+        "与常识明显矛盾的因果或定义；不做观点评价，不做建议。\n"
+        "2. 没有发现问题就返回 verdict=ok、points 为空数组，不要为了填满而编造。\n"
+        '3. 片段过短（不足 8 个字）或语义不完整时返回 verdict=unclear。\n'
+        "4. note 不超过 40 字，points 最多 3 条、每条不超过 30 字，只依据片段本身，不引入外部资料，不编造。"
+    )
+
+    def live_check(self, material: str) -> dict | None:
+        """对刚上屏的一段话做事实快检；LLM 未配置/失败返回 None（调用方按「暂不可用」展示）。"""
+        if not self.configured or len(material.strip()) < 8:
+            return None
+        parsed = self.ask_json(self._LIVE_CHECK_SYSTEM, "刚上屏的片段如下：\n" + material[-1200:], max_tokens=800)
+        if not isinstance(parsed, dict):
+            return None
+        verdict = str(parsed.get("verdict") or "").strip().lower()
+        if verdict not in ("ok", "attention", "unclear"):
+            verdict = "unclear"
+        points: list[str] = []
+        for item in parsed.get("points") or []:
+            text = " ".join(str(item or "").split())[:40]
+            if text and text not in points:
+                points.append(text)
+        return {
+            "verdict": verdict,
+            "note": " ".join(str(parsed.get("note") or "").split())[:80],
+            "points": points[:3],
+        }
+
     # --- 关键词（对标钉钉 queryKeywords：独立一次调用，可单独补跑，与总结互不牵连） ---
 
     _KEYWORDS_SYSTEM = (

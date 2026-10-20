@@ -158,6 +158,11 @@ func (a *App) MeetingArchiveToKnowledge(id string) (knowledge.ArchiveResult, err
 
 // --- 实时上屏绑定（边说边出字：会话/推流/收尾/会中要点） ---
 
+// streamChunkMaxBytes 单片 PCM 上限（base64 解码后）：
+// 前端 600ms@16k 单声道 s16 ≈ 19KB；故意留出 4 倍余量给降采样/补帧后的抖动，
+// 超限直接拒收而不是把大包塞进 JSON 绑定通道。
+const streamChunkMaxBytes = 256 * 1024
+
 // MeetingStreamWarm 请求知识服务后台预热流式模型（听记页打开即调，首片不再等冷加载）。
 func (a *App) MeetingStreamWarm() error {
 	client, err := a.coreClient()
@@ -181,6 +186,10 @@ func (a *App) MeetingStreamOpen(title, templateID string) (knowledge.Meeting, er
 }
 
 // MeetingStreamChunk 推一片 PCM16/16kHz/单声道（base64），回当前已上屏字幕。
+//
+// **这是流式上屏的主通道**：走 Wails 绑定而不是浏览器 fetch。原因是产品约束
+// 「切到别的页面也不能停」——组件卸载后，任何挂在组件上的 fetch 都可能被中断；
+// 而推流本身活在 meetingSession 单例里，只要绑定调用可用，切页、最小化都照常出字。
 func (a *App) MeetingStreamChunk(id, pcmBase64 string) (knowledge.MeetingLiveView, error) {
 	client, err := a.coreClient()
 	if err != nil {
@@ -189,6 +198,13 @@ func (a *App) MeetingStreamChunk(id, pcmBase64 string) (knowledge.MeetingLiveVie
 	pcm, err := base64.StdEncoding.DecodeString(pcmBase64)
 	if err != nil {
 		return knowledge.MeetingLiveView{}, err
+	}
+	if len(pcm) == 0 {
+		return knowledge.MeetingLiveView{}, nil
+	}
+	if len(pcm) > streamChunkMaxBytes {
+		// 只丢这一片，不中断会话：上屏少几个字，录音与离线重跑不受影响
+		return knowledge.MeetingLiveView{}, nil
 	}
 	view, err := client.MeetingStreamChunk(a.ctx, id, pcm)
 	a.reportError("meeting stream chunk", err)
@@ -215,6 +231,50 @@ func (a *App) MeetingLivePoints(id string) ([]string, error) {
 	points, err := client.MeetingLivePoints(a.ctx, id)
 	a.reportError("meeting live points", err)
 	return points, err
+}
+
+// MeetingLiveCheck 会中快检：只核对刚上屏的最近几行（秒级 LLM 调用）。
+func (a *App) MeetingLiveCheck(id string) (knowledge.MeetingLiveCheck, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.MeetingLiveCheck{}, err
+	}
+	result, err := client.MeetingLiveCheck(a.ctx, id)
+	a.reportError("meeting live check", err)
+	return result, err
+}
+
+// MeetingLiveSession 取录制会话当前状态（轮询兜底：推流断了上屏内容也能续上）。
+func (a *App) MeetingLiveSession(id string) (knowledge.MeetingLiveSession, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.MeetingLiveSession{}, err
+	}
+	result, err := client.MeetingLiveSession(a.ctx, id)
+	a.reportError("meeting live session", err)
+	return result, err
+}
+
+// MeetingSpeakerMerge 合并两位发言人（同一人被拆成两簇时一键并回）。
+func (a *App) MeetingSpeakerMerge(id, fromSpeaker, intoSpeaker string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.MergeMeetingSpeakers(a.ctx, id, fromSpeaker, intoSpeaker)
+	a.reportError("meeting speaker merge", err)
+	return result, err
+}
+
+// MeetingSegmentUpdate 改一句转写正文（对标钉钉逐字稿可编辑），返回整条更新后的记录。
+func (a *App) MeetingSegmentUpdate(id string, index int, text string) (knowledge.Meeting, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.Meeting{}, err
+	}
+	result, err := client.UpdateMeetingSegment(a.ctx, id, index, text)
+	a.reportError("meeting segment update", err)
+	return result, err
 }
 
 // MeetingVoiceprintsGet 当前用户已登记声纹（仅名字与样本时长，向量不出服务端）。
@@ -293,8 +353,9 @@ func (a *App) MeetingRetranscribe(id string) (knowledge.Meeting, error) {
 
 // --- 同源网关（大文件流式，/kapi/meetings/*） ---
 
-// serveMeetingGateway 在 pluginAssetMiddleware 中接管 /kapi/meetings/ 前缀：
-// 仅两条流式路由，其余听记操作走上面的绑定。
+// serveMeetingGateway 在 pluginAssetMiddleware 中接管 /kapi/meetings/ 前缀。
+// 推流（chunk/stop/live）走 Wails 绑定（切页不中断，见 MeetingStreamChunk）；
+// 这里只保留真正的大流量/浏览器原生能力的通路：整段上传、音频回放、导出文件。
 func (a *App) serveMeetingGateway(writer http.ResponseWriter, request *http.Request) {
 	client, err := a.coreClient()
 	if err != nil {
