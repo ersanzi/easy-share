@@ -54,27 +54,45 @@ def _visual_prompt(template: dict | None) -> str:
     )
 
 
-def _template_prompt(template: dict | None) -> str:
-    """按模板生成 sections 结构指令；默认模板走旧版固定字段（纪要/要点），避免回归。"""
+def _template_prompt(template: dict | None, with_keywords: bool = False,
+                     with_chapters: bool = True, with_mindmap: bool = True) -> str:
+    """按模板生成 sections 结构指令；默认模板走旧版固定字段（纪要/要点），避免回归。
+
+    `with_keywords=True` 时把 `keywords` 一并要在这个回答里——关键词本来只要 8-10 个词，
+    单独跑一次调用要重发一整份转写，在 Agent 场景里等于多一个来回（一次工具调用几十秒）。
+    合并后由 `_parse` 取出，`finish` 仍然接受单独补答的 `answers.keywords`。
+
+    `with_chapters=False` / `with_mindmap=False` 用于「议题已另答」的两步走：这两个字段
+    都能从 `topics` 无损派生（标题/起止/gist + 分节要点），再让模型写一遍等于白烧一遍
+    output token —— 而宿主 Agent 慢就慢在 output token 上。
+    """
+    keywords_shape = (
+        '"keywords": ["关键词", "按重要性从高到低，6-10 个名词或短短语，每个不超过 10 字"], '
+        if with_keywords
+        else ""
+    )
     chapters_shape = (
         '"chapters": [{"title": "章节标题", "start": "mm:ss", "end": "mm:ss", "gist": "一句话内容概括"}], '
+        if with_chapters
+        else ""
     )
     insights_shape = (
         '"insights": ["AI 洞察 2-4 条，每条 40 字内：给出转写里没有明写、由内容推出的判断或风险"], '
         '"quote_kp": {"speaker": "核心发言人（用转写里的说话人名）", "points": ["该发言人的观点，2-4 条"], '
         '"quotes": ["该发言人的原文引用，1-2 句，必须逐字来自转写"]}, '
     )
+    mindmap_shape = ', "mindmap": "..."' if with_mindmap else ""
     if not template or template.get("id") == "meeting-minutes":
         return (
             '{"minutes": "400字以内的会议纪要，按议题归纳，保留数据与结论", '
             '"key_points": ["讨论要点，每条一句话，保留数据/数字/期限"], '
-            + chapters_shape + insights_shape +
-            '"todos": [...], "mindmap": "..."}'
+            + keywords_shape + chapters_shape + insights_shape +
+            '"todos": [...]' + mindmap_shape + '}'
         )
     return (
         '{"sections": [{"title": "小节标题", "content": "本节内容：要么是连贯段落，要么是多行以 `- ` 开头的列表"}], '
-        + chapters_shape + insights_shape +
-        '"todos": [...], "mindmap": "..."}\n'
+        + keywords_shape + chapters_shape + insights_shape +
+        '"todos": [...]' + mindmap_shape + '}\n'
         f"sections 按以下结构组织（小节标题与顺序遵循）：{template.get('sections')}"
     )
 
@@ -83,14 +101,16 @@ _SYSTEM_PROMPT_HEAD = (
     "你是企业会议纪要助手。根据带说话人标签的会议转写，输出严格的 JSON 对象。JSON 形状为：\n"
 )
 
-_SYSTEM_PROMPT_TAIL = (
+_TAIL_TODOS = (
     '\ntodos 形如 [{"task": "待办事项", "owner_hint": "负责人或空字符串", "due_hint": "期限或空字符串"}]，'
     "任何模板都必须提取待办。\n"
+)
+_TAIL_CHAPTERS = (
     'chapters 是智能切片：把转写按话题切成 3-8 段，start/end 直接抄转写行里的 [mm:ss] 时间戳'
     "（start 为该话题第一句的时间，end 为下一话题第一句的时间或最后一句时间）；"
     "title 10 字以内概括话题，gist 一句话说明这段聊了什么；按时间顺序排列、不重叠。\n"
-    + _visual_prompt(None)
-    + "\n"
+)
+_TAIL_MINDMAP = (
     'mindmap 是会议结构的 markdown 层级大纲：第一行 "# 会议主题"；二级 "## 议题/模块"'
     "（按会议实际议题划分）；三级 \"- 要点\"；四级 \"  - 补充细节\"（可选）。要求：\n"
     "1. 总节点 15-40 个，宁可信息完整也不要干瘪；\n"
@@ -98,10 +118,21 @@ _SYSTEM_PROMPT_TAIL = (
     "3. 结论与待办单独成支；\n"
     "4. 只依据转写内容，不编造。"
 )
+_SYSTEM_PROMPT_TAIL = _TAIL_TODOS + _TAIL_CHAPTERS + _visual_prompt(None) + "\n" + _TAIL_MINDMAP
+
+# 议题已单独成请求时，这两项由 `chapters_from_topics` / `mindmap_from_topics` 派生：
+# 提示词里既不给形状也不给写作规范，避免模型又写一遍（实测这两项占 summary 输出约 1/3）。
+_DERIVE_NOTE = "\nchapters 与 mindmap 由报告议题结果派生，本次**不要输出**这两个字段。\n"
 
 
-def _system_prompt(template: dict | None) -> str:
-    return _SYSTEM_PROMPT_HEAD + _template_prompt(template) + _SYSTEM_PROMPT_TAIL
+def _system_prompt(template: dict | None, with_keywords: bool = False,
+                   derive_from_topics: bool = False) -> str:
+    if derive_from_topics:
+        tail = _TAIL_TODOS + _DERIVE_NOTE + _visual_prompt(None) + "\n"
+        return _SYSTEM_PROMPT_HEAD + _template_prompt(
+            template, with_keywords, with_chapters=False, with_mindmap=False
+        ) + tail
+    return _SYSTEM_PROMPT_HEAD + _template_prompt(template, with_keywords) + _SYSTEM_PROMPT_TAIL
 
 
 
@@ -198,6 +229,11 @@ def _parse_mmss(value) -> int | None:
     for part in parts:
         seconds = seconds * 60 + int(part)
     return seconds
+
+
+def _format_mmss(seconds: int) -> str:
+    minutes, rest = divmod(max(int(seconds), 0), 60)
+    return f"{minutes:02d}:{rest:02d}"
 
 
 def _parse_chapters(raw) -> list[dict]:
@@ -305,6 +341,67 @@ def _parse_topics(raw) -> list[dict] | None:
             nxt = topics[index + 1]["start"] if index + 1 < len(topics) else topic["start"]
             topic["end"] = max(nxt, topic["start"])
     return topics[:10]
+
+
+def chapters_from_topics(topics: list[dict]) -> list[dict]:
+    """报告议题 → 导航章节。
+
+    议题的 title/start/end/gist 与章节同构，而且分得比模型另写一遍更准（同一份转写、
+    同一套时间轴）。归一仍走 `_parse_chapters`，坏项过滤与 end 补齐逻辑保持一致。
+    """
+    return _parse_chapters([
+        {
+            "title": topic.get("title") or "",
+            "start": topic.get("start"),
+            "end": topic.get("end"),
+            "gist": topic.get("gist") or "",
+        }
+        for topic in topics or []
+    ])
+
+
+def mindmap_from_topics(meeting_title: str, topics: list[dict], todos: list[dict] | None = None,
+                        insights: list[str] | None = None) -> str:
+    """报告议题 → markdown 层级大纲（`## 议题` → `- 分组` → `  - 要点`）。
+
+    分节里的 group 本身就是「判断或做法」，比让模型再压缩一遍更具体；待办/洞察单独成支，
+    与提示词里对导图的要求（结论与待办单独成支）一致。
+    """
+    lines: list[str] = [f"# {meeting_title or '会议纪要'}"]
+    for topic in topics or []:
+        title = str(topic.get("title") or "").strip()
+        if not title:
+            continue
+        lines.append(f"## {title}")
+        wrote = False
+        for section in topic.get("sections") or []:
+            for group in section.get("groups") or []:
+                group_title = str(group.get("title") or "").strip()
+                items = [str(item).strip() for item in (group.get("items") or []) if str(item).strip()]
+                if group_title:
+                    lines.append(f"- {group_title}")
+                    lines.extend(f"  - {item}" for item in items[:3])
+                    wrote = True
+                else:
+                    # 弱模型只给 bullets 时没有小标题，直接挂在议题下
+                    lines.extend(f"- {item}" for item in items[:4])
+                    wrote = True
+        if not wrote:
+            gist = str(topic.get("gist") or "").strip()
+            if gist:
+                lines.append(f"- {gist}")
+    if todos:
+        lines.append("## 待办")
+        for todo in todos:
+            task = str(todo.get("task") or "").strip()
+            if not task:
+                continue
+            suffix = "，".join(value for value in (todo.get("owner_hint"), todo.get("due_hint")) if value)
+            lines.append(f"- {task}" + (f"（{suffix}）" if suffix else ""))
+    if insights:
+        lines.append("## 洞察")
+        lines.extend(f"- {insight}" for insight in insights if insight)
+    return "\n".join(lines)
 
 
 def _extract_last_json(text: str) -> dict | None:
@@ -761,6 +858,86 @@ class MeetingSummarizer:
             return None
         return _parse_topics(parsed.get("topics"))
 
+    # --- 两阶段议题（长会用）：先切大纲，再按议题并行扩写 ---
+    #
+    # 单次 topics 调用的耗时随会议时长线性上涨（82 分钟约 4-5 分钟），而且输出越长越容易
+    # 被 token 上限截断。拆成「大纲（短输出）+ 每议题只看自己的时间窗（短输入短输出）」后，
+    # 支持并发的宿主可以把扩写全部并行，墙钟时间从「一场会一次长调用」降到
+    # 「大纲 + 最慢的一个议题」。代价是多一个来回，所以默认关闭（`--split-topics`）。
+
+    _TOPICS_OUTLINE_SYSTEM = (
+        "你是企业会议纪要编辑。这次只做议题切分，**不写正文**。输出严格 JSON 对象，形状为：\n"
+        '{"topics": [{"title": "议题名", "start": "mm:ss", "end": "mm:ss", "gist": "一句话摘要"}]}\n'
+        "口径：\n"
+        "1. 按时间先后切到 4-8 个议题（一场会聊了几件事就切几个，不要合并成两三块，"
+        "也不要拆到一句话一个）；title 6-14 字，动词或名词短语；\n"
+        "2. start/end 直接抄转写行里的 [mm:ss]，start 为该议题第一句的时间，"
+        "end 为下一个议题的第一句或最后一句；不重叠、不留空档；\n"
+        "3. gist 30 字内说明这个议题谈出了什么，写结论不写过程；\n"
+        "4. 只输出 topics 清单，**不要** focus / sections / insights（正文下一步再写）。"
+    )
+
+    _TOPIC_EXPAND_SYSTEM = (
+        "你是企业会议纪要编辑。下面是会议中**某一个议题**的转写片段（前后可能带少量上下文），"
+        "请只为这个议题写报告正文。输出严格 JSON 对象，形状为：\n"
+        '{"focus": ["本段讨论聚焦于…"], '
+        '"sections": [{"title": "分节名", "groups": [{"title": "看法或子标题", "items": ["要点"]}]}], '
+        '"insights": ["针对本议题的判断"]}\n'
+        "口径：\n"
+        "1. focus 2-3 条，每条 50-110 字，依次说明「讨论聚焦什么 / 核心矛盾或要求是什么 / "
+        "结论或动作是什么」；**需要强调的关键词**用 <span class=\"warm\">词</span> 包起来，每条最多标 2 个；\n"
+        "2. **篇幅按议题时长给足**：\n"
+        "   - 议题时长 ≥ 10 分钟：sections 2-4 个，每个 section 下 groups 2-4 个；\n"
+        "   - 议题时长 3-10 分钟：sections 1-2 个，每个 section 下 groups 2-3 个；\n"
+        "   - 议题时长 < 3 分钟：sections 1 个、groups 1-2 个即可，**别为了凑数编**；\n"
+        "3. group.title 6-20 字，写一个**判断或做法**（如「SSL 证书无法证明具体算法」），"
+        "不要写「讨论情况」「其他」这类空标题；\n"
+        "4. items 每组 2-3 条，每条 30-90 字的**完整句子**——谁、做了什么、什么后果、依据是什么，"
+        "不要写光秃秃的名词短语；句中的具体数字、期限、系统名、文件名用反引号包起来"
+        "（如 `RSA 2048`、`6 个月`），数字必须来自转写；\n"
+        "5. insights 可选 0-2 条，只写从转写推得出来但没被明说的判断或风险；\n"
+        "6. 只依据给定片段，**不编造**；区间外内容只作上下文，不要为它生成分节。"
+    )
+
+    def topics_outline_request(self, transcript: str) -> dict:
+        """第一阶段：只切议题大纲（输出很短，通常几十秒）。"""
+        material = transcript if len(transcript) <= self._TOPICS_LIMIT else transcript[: self._TOPICS_LIMIT]
+        return {"system": self._TOPICS_OUTLINE_SYSTEM, "user": "会议转写如下：\n" + material}
+
+    def topic_expand_request(self, topic: dict, transcript: str, index: int, total: int) -> dict:
+        """第二阶段：只扩写一个议题；输入是切片后的转写，输出只有正文三件套。"""
+        start = int(topic.get("start") or 0)
+        end = int(topic.get("end") or start)
+        user = (
+            f"议题 {index}/{total}：{topic.get('title') or ''}"
+            f"（{_format_mmss(start)}–{_format_mmss(end)}）\n"
+            f"议题摘要：{topic.get('gist') or '（无）'}\n"
+            "转写片段如下：\n" + transcript
+        )
+        return {"system": self._TOPIC_EXPAND_SYSTEM, "user": user}
+
+    def topic_body_from_answer(self, answer: str, *, title: str = "", start: int = 0,
+                               end: int = 0) -> dict | None:
+        """解析单个议题的扩写回答；缺 title/start/end 时用大纲里的值补上。
+
+        模型很容易只回正文（`{"sections": ...}`），而 `_parse_topics` 要求 title 才收，
+        所以这里先补字段再归一，避免「答得挺好但整段被丢」。
+        """
+        parsed = _parse_json_object(answer)
+        if not parsed:
+            return None
+        item = parsed.get("topic") if isinstance(parsed.get("topic"), dict) else parsed
+        if isinstance(parsed.get("topics"), list) and parsed["topics"]:
+            item = parsed["topics"][0]
+        if not isinstance(item, dict):
+            return None
+        item = dict(item)
+        item["title"] = item.get("title") or title
+        item["start"] = item.get("start") if item.get("start") is not None else start
+        item["end"] = item.get("end") if item.get("end") is not None else end
+        normalized = _parse_topics([item])
+        return normalized[0] if normalized else None
+
     def extract_topics(self, transcript: str) -> list[dict] | None:
         """在线路径：独立一次调用产出议题结构；未配置/失败返回 None（调用方回退旧渲染）。"""
         if not self.configured or not transcript.strip():
@@ -787,10 +964,18 @@ class MeetingSummarizer:
     # 这是 skill 化的关键：Agent 本来就有模型能力，不该再要一把 key 或一套端点配置。
     # 本模块只负责「组装请求」与「解析回答」两端，中间那次模型调用由上层完成。
 
-    def build_request(self, transcript: str, template: dict | None = None) -> dict:
-        """组装总结请求 {"system", "user"}，可直接喂给任何 OpenAI 兼容的 chat 接口。"""
+    def build_request(self, transcript: str, template: dict | None = None,
+                      with_keywords: bool = False, derive_from_topics: bool = False) -> dict:
+        """组装总结请求 {"system", "user"}，可直接喂给任何 OpenAI 兼容的 chat 接口。
+
+        `with_keywords=True` 时提示词里多要一个 `keywords` 字段：关键词与纪要走同一次
+        调用，Agent 少发一次请求、少发一遍转写。`finish` 从 summary 回答里取用。
+
+        `derive_from_topics=True` 时不再要 `chapters` / `mindmap`：`finish` 会用
+        `answers.topics` 派生，保持产物字段齐全但少写约三分之一的 output token。
+        """
         return {
-            "system": _system_prompt(template),
+            "system": _system_prompt(template, with_keywords, derive_from_topics=derive_from_topics),
             "user": "会议转写如下：\n" + transcript,
         }
 
@@ -919,4 +1104,8 @@ class MeetingSummarizer:
         quote_kp = _parse_quote_kp(parsed.get("quote_kp"))
         if quote_kp:
             result["quote_kp"] = quote_kp
+        # 关键词可能在同一次 summary 回答里（prepare 默认合并），单独调用时则为空
+        keywords = _normalize_keywords(parsed.get("keywords"))
+        if keywords:
+            result["keywords"] = keywords
         return result

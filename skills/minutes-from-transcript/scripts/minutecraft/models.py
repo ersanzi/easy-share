@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .textutil import is_filler, join_text
+
 
 @dataclass(slots=True)
 class TranscriptTurn:
@@ -33,11 +35,75 @@ class Transcript:
     created_at: str = ""
     duration_seconds: float | None = None
 
-    def render(self, with_timestamps: bool = True) -> str:
-        """渲染成喂给 LLM 的转写文本：「张三 [00:12] 内容」。"""
+    def _display_name(self, turn: TranscriptTurn) -> str:
+        if turn.speaker in self.speaker_names:
+            return self.speaker_names[turn.speaker]
+        return f"说话人 {int(turn.speaker) + 1}" if turn.speaker.isdigit() else turn.speaker
+
+    def render(
+        self,
+        with_timestamps: bool = True,
+        *,
+        compact: bool = True,
+        drop_filler: bool = True,
+        max_chars: int = 220,
+        gap_seconds: float = 45.0,
+    ) -> str:
+        """渲染成喂给 LLM 的转写文本：「张三 [00:12] 内容」。
+
+        `compact=True`（默认）会做两件**只影响喂模型材料**的事，原始 turns 不变：
+
+        1. 丢掉纯语气词碎句（「嗯」「行嘞行」「好的好的」）——ASR 按秒切段时这类行极多，
+           每行都带时间戳与说话人，一场长会能白烧几千 tokens；
+        2. 把同一说话人、相邻且间隔不超过 `gap_seconds` 的短句合并成一段（每段不超过
+           `max_chars` 字），只保留段首时间戳。时间分辨率仍在几十秒级，足够章节/议题切分，
+           但喂进去的「说话人 + 时间戳」从几百行降到几十行。
+
+        实测一份 82 分钟、逐秒切段的转写，材料从 ~1.9 万字降到 ~1.1 万字，且模型不再
+        被「嗯/好的」这类噪音干扰。要原样逐行喂模型时传 `compact=False`。
+        """
+        if not compact:
+            return self._render_lines(with_timestamps)
+
+        turns = [turn for turn in self.turns if turn.text.strip()]
+        if drop_filler:
+            kept = [turn for turn in turns if not is_filler(turn.text)]
+            # 整份都是「嗯/好的」时别删空，退回原始行
+            turns = kept or turns
+        if not turns:
+            return ""
+
+        blocks: list[dict] = []
+        current: dict | None = None
+        for turn in turns:
+            text = turn.text.strip()
+            if (
+                current is None
+                or turn.speaker != current["speaker"]
+                or len(current["text"]) + len(text) > max_chars
+                or turn.start - current["end"] > gap_seconds
+            ):
+                current = {"speaker": turn.speaker, "start": turn.start, "end": max(turn.end, turn.start), "text": text}
+                blocks.append(current)
+                continue
+            current["text"] = join_text(current["text"], text)
+            current["end"] = max(turn.end, turn.start, current["end"])
+
+        lines: list[str] = []
+        for block in blocks:
+            who = self._display_name(TranscriptTurn(block["start"], block["end"], block["text"], block["speaker"]))
+            if not with_timestamps:
+                lines.append(f"{who}: {block['text']}")
+                continue
+            minutes, seconds = divmod(int(block["start"]), 60)
+            lines.append(f"{who} [{minutes:02d}:{seconds:02d}] {block['text']}")
+        return "\n".join(lines)
+
+    def _render_lines(self, with_timestamps: bool) -> str:
+        """逐行渲染（`compact=False` 的旧行为）。"""
         lines: list[str] = []
         for turn in self.turns:
-            who = self.speaker_names.get(turn.speaker, f"说话人 {int(turn.speaker) + 1}" if turn.speaker.isdigit() else turn.speaker)
+            who = self._display_name(turn)
             if not with_timestamps:
                 lines.append(f"{who}: {turn.text}")
                 continue

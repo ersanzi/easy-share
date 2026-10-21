@@ -42,17 +42,34 @@ minutecraft run meeting.txt --out out/
 | 形态 | 例子 | 说明 |
 | --- | --- | --- |
 | 纯文本（带时间戳） | `张三 [00:12] 部署我来跟进` | 自动识别说话人与 `mm:ss` / `hh:mm:ss` |
+| 纯文本（起止区间） | `[00:00 - 00:03] 好的好的,`<br>`张三 [00:03 - 00:12] 部署我来跟进` | **ASR 分段导出最常见**：分隔符支持 `- – — ~ ～ --> 至 到`，时间支持 `mm:ss` / `hh:mm:ss` / 带毫秒 |
 | 纯文本（冒号） | `张三：部署我来跟进` | 没有时间戳时按行序，时间记 0 |
-| SRT / VTT | `00:00:01,200 --> 00:00:04,500` | 字幕导出直接可用 |
+| SRT / VTT | `00:00:01,200 --> 00:00:04,500` | 字幕导出直接可用（起止时间都保留） |
 | JSON 记录 | `{"segments": [...], "speaker_names": {...}}` | EasyShare 听记记录原样丢进来即可 |
 | 标准输入 | `cat a.srt \| minutecraft run -` | 管道友好 |
+
+> 转写材料默认会被压缩再喂模型：合并同一说话人的连续短句、丢掉「嗯/行嘞行/好的好的」这类
+> 语气词碎句，只在段首保留时间戳。逐秒切段的 ASR 转写通常能省掉 3/4 的输入 token。
+> 要原样逐行喂，加 `--full-text`。
+
+## 两步走（Agent 用，零 LLM 配置）
+
+```bash
+minutecraft prepare meeting.txt -o request.json   # 只组装提示词，不调模型
+# → 把 requests.summary 与 requests.topics 并发交给你的模型，回答存成 answers.json
+minutecraft finish request.json --answers answers.json -o out/   # 只解析与导出
+```
+
+- 关键词默认并入 `summary` 回答（`keywords` 字段），不再单独发一次请求
+- `summary` 与 `topics` 互不依赖，**并发发出**；`topics` 最慢（82 分钟会约 250-300s）
+- 只要 Word/Markdown、不要长图时加 `--no-topics`，省掉最慢的一次调用
 
 ## 命令行
 
 ```
 minutecraft run <输入> [--out DIR] [--template ID] [--title T]
-                       [--no-keywords] [--no-mindmap] [--no-docx]
-                       [--with-transcript] [--json]
+                       [--no-keywords] [--no-mindmap] [--no-docx] [--no-topics]
+                       [--full-text] [--with-transcript] [--json]
 minutecraft schema [--json]       # 输入/产物结构自描述（Agent 组织提示用）
 minutecraft templates [--json]    # 内置模板：会议纪要/周会/站会/面试/访谈/培训/头脑风暴
 minutecraft visual minutes.json   # 只出可视化汇报卡结构

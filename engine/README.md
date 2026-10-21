@@ -46,20 +46,28 @@ minutecraft run meeting.txt --out out/
 
 | 形态 | 例子 | 说明 |
 | --- | --- | --- |
-| 纯文本（带时间戳） | `张三 [00:12] 部署我来跟进` | 自动识别说话人与 `mm:ss` / `hh:mm:ss` |
+| 纯文本（带时间戳） | `张三 [00:12] 部署我来跟进`<br>`[00:12] 部署我来跟进` | 自动识别说话人与 `mm:ss` / `hh:mm:ss` |
+| 纯文本（起止区间） | `[00:00 - 00:03] 好的好的,`<br>`张三 [00:03 - 00:12] 部署我来跟进`<br>`00:03 - 00:12 部署我来跟进` | **ASR 分段导出最常见**：分隔符支持 `- – — ~ ～ --> 至 到`，时间支持 `mm:ss` / `hh:mm:ss` / 带毫秒；括号可选 |
+| 纯文本（括号说话人） | `[说话人 1] 部署我来跟进`<br>`【张三】部署我来跟进` | 说话人标签会先校验（角色名/2-4 字中文名/英文名），正文里的中文冒号不会被误认成说话人 |
 | 纯文本（冒号） | `张三：部署我来跟进` | 没有时间戳时按行序，时间记 0 |
-| SRT / VTT | `00:00:01,200 --> 00:00:04,500` | 字幕导出直接可用 |
+| SRT / VTT | `00:00:01,200 --> 00:00:04,500` | 字幕导出直接可用（起止时间都保留） |
 | JSON 记录 | `{"segments": [...], "speaker_names": {...}}` | EasyShare 听记记录原样丢进来即可 |
 | 标准输入 | `cat a.srt \| minutecraft run -` | 管道友好 |
+
+> 转写材料默认会被压缩再喂模型：合并同一说话人的连续短句、丢掉「嗯/行嘞行/好的好的」这类
+> 语气词碎句，只在段首保留时间戳。逐秒切段的 ASR 转写通常能省掉 3/4 的输入 token。
+> 要原样逐行喂，加 `--full-text`。
 
 ## 命令行
 
 ```
 minutecraft run <输入> [--out DIR] [--template ID] [--title T]
-                       [--no-keywords] [--no-mindmap] [--no-docx]
-                       [--with-transcript] [--json]
-minutecraft prepare <输入> -o request.json     # 只组装提示词，不调模型
-minutecraft finish <请求包> --answers a.json   # 只解析回答与导出，不调模型
+                       [--no-keywords] [--no-mindmap] [--no-docx] [--no-topics]
+                       [--full-text] [--with-transcript] [--json]
+minutecraft prepare <输入> -o request.json     # 只组装提示词，不调模型（另写 request.prompts/）
+minutecraft prepare <输入> -o req.json --split-topics  # 长会两阶段：只出议题大纲
+minutecraft expand req.json --outline outline.json -o expand.json  # 大纲 → 每议题一个扩写请求
+minutecraft finish <请求包> --answers a.json   # 只解析回答与导出，不调模型（answers 支持 "@文件"）
 minutecraft schema [--json]       # 输入/产物结构自描述（Agent 组织提示用）
 minutecraft templates [--json]    # 内置模板：会议纪要/周会/站会/面试/访谈/培训/头脑风暴
 minutecraft visual minutes.json   # 只出可视化汇报卡结构（色卡封面用）
@@ -132,7 +140,9 @@ result.files     # {"docx": ..., "md": ..., "json": ..., "visual": ...}
 | `summary.insights` | AI 洞察：转写里没明写的判断与风险 |
 | `summary.quote_kp` | 核心发言提炼：发言人 / 观点 / 逐字引用 |
 | `summary.visual` | 可视化汇报卡：01-06 色卡模块（`layout` = cards/duo/flow/list/closing） |
-| `summary.topics` | **报告议题**：长网页报告的正文骨架（议题 → 分节 → 要点 → 聚焦 → 洞察），独立一次调用产出 |
+| `summary.topics` | **报告议题**：长网页报告的正文骨架（议题 → 分节 → 要点 → 聚焦 → 洞察），独立一次调用产出；长会可用 `--split-topics` 拆成「大纲 + 每议题并行扩写」 |
+| `summary.chapters`（派生） | 两步走开启 topics 时由议题的 title/start/end/gist 派生，不再单独问模型 |
+| `mindmap`（派生） | 两步走开启 topics 时由议题分节分组派生（`## 议题` → `- 分组` → `  - 要点`），待办/洞察单独成支 |
 | `todos` | 待办一等实体：内容 / 负责人 / 期限 |
 | `keywords` | 关键词 |
 | `mindmap` | 三阶段 harness 产出的 markdown 大纲 |
@@ -172,7 +182,7 @@ result.files     # {"docx": ..., "md": ..., "json": ..., "visual": ...}
 | 步骤 | 调用次数 | 实测耗时（默认档） | 说明 |
 | --- | --- | --- | --- |
 | `summary` | 1 | **90-150s** | 回答本身就 >8192 token，预算给小了会白跑一次 |
-| `keywords` | 1 | **~12s** | 短输出，快 |
+| `keywords` | 1 | **~12s** | 短输出，快；**两步走已并入 summary，不再单独调用** |
 | `topics` | 1 | **246-298s** | completion 24410 token = 思考 18803 + 输出 5607 |
 | 导图 harness（仅 `run`） | 1 + 每议题 1 次 | **~194s**（5 议题 = 6 次） | 阶段二**逐议题串行**，议题越多越慢 |
 
@@ -215,12 +225,46 @@ result.files     # {"docx": ..., "md": ..., "json": ..., "visual": ...}
 只会让它在思考阶段撞墙、`content` 变空（141s 白等）。要让它少想，**必须动档位**。
 端点若不接受 `reasoning_effort`，`_create_with_retry` 会剥掉这个字段退回默认档重试，不会让整份纪要挂掉。
 
-### 关于「分段并行」的实测结论
+### Agent 两步走模式的四项提速（默认已开）
 
-分段并行的诱人之处是「单议题只要 23s」。但**切分本身不省时间**：
-「只切骨架」这种小任务实测仍要 21-60s、思考量照样大，因为模型要对**整场 13k 字**建立理解。
-而且按时间硬切会让同一件事被两段各写一半，拼接处语义断裂（「半截议题」）。
-**能省的是档位，不是切分**——先调 `--thinking`，再考虑分段。
+上面那张表是 `run`（自带客户端、串行调用）的账；Agent 的 `prepare`/`finish` 模式另有四个更直接的杠杆：
+
+1. **材料压缩**（`Transcript.render(compact=True)`，默认）：合并同一说话人的连续短句、丢弃
+   「嗯/行嘞行/好的好的」这类纯语气词碎句、只在段首保留时间戳。逐秒切段的 ASR 转写实测
+   33.8k 字 → 6.7k 字（省约 80% 输入 token），模型也少受噪音干扰。要原样喂用 `--full-text`。
+2. **关键词并入 summary**：请求从 3 个降到 2 个（`summary` / `topics`），省掉一次完整转写的
+   输入和一个 Agent 来回；`finish` 仍然接受单独补答的 `answers.keywords`。
+3. **章节/导图不再重复写**：开启 topics 时 summary 提示词里去掉 `chapters` 与 `mindmap`，
+   `finish` 用议题的 title/start/end/gist 派生章节、用分节分组派生导图。实测这两项占 summary
+   回答约 1/3 的 output token——**Agent 的墙钟时间主要由 output token 决定**，这一刀直接砍在
+   最贵的地方。宿主若仍主动给了这两项，以模型原文为准。
+4. **summary 与 topics 并发**：两者互不依赖，`prepare` 会在 `plan.parallel` 里明确写出，
+   总耗时从相加变成取最大值；只要 Word/MD 不要长图时加 `--no-topics`，直接省掉 246-298s 的那次调用。
+
+`prepare` 还会把每个请求的 system/user 写成 `request.prompts/*.txt`，`finish` 的 `answers`
+支持 `"@文件"`：Agent 不必把 request.json 整份读进上下文，也不必把模型几万字的原始输出
+重新序列化进 answers.json——这两处省的是**上下文与 output token**，不影响产物质量。
+
+### 长会：两阶段议题（`--split-topics`，可选）
+
+单次 topics 的耗时随会议时长线性上涨（82 分钟约 4-5 分钟），输出越长越容易撞 token 上限。
+`prepare --split-topics` 把它拆成：
+
+1. **大纲**：只切 4-8 个议题（title/start/end/gist），输出几十行；
+2. **扩写**：`expand` 为每个议题切出「时间窗 ± 30 秒」的转写，生成一个只写
+   `focus / sections / insights` 的小请求；请求之间互不依赖，可全部并发。
+
+支持并发的宿主墙钟 ≈ 大纲 + 最慢的一个议题，且单个议题的输出更不容易被截断；
+**串行宿主会更慢**，所以默认关闭。合并时标题与起止以大纲为准，避免十个请求各写一套时间轴；
+某个 `topics#N` 没答只会让该议题退回大纲，警告点名到具体键。
+
+### 关于「按时间硬切」的实测结论
+
+盲目按时间切片仍然不划算：切点会把同一件事拆成两半，拼接处语义断裂（「半截议题」），
+而「只切骨架」这件小事实测也要 21-60s——模型仍要对整场会议建立理解。
+两阶段之所以有意义，不是「切得越碎越快」，而是**第一阶段先把议题边界定准**，
+第二阶段每个请求只读自己那段、只写自己的正文，从而把一次超长输出换成 N 个可并行的短输出。
+不能并发的宿主，先调 `--thinking` 仍然是最有效的单点提速。
 
 ## 长网页报告出图
 
@@ -245,8 +289,11 @@ AI 洞察 → 待办），同时可出 PDF。版式数据与模板分离：模�
 ## 测试
 
 ```bash
-cd engine && python -m pytest -q          # 13 例：输入归一 / 产物形状 / 导出，全部离线
+cd engine && python -m pytest -q          # 53 例：输入归一 / 产物形状 / 两步走 / 导出，全部离线
 ```
+
+> 从仓库根目录跑时用 `PYTHONPATH=engine python -m pytest engine/tests -q`：
+> 本机若装过旧版 `minutecraft`（editable），直接 `pytest` 会导入旧包导致假失败。
 
 ## 可选：顺带转写
 
@@ -269,6 +316,6 @@ python -c "from minutecraft.asr import transcribe_wav; print(transcribe_wav('a.w
 `engine/` 是开发源；改完必须同步，否则复制出去的版本会落后：
 
 ```bash
-python scripts/check_skill_sync.py           # 对账（CI 也跑）
+python scripts/check_skill_sync.py           # 对账（本地跑，不在 CI）
 python scripts/check_skill_sync.py --apply   # 同步到 skill 副本
 ```

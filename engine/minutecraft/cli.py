@@ -4,6 +4,9 @@
   prepare  转写文本 → 待回答的请求包（纯工程，不调模型）
   finish   把宿主 Agent 的模型回答 + 请求包 → 纪要与全部产物（纯工程）
 
+长会可加 `prepare --split-topics`：先答议题大纲，再用 `expand` 按议题拆成
+每议题一个小请求（可全部并发），最后同样交给 `finish`。
+
 **无人值守时用一步到位**（需要自配 LLM 端点）：
   run      转写文本 → 纪要 + Word/MD/JSON（内置 LLM 客户端）
 
@@ -112,6 +115,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             with_transcript_page=args.with_transcript,
             out_dir=args.out,
             with_topics=not getattr(args, "no_topics", False),
+            with_compact_material=not getattr(args, "full_text", False),
         )
     except MinuteError as exc:
         print(f"生成失败：{exc}", file=sys.stderr)
@@ -163,6 +167,49 @@ def _load_json_source(source: str) -> dict:
     return raw
 
 
+def _write_prompt_files(payload: dict, target: Path) -> dict[str, dict[str, str]]:
+    """把每个请求的 system/user 写成独立文本文件（`<request>.prompts/`）。
+
+    Agent 真正需要喂给模型的就是这些文本；让它们从 request.json 里取字段，等于先把
+    整份转写读进上下文再原样送出去（同一份材料进两次）。分文件后每次调用只读该次
+    所需的 system/user，host 也更容易把两个请求并发发出。
+    """
+    folder = target.parent / f"{target.stem}.prompts"
+    folder.mkdir(parents=True, exist_ok=True)
+    files: dict[str, dict[str, str]] = {}
+    for name, request in (payload.get("requests") or {}).items():
+        safe = str(name).replace("#", "-")
+        entry: dict[str, str] = {}
+        for part in ("system", "user"):
+            text = request.get(part) or ""
+            path = folder / f"{safe}.{part}.txt"
+            path.write_text(text, encoding="utf-8")
+            entry[part] = str(path)
+        files[name] = entry
+    return files
+
+
+def _resolve_answer_files(answers: dict, base_dir: Path) -> dict:
+    """`{"summary": "@answers/summary.txt"}` → 文件内容。
+
+    模型原始输出常有好几万字（topics 尤甚）。让 Agent 重新序列化进 answers.json，
+    既多一遍 output token，也容易在转义/截断上出错；写文件再用 `@路径` 引用即可。
+    相对路径以 answers.json 所在目录为准（测试/临时目录场景更可预测）。
+    """
+    resolved: dict = {}
+    for key, value in (answers or {}).items():
+        if isinstance(value, str) and value.startswith("@"):
+            path = Path(value[1:]).expanduser()
+            if not path.is_absolute():
+                path = base_dir / path
+            if not path.is_file():
+                raise ValueError(f"answers.{key} 引用的文件不存在：{path}")
+            resolved[key] = path.read_text(encoding="utf-8-sig")
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
     """第一步：转写 → 请求包。**不调模型、不需要任何 LLM 配置。**"""
     try:
@@ -179,25 +226,92 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     engine = MinuteEngine(LLMSettings(base_url="", api_key="", model=""))
     try:
         payload = engine.prepare(transcript, template_id=args.template, with_keywords=not args.no_keywords,
-                                 with_topics=not getattr(args, "no_topics", False))
+                                 with_topics=not getattr(args, "no_topics", False),
+                                 with_compact_material=not getattr(args, "full_text", False),
+                                 split_topics=getattr(args, "split_topics", False))
     except MinuteError as exc:
         print(f"准备失败：{exc}", file=sys.stderr)
         return EXIT_ENGINE
 
+    prompt_files: dict[str, dict[str, str]] = {}
     if args.out:
         target = Path(args.out)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        prompt_files = _write_prompt_files(payload, target)
+    if getattr(args, "split_topics", False):
+        next_step = (
+            "先并发回答 summary 与 topics_outline；再把大纲回答交给 "
+            "minutecraft expand <请求包> --outline <大纲回答文件> -o expand.json，"
+            "它会按议题拆出 topics#1…N 的扩写请求（可全部并发）；"
+            "最后把 summary 与各 topics#N 的回答用 \"@文件\" 写进 answers.json，执行 finish"
+        )
+    else:
+        next_step = (
+            "每个请求的 system/user 已写成文件（见 prompt_files），直接读这些文件作为提示词，"
+            "不要读 request.json；把模型的原始输出分别写入文件，answers.json 用 \"@相对路径\" 引用，"
+            "再执行：minutecraft finish <请求包> --answers answers.json -o out/"
+            "（summary 必答；keywords 已并入 summary；topics 决定长报告正文，"
+            "不答会退回按章节均分的粗版式，并记一条警告）"
+        )
     _emit(
         {
             "ok": True,
             "title": transcript.title,
             "template": payload["template"],
             "requests": list(payload["requests"]),
+            "prompt_files": prompt_files,
+            "material": payload["material"],
+            "plan": payload["plan"],
             "request_file": str(args.out) if args.out else "",
-            "next": "把 requests 交给你的模型回答，再执行：minutecraft finish <请求包> --answers answers.json -o out/"
-            "（summary 必答；topics 决定长报告正文，不答会退回按章节均分的粗版式并记一条警告）",
+            "next": next_step,
             **({"payload": payload} if not args.out else {}),
+        },
+        args.json,
+    )
+    return 0
+
+
+
+def cmd_expand(args: argparse.Namespace) -> int:
+    """第二步（长会可选）：议题大纲 → 每议题一个扩写请求。**不调模型。**"""
+    try:
+        payload = _load_json_source(args.payload)
+        outline = (
+            Path(args.outline).read_text(encoding="utf-8-sig")
+            if args.outline != "-" else sys.stdin.read()
+        )
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
+        print(f"输入无法解析：{exc}", file=sys.stderr)
+        return EXIT_INPUT
+
+    engine = MinuteEngine(LLMSettings(base_url="", api_key="", model=""))
+    try:
+        expanded = engine.expand(payload, outline, margin=args.margin)
+    except MinuteError as exc:
+        print(f"展开失败：{exc}", file=sys.stderr)
+        return EXIT_INPUT
+    except (TranscriptFormatError, ValueError) as exc:
+        print(f"输入无法解析：{exc}", file=sys.stderr)
+        return EXIT_INPUT
+
+    prompt_files: dict[str, dict[str, str]] = {}
+    if args.out:
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(expanded, ensure_ascii=False, indent=2), encoding="utf-8")
+        prompt_files = _write_prompt_files(expanded, target)
+    _emit(
+        {
+            "ok": True,
+            "topics": len(expanded.get("topic_outline") or []),
+            "requests": list(expanded["requests"]),
+            "prompt_files": prompt_files,
+            "request_file": str(args.out) if args.out else "",
+            "next": "各 topics#N 的 system/user 已写成文件（见 prompt_files），请全部并发回答；"
+            "把模型原始输出分别写入文件，answers.json 形如 "
+            '{"summary": "@summary.txt", "topics#1": "@topic-1.txt", ...}，再执行 finish',
+            **({"payload": expanded} if not args.out else {}),
         },
         args.json,
     )
@@ -209,10 +323,12 @@ def cmd_finish(args: argparse.Namespace) -> int:
     try:
         payload = _load_json_source(args.payload)
         answers = _load_json_source(args.answers)
+        base_dir = Path(args.answers).parent if args.answers != "-" else Path.cwd()
+        answers = _resolve_answer_files(answers, base_dir)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as exc:
         print(f"输入无法解析：{exc}", file=sys.stderr)
         return EXIT_INPUT
-    if not (payload.get("requests") or {}).get("summary"):
+    if not (payload.get("requests") or {}).get("summary") and not payload.get("topic_outline"):
         print("不是有效的请求包（缺少 requests.summary）——请用 prepare 子命令生成", file=sys.stderr)
         return EXIT_INPUT
 
@@ -323,14 +439,27 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("-o", "--out", help="把请求包写到该 JSON 文件（不传则直接打印）")
     prepare.add_argument("--template", default="meeting-minutes", help="总结模板 id")
     prepare.add_argument("--title", help="覆盖会议标题")
-    prepare.add_argument("--no-keywords", action="store_true", help="不要关键词请求")
-    prepare.add_argument("--no-topics", action="store_true", help="不要报告议题请求（只要纪要与 Word 时省一次调用）")
+    prepare.add_argument("--no-topics", action="store_true", help="不要报告议题请求（只要纪要与 Word 时省一次最慢的调用）")
+    prepare.add_argument("--split-topics", action="store_true",
+                         help="两阶段议题：只先产出大纲，答完用 expand 拆成每议题一个小请求（长会+可并发宿主）")
+    prepare.add_argument("--no-keywords", action="store_true", help="不要在 summary 里顺带生成关键词")
+    prepare.add_argument("--full-text", action="store_true",
+                         help="不做材料压缩：逐行喂原始转写（默认会合并短句并丢掉语气词，能显著提速）")
     prepare.add_argument("--json", action="store_true", help="机器可读输出")
     prepare.set_defaults(func=cmd_prepare)
 
+    expand = subs.add_parser("expand", help="议题大纲 → 每议题一个扩写请求（两阶段议题，不调模型）")
+    expand.add_argument("payload", help="prepare --split-topics 产出的请求包 JSON")
+    expand.add_argument("--outline", required=True, help="议题大纲的模型原始回答（或 JSON 文件），也可用 - 从标准输入读")
+    expand.add_argument("-o", "--out", help="展开后的请求包 JSON（后续交给 finish）")
+    expand.add_argument("--margin", type=float, default=30.0, help="议题时间窗前后各留的上下文秒数（默认 30）")
+    expand.add_argument("--json", action="store_true", help="机器可读输出")
+    expand.set_defaults(func=cmd_expand)
+
     finish = subs.add_parser("finish", help="第二步：请求包 + 模型回答 → 纪要与产物（不调模型）")
     finish.add_argument("payload", help="prepare 产出的请求包 JSON（或 - 从标准输入读）")
-    finish.add_argument("--answers", required=True, help='模型回答 JSON：{"summary": "...", "keywords": "..."}')
+    finish.add_argument("--answers", required=True,
+                        help='模型回答 JSON：{"summary": "...", "topics": "..."}；值可写 "@文件" 引用模型原始输出')
     finish.add_argument("-o", "--out", "--out-dir", dest="out", help="输出目录")
     finish.add_argument("--no-keywords", action="store_true", help="忽略关键词回答")
     finish.add_argument("--no-docx", action="store_true", help="不导出 Word（仍写 md/json）")
@@ -349,6 +478,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-mindmap", action="store_true", help="不生成思维导图")
     run.add_argument("--no-topics", action="store_true",
                      help="不生成报告议题（省掉最慢的一次调用：实测 82 分钟会议约 250-300s，代价是长图只剩章节均分）")
+    run.add_argument("--full-text", action="store_true",
+                     help="不做材料压缩：逐行喂原始转写（默认会合并短句并丢掉语气词，能显著提速）")
     run.add_argument("--thinking", choices=["auto", "none", "low", "medium", "high"],
                      help="思考档位（默认 auto）：auto 按转写长短自动降档——≤3k 字用 medium、"
                           "3k-8k 用 low、8k 字以上（约 1 小时会）用 none；给具体值就全局固定")

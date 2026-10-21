@@ -6,11 +6,14 @@
 
 ```
 skills/minutes-from-transcript/
-├── SKILL.md        ← Agent 读的说明书：三步走流程、退出码、排障
+├── SKILL.md        ← Agent 读的说明书：三步走流程、速度取舍、退出码、排障
 ├── scripts/        ← 真正干活的工程（minutecraft，可 pip install）
 ├── render/         ← 出图用的自包含网页（不用 Node，双击就能用）
 └── examples/       ← 可跑通的样例输入与预期产物
 ```
+
+**输入格式**：带说话人的文本、`[00:00 - 00:03]` 起止区间（ASR 分段导出常见）、SRT/VTT、JSON 记录，
+以及 `张三 [00:12] 内容` 这类单时间戳写法，都能直接吃。
 
 **核心设计：模型能力由宿主 Agent 提供，工程只做确定性的事。**
 
@@ -26,20 +29,34 @@ skills/minutes-from-transcript/
 ```bash
 cd scripts && python -m pip install -e .       # 一次
 
-minutecraft prepare meeting.txt -o request.json        # ① 组装提示词（不调模型，含 summary/keywords/topics 三项）
-# ② 把 request.json 里的 requests 交给你的模型，回答原样存成 answers.json
+minutecraft prepare meeting.txt -o request.json        # ① 组装提示词（不调模型，另写 request.prompts/）
+# ② 直接读 request.prompts/ 里的 system/user 交给你的模型（两项并发），原始输出写盘
+cat > answers.json <<'EOF'
+{"summary": "@summary-answer.json", "topics": "@topics-answer.json"}
+EOF
 minutecraft finish request.json --answers answers.json -o out/    # ③ 导出（不调模型）
 ```
 
+`prepare` 会把每个请求的 system/user 写成独立文件，**不要读 `request.json`**（它含完整转写，
+读一遍就是几万 token）；`answers.json` 用 `@文件` 引用模型原始输出，省一遍重新抄写的 output token。
+
 产物：`纪要.docx`（钉钉版式）、`minutes.md`、`minutes.json`、`visual.json`、`report.json`。
 
-`answers.json` 有三个键，只有 `summary` 必填（另外两项不答会记警告并降级）：
+`answers.json` 有两个键，只有 `summary` 必填（`topics` 不答会记警告并降级）：
 
 | 键 | 作用 | 不答会怎样 |
 | --- | --- | --- |
-| `summary` | 纪要/要点/待办/章节/洞察 | **必填** |
-| `keywords` | 关键词 | 跳过 |
-| `topics` | 长网页报告正文（4-8 个议题，含分节/聚焦/洞察） | 长图回退「按章节均分」的粗版式（只剩标题与时间），并记一条警告 |
+| `summary` | 纪要/要点/待办/关键词/洞察/汇报卡（`keywords` 就在这条回答里） | **必填** |
+| `topics` | 长网页报告正文（4-8 个议题，含分节/聚焦/洞察） | 长图回退「按章节均分」的粗版式，并记一条警告；章节与导图也一起没有来源 |
+
+**速度是默认就好**：喂模型的材料会先压缩（合并同说话人短句、丢掉「嗯/好的好的」这类语气词，
+逐秒切段的 ASR 常省掉 3/4 输入 token）；关键词不再单独调用；开启 topics 时 `chapters` /
+`mindmap` 不再让模型重复写，由 `finish` 从议题派生（summary 回答少约 1/3 的 output token）；
+`summary` 与 `topics` 并发即可。只要 Word/Markdown 时加 `--no-topics`，省掉最慢的一次调用。
+要原样逐行喂模型用 `--full-text`。
+
+长会可以加 `--split-topics` 走两阶段：先答议题大纲，再用 `expand` 拆成每议题一个小请求
+（可全部并发），最后同样 `finish`。细节见 [`SKILL.md`](SKILL.md) 第 3 节。
 
 出图两条路，按需要选：
 
@@ -73,7 +90,7 @@ minutecraft run meeting.txt --out ./out --json
 `scripts/` 是 [`../../engine/`](../../engine/) 的**发布副本**，开发改 `engine/`，改完同步：
 
 ```bash
-python scripts/check_skill_sync.py           # 对账（CI 也跑）
+python scripts/check_skill_sync.py           # 对账（本地跑，不在 CI）
 python scripts/check_skill_sync.py --apply   # 同步
 ```
 

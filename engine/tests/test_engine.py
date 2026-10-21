@@ -106,6 +106,90 @@ def test_load_srt() -> None:
     assert len(transcript.turns) == 2
     assert transcript.turns[0].start == pytest.approx(1.2)
     assert transcript.turns[1].text == "第一项是部署"
+    # SRT 的结束时间以前被丢掉了（end=start），时长推不准
+    assert transcript.turns[0].end == pytest.approx(4.5)
+
+
+RANGE_TEXT = """[00:00 - 00:00] 嗯,
+[00:00 - 00:01] 行嘞行,
+[00:01 - 00:02] 好的好的,
+[00:02 - 00:03] 那我往下拉了。
+[00:03 - 00:05] 先过一下这个季度的目标，销售额要冲到三千万。
+[00:05 - 00:07] 嗯,
+[00:05 - 00:07] 张三: 这个我来负责，月底前给方案。
+张三 [00:07 - 00:09] 好，那就这么定了。
+"""
+
+
+def test_load_range_timestamps_does_not_mistake_text_for_json() -> None:
+    """`[00:00 - 00:03]` 开头的转写以前会被当成 JSON 数组，报 `Expecting ',' delimiter`。
+
+    这是 ASR 导出最常见的形态之一：首字符 `[` + 每行一个起止区间。
+    """
+    transcript = load_transcript(_write(RANGE_TEXT))
+    assert len(transcript.turns) == 8
+    assert transcript.turns[3].text == "那我往下拉了。"
+    assert transcript.turns[3].start == 2 and transcript.turns[3].end == 3
+    # 区间里的说话人（写在正文里）也要认出来
+    assert transcript.turns[6].speaker == "1"
+    assert transcript.speaker_names == {"0": "说话人 1", "1": "张三"}
+    # 时长从最后一句的 end 推出来
+    assert transcript.duration_seconds == 9
+
+
+def test_range_timestamp_keeps_sentences_with_colons() -> None:
+    """正文里的中文冒号不是说话人分隔符。
+
+    真踩过：`[00:03 - 00:06] 那我们开始吧，今天主要过三件事：部署进度…`
+    被拆成「说话人=那我们开始吧，今天主要过三件事」+「部署进度…」，
+    前半句直接消失，纪要里永远看不到。这里锁住「整句保留、不新增假说话人」。
+    """
+    transcript = load_transcript(_write(
+        "[00:00 - 00:00] 嗯,\n"
+        "[00:03 - 00:06] 那我们开始吧，今天主要过三件事：部署进度、客户演示、还有风险项。\n"
+        "[00:06 - 00:09] 那我就往下拉了。风险有两个：一是表格识别，二是网络。\n"
+    ))
+    assert transcript.speaker_names == {"0": "说话人 1"}
+    assert transcript.turns[1].text == "那我们开始吧，今天主要过三件事：部署进度、客户演示、还有风险项。"
+    assert transcript.turns[2].text == "那我就往下拉了。风险有两个：一是表格识别，二是网络。"
+
+
+def test_more_timestamp_shapes() -> None:
+    """`[00:12]` 单时间戳、`[说话人 1] 内容`、无括号区间、单行 SRT 都要能解析。"""
+    transcript = load_transcript(_write(
+        "[00:12] 我们开始今天的周会。\n"
+        "[00:20] [说话人 1] 部署这块我来跟进。\n"
+        "[00:30] 【张三】客户演示也要准备好。\n"
+        "00:40 - 00:50 好，那就这么定了。\n"
+        "[00:00:51,200 --> 00:00:55,500] 最后确认一下时间。\n"
+    ))
+    assert [turn.start for turn in transcript.turns] == [12, 20, 30, 40, 51.2]
+    assert transcript.turns[0].text == "我们开始今天的周会。"
+    assert transcript.turns[1].speaker == "0"
+    assert transcript.turns[2].speaker == "1" and transcript.speaker_names["1"] == "张三"
+    assert transcript.turns[3].end == 50
+    assert transcript.turns[4].text == "最后确认一下时间。"
+
+
+def test_compact_material_merges_segments_and_drops_filler() -> None:
+    """喂模型的材料要压缩：合并同说话人连续短句、丢掉「嗯/好的」这类碎句。
+
+    原始 turns 不动（转写附页与 JSON 还要用）；只影响 render() 的输出。
+    """
+    transcript = load_transcript(_write(RANGE_TEXT))
+    compact = transcript.render()
+    full = transcript.render(compact=False)
+    assert len(compact) < len(full) * 0.75, "压缩后应显著变短"
+    assert "行嘞行" not in compact and "好的好的" not in compact
+    assert "那我往下拉了" in compact
+    # 时间戳保留在段首，且段数远少于行数
+    assert "[00:02]" in compact and "[00:05]" in compact
+    assert len(compact.splitlines()) < len(transcript.turns)
+    # 原始数据一条不少
+    assert len(transcript.turns) == 8
+    # 整份都是语气词时不能删空
+    noisy = load_transcript(_write("[00:00 - 00:01] 嗯,\n[00:01 - 00:02] 好的好的,\n"))
+    assert noisy.render().strip()
 
 
 def test_load_record_json_roundtrip() -> None:
@@ -177,6 +261,35 @@ def test_prepare_works_without_llm() -> None:
     assert "system" in payload["requests"]["summary"] and "user" in payload["requests"]["summary"]
     # 转写原样带回：finish 只靠这个请求包就能还原全部上下文
     assert payload["transcript"]["turns"][0]["text"].startswith("我们开始今天的周会")
+    # 关键词已并入 summary：请求从 3 个降到 2 个，Agent 少一个来回
+    assert set(payload["requests"]) == {"summary", "topics"}
+    assert "keywords" in payload["requests"]["summary"]["system"]
+    assert payload["plan"]["parallel"] is True
+    assert payload["material"]["chars"] > 0 and payload["material"]["compact"] is True
+
+
+def test_finish_takes_keywords_from_summary_answer() -> None:
+    """prepare 默认把关键词并进 summary，finish 要能从同一条回答里取出来。
+
+    这样两步走只需**两次模型调用**（summary+keywords / topics），而不是三次。
+    """
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(PLAIN)))
+    summary_with_keywords = dict(SUMMARY, keywords=["知识平台", "部署", "客户演示"])
+    result = engine.finish(payload, {"summary": json.dumps(summary_with_keywords, ensure_ascii=False)})
+    assert result.keywords == ["知识平台", "部署", "客户演示"]
+    assert not any("关键词" in warning for warning in result.warnings)
+
+
+def test_prepare_full_text_keeps_every_line() -> None:
+    """`--full-text` 是逃生口：不要压缩时能拿回逐行材料。"""
+    transcript = load_transcript(_write(RANGE_TEXT))
+    compact = _unconfigured_engine().prepare(transcript)
+    full = _unconfigured_engine().prepare(transcript, with_compact_material=False)
+    assert full["material"]["chars"] > compact["material"]["chars"]
+    assert full["material"]["compact"] is False
+    assert "行嘞行" in full["requests"]["summary"]["user"]
+    assert "行嘞行" not in compact["requests"]["summary"]["user"]
 
 
 def test_finish_works_without_llm_and_matches_run_shape() -> None:
@@ -445,6 +558,49 @@ def test_finish_attaches_topics_and_render_uses_them() -> None:
     assert report["topics"][0]["sections"][0]["title"] == "排期确认"
 
 
+def test_prepare_moves_chapters_and_mindmap_out_of_summary_when_topics_on() -> None:
+    """开启 topics 时 summary 不再要 chapters/mindmap：这两项能从议题派生。
+
+    实测这两项占 summary 回答约 1/3 的 output token，而 Agent 慢就慢在 output token。
+    """
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(PLAIN)))
+    system = payload["requests"]["summary"]["system"]
+    assert '"chapters"' not in system and '"mindmap"' not in system
+    assert "visual" in system and "keywords" in system  # 可视化与关键词仍由模型产出
+    assert payload["derive_from_topics"] is True and payload["plan"]["derive_from_topics"] is True
+
+    no_topics = engine.prepare(load_transcript(_write(PLAIN)), with_topics=False)
+    system = no_topics["requests"]["summary"]["system"]
+    assert '"chapters"' in system and '"mindmap"' in system
+    assert no_topics["derive_from_topics"] is False
+
+
+def test_finish_derives_chapters_and_mindmap_from_topics() -> None:
+    """summary 按新提示词不答 chapters/mindmap 时，产物字段仍要齐全。"""
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(PLAIN)))
+    summary = {key: value for key, value in SUMMARY.items() if key not in ("chapters", "mindmap")}
+    result = engine.finish(payload, {"summary": json.dumps(summary, ensure_ascii=False),
+                                     "topics": json.dumps(TOPICS_ANSWER, ensure_ascii=False)})
+    assert [chapter["title"] for chapter in result.summary["chapters"]] == ["部署排期", "客户演示"]
+    assert result.summary["chapters"][0]["start"] == 0 and result.summary["chapters"][0]["end"] == 12
+    assert result.mindmap.startswith("# 会议纪要")
+    assert "## 部署排期" in result.mindmap and "  - 李四负责部署" in result.mindmap
+    # 待办与洞察单独成支
+    assert "## 待办" in result.mindmap and "给出部署排期" in result.mindmap
+    assert "## 洞察" in result.mindmap
+    assert not any("导图" in warning for warning in result.warnings)
+
+
+def test_finish_without_topics_says_derived_fields_are_lost() -> None:
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(PLAIN)))
+    summary = {key: value for key, value in SUMMARY.items() if key not in ("chapters", "mindmap")}
+    result = engine.finish(payload, {"summary": json.dumps(summary, ensure_ascii=False)})
+    assert any("chapters 与 mindmap 也无法派生" in warning for warning in result.warnings)
+
+
 def test_finish_without_topics_warns_and_falls_back() -> None:
     """不会再静默：宿主跳过 topics 必须留一条能照着做的警告。
 
@@ -693,3 +849,141 @@ def _write(content: str) -> Path:
     handle.write(content)
     handle.close()
     return Path(handle.name)
+
+
+def test_cli_writes_prompt_files_and_reads_at_path_answers(tmp_path: Path) -> None:
+    """Agent 场景的两个减负点：提示词落成文件、回答用 @文件 引用。
+
+    这两步都不调模型；把整份转写塞进 request.json / answers.json 让 Agent 反复读写，
+    是两步走里最容易被忽略的一段上下文与 output token 开销。
+    """
+    from minutecraft.cli import main
+
+    raw = tmp_path / "meeting.txt"
+    raw.write_text(PLAIN, encoding="utf-8")
+    request = tmp_path / "request.json"
+    assert main(["prepare", str(raw), "-o", str(request), "--title", "周会"]) == 0
+
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    prompts = tmp_path / "request.prompts"
+    for name in ("summary", "topics"):
+        assert (prompts / f"{name}.system.txt").read_text(encoding="utf-8") == payload["requests"][name]["system"]
+        assert (prompts / f"{name}.user.txt").read_text(encoding="utf-8") == payload["requests"][name]["user"]
+
+    (tmp_path / "summary.txt").write_text(
+        json.dumps(dict(SUMMARY, keywords=["知识平台", "部署"]), ensure_ascii=False), encoding="utf-8"
+    )
+    (tmp_path / "topics.txt").write_text(json.dumps(TOPICS_ANSWER, ensure_ascii=False), encoding="utf-8")
+    answers = tmp_path / "answers.json"
+    answers.write_text('{"summary": "@summary.txt", "topics": "@topics.txt"}', encoding="utf-8")
+
+    out = tmp_path / "out"
+    assert main(["finish", str(request), "--answers", str(answers), "-o", str(out), "--json"]) == 0
+    minutes = json.loads((out / "minutes.json").read_text(encoding="utf-8"))
+    assert minutes["summary"]["topics"][0]["title"] == "部署排期"
+    assert minutes["summary"]["chapters"][0]["title"] == "部署排期"
+
+
+def test_cli_missing_at_path_answer_is_input_error(tmp_path: Path) -> None:
+    from minutecraft.cli import main
+
+    raw = tmp_path / "meeting.txt"
+    raw.write_text(PLAIN, encoding="utf-8")
+    request = tmp_path / "request.json"
+    assert main(["prepare", str(raw), "-o", str(request)]) == 0
+    answers = tmp_path / "answers.json"
+    answers.write_text('{"summary": "@nope.txt"}', encoding="utf-8")
+    assert main(["finish", str(request), "--answers", str(answers)]) == 2
+
+
+SPLIT_PLAIN = """张三 [00:00] 我们先过部署，目标是周五前上线。
+李四 [02:00] 部署由我跟进，接口还剩两个没联调。
+张三 [05:00] 好，部署风险记一下，联调是唯一外部依赖。
+李四 [10:00] 接下来是客户演示，脚本今天下班前发群里。
+张三 [20:00] 演示前要预演一次，重点讲知识问答。
+"""
+
+SPLIT_OUTLINE = {
+    "topics": [
+        {"title": "部署上线", "start": "00:00", "end": "10:00", "gist": "周五前上线，联调待完成"},
+        {"title": "客户演示", "start": "10:00", "end": "25:00", "gist": "脚本今天发出，演示前预演"},
+    ]
+}
+
+
+def test_split_topics_expand_slices_transcript_per_topic() -> None:
+    """两阶段议题：大纲之后，每个议题只带自己的时间窗，互不依赖、可全部并发。"""
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(SPLIT_PLAIN)), split_topics=True)
+    assert set(payload["requests"]) == {"summary", "topics_outline"}
+    assert payload["topics_mode"] == "outline"
+    assert '"chapters"' not in payload["requests"]["summary"]["system"]
+
+    expanded = engine.expand(payload, json.dumps(SPLIT_OUTLINE, ensure_ascii=False), margin=0)
+    assert expanded["topics_mode"] == "split" and len(expanded["topic_outline"]) == 2
+    assert list(expanded["requests"]) == ["topics#1", "topics#2"]
+    first = expanded["requests"]["topics#1"]["user"]
+    second = expanded["requests"]["topics#2"]["user"]
+    assert "我们先过部署" in first and "联调是唯一外部依赖" in first
+    assert "预演一次" not in first, "后一个议题的内容不该进前一个请求"
+    assert "客户演示，脚本今天下班前发群里" in second and "预演一次" in second
+    assert "联调是唯一外部依赖" not in second, "前一个议题的内容不该进后一个请求"
+
+
+def test_finish_merges_split_topic_answers_with_outline() -> None:
+    """扩写回答只负责正文，标题/起止以大纲为准；缺失的议题退回大纲并点名警告。"""
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(SPLIT_PLAIN)), split_topics=True)
+    expanded = engine.expand(payload, json.dumps(SPLIT_OUTLINE, ensure_ascii=False), margin=0)
+    summary = {key: value for key, value in SUMMARY.items() if key not in ("chapters", "mindmap")}
+    body_one = {"focus": ["部署聚焦上线时间"], "sections": [
+        {"title": "上线安排", "groups": [{"title": "责任到人", "items": ["李四跟进部署"]}]}
+    ], "insights": ["联调是唯一外部依赖"]}
+    result = engine.finish(expanded, {
+        "summary": json.dumps(dict(summary, keywords=["部署"]), ensure_ascii=False),
+        "topics#1": json.dumps(body_one, ensure_ascii=False),
+    }, out_dir=None)
+    topics = result.summary["topics"]
+    assert [topic["title"] for topic in topics] == ["部署上线", "客户演示"]
+    assert topics[0]["sections"][0]["title"] == "上线安排"
+    assert topics[0]["start"] == 0 and topics[0]["end"] == 600
+    assert topics[1]["gist"] == "脚本今天发出，演示前预演"
+    assert any("topics#2" in warning for warning in result.warnings)
+
+
+def test_cli_split_topics_expand_and_finish(tmp_path: Path) -> None:
+    from minutecraft.cli import main
+
+    raw = tmp_path / "meeting.txt"
+    raw.write_text(SPLIT_PLAIN, encoding="utf-8")
+    request = tmp_path / "request.json"
+    assert main(["prepare", str(raw), "-o", str(request), "--split-topics"]) == 0
+    outline = tmp_path / "outline.txt"
+    outline.write_text(json.dumps(SPLIT_OUTLINE, ensure_ascii=False), encoding="utf-8")
+
+    expanded_path = tmp_path / "expand.json"
+    assert main(["expand", str(request), "--outline", str(outline), "-o", str(expanded_path)]) == 0
+    for index in (1, 2):
+        assert (tmp_path / "expand.prompts" / f"topics-{index}.system.txt").is_file()
+        assert (tmp_path / "expand.prompts" / f"topics-{index}.user.txt").is_file()
+
+    summary = {key: value for key, value in SUMMARY.items() if key not in ("chapters", "mindmap")}
+    (tmp_path / "summary.txt").write_text(
+        json.dumps(dict(summary, keywords=["部署"]), ensure_ascii=False), encoding="utf-8"
+    )
+    for index in (1, 2):
+        (tmp_path / f"topic-{index}.txt").write_text(
+            json.dumps({"sections": [{"title": f"分节{index}", "groups": [{"title": "结论", "items": ["内容"]}]}]},
+                       ensure_ascii=False),
+            encoding="utf-8",
+        )
+    answers = tmp_path / "answers.json"
+    answers.write_text(
+        '{"summary": "@summary.txt", "topics#1": "@topic-1.txt", "topics#2": "@topic-2.txt"}',
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    assert main(["finish", str(expanded_path), "--answers", str(answers), "-o", str(out), "--json"]) == 0
+    minutes = json.loads((out / "minutes.json").read_text(encoding="utf-8"))
+    assert [topic["title"] for topic in minutes["summary"]["topics"]] == ["部署上线", "客户演示"]
+    assert minutes["summary"]["chapters"][0]["title"] == "部署上线"
