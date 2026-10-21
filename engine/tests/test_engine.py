@@ -292,6 +292,42 @@ def test_prepare_full_text_keeps_every_line() -> None:
     assert "行嘞行" not in compact["requests"]["summary"]["user"]
 
 
+def _minutes_text(minutes: int, sentence: str = "这一分钟讨论一个事项并给出结论。") -> str:
+    lines = [f"张三 [{minute:02d}:00] {sentence}" for minute in range(minutes)]
+    return "\n".join(lines) + "\n"
+
+
+def test_prepare_recommends_split_topics_for_long_meetings() -> None:
+    """材料规模踩到单段 topics 的上下文红线时，prepare 必须点名建议两阶段。
+
+    实测教训：59 分钟会（压缩后 15960 字）走单段 topics，32K 级宿主的子代理上下文耗尽、
+    **跑完零产出**，白烧 25 分钟再重走大纲腿。慢可以忍，白跑不能忍。
+    """
+    engine = _unconfigured_engine()
+
+    long_meeting = engine.prepare(load_transcript(_write(_minutes_text(40))))
+    assert long_meeting["plan"]["recommend"] == "split-topics"
+    # 时长这条分支：字数才 1119（远低于 9000），单靠「约 39 分钟」就该建议
+    assert long_meeting["material"]["chars"] < 9000
+    assert "39 分钟" in long_meeting["plan"]["recommend_reason"]
+    # 建议要顶到 note 里：Agent 往往只看 note / next 就动手
+    assert long_meeting["plan"]["note"].startswith("压缩后材料")
+
+    # 字数够多但时长没到，也建议（材料规模本身就是撑爆窗口的直接原因）
+    verbose = _minutes_text(20, sentence="这件事的背景是这样的，" + "细节展开说明依据与口径。" * 60)
+    verbose_meeting = engine.prepare(load_transcript(_write(verbose)))
+    assert verbose_meeting["material"]["chars"] >= 9000
+    assert verbose_meeting["plan"]["recommend"] == "split-topics"
+
+    # 短会保持单段：少一次往返更快
+    short = engine.prepare(load_transcript(_write(PLAIN)))
+    assert short["plan"]["recommend"] == "" and short["plan"]["recommend_reason"] == ""
+
+    # 已经选了 split-topics 就别再劝
+    split = engine.prepare(load_transcript(_write(_minutes_text(40))), split_topics=True)
+    assert split["plan"]["recommend"] == ""
+
+
 def test_finish_works_without_llm_and_matches_run_shape() -> None:
     engine = _unconfigured_engine()
     transcript = load_transcript(_write(PLAIN))
@@ -480,6 +516,98 @@ def test_render_reports_actionable_error_when_no_browser(tmp_path: Path, monkeyp
     assert render_mod.resolve_template().exists()
     with pytest.raises(render_mod.ReportRenderError, match="找不到 Chrome/Edge"):
         render_mod.render_report({"title": "x"}, tmp_path / "x.png")
+
+
+def test_render_png_stitches_segments_beyond_shot_limit(tmp_path: Path, monkeypatch) -> None:
+    """超过 `MAX_SHOT_HEIGHT` 的长报告走「分段截图 + 纵向拼接」，这条分支必须真跑到。
+
+    实测踩过：拼接分支写成 `from PIL import Image as image`（类绑到小写哨兵），
+    而下面引用的是大写 `Image` → 59 分钟会的 15589px 长图直接 `NameError`，退出码 3。
+    其余用例都是短页，永远走不到这条分支，所以发布时没人发现。
+    """
+    import sys
+    import types
+
+    from minutecraft import render as render_mod
+
+    total = render_mod.MAX_SHOT_HEIGHT + 2000
+    monkeypatch.setattr(render_mod, "_measure_height", lambda _c, _p, _w: total)
+
+    shots: list[tuple[str, int]] = []
+
+    def fake_shot(_chrome: str, page: Path, out: Path, _width: int, height: int) -> None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"part")
+        shots.append((page.name, height))
+
+    monkeypatch.setattr(render_mod, "_shot", fake_shot)
+
+    pasted: list[tuple[int, int]] = []
+    canvases: list[tuple[int, int]] = []
+
+    class FakeImage:
+        def __init__(self, width: int, height: int) -> None:
+            self.width, self.height = width, height
+
+        @classmethod
+        def open(cls, _path: Path) -> "FakeImage":
+            return cls(10, 10)
+
+        @classmethod
+        def new(cls, _mode: str, size: tuple[int, int], _color: str) -> "FakeImage":
+            canvases.append(size)
+            return cls(*size)
+
+        def paste(self, other: "FakeImage", box: tuple[int, int]) -> None:
+            pasted.append((other.height, box[1]))
+
+        def save(self, path: Path) -> None:
+            Path(path).write_bytes(b"merged")
+
+    fake_pil = types.ModuleType("PIL")
+    fake_pil.Image = FakeImage  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "PIL", fake_pil)
+
+    page = tmp_path / "report.html"
+    page.write_text("<html><body></body></html>", encoding="utf-8")
+    out = tmp_path / "long.png"
+
+    assert render_mod.render_png("chrome", page, out) == out
+
+    assert [height for _name, height in shots] == [render_mod.MAX_SHOT_HEIGHT, 2000]
+    assert canvases == [(10, 20)], "拼接画布要等于各段高度之和"
+    assert pasted == [(10, 0), (10, 10)], "第二段必须压在第一段下面，不能重叠"
+    assert out.read_bytes() == b"merged"
+    assert not list(tmp_path.glob("_part*.png")), "分段临时图要清掉"
+
+
+def test_render_png_asks_for_pillow_before_shooting_when_too_tall(tmp_path: Path, monkeypatch) -> None:
+    """没装 Pillow 时**在截图之前**失败，不留一堆半成品 PNG（docstring 里承诺过）。"""
+    import builtins
+
+    from minutecraft import render as render_mod
+
+    real_import = builtins.__import__
+
+    def no_pillow(name: str, *args, **kwargs):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ImportError("No module named 'PIL'")
+        return real_import(name, *args, **kwargs)
+
+    shots: list[int] = []
+    monkeypatch.setattr(render_mod, "_measure_height",
+                        lambda _c, _p, _w: render_mod.MAX_SHOT_HEIGHT + 1)
+    monkeypatch.setattr(render_mod, "_shot",
+                        lambda _c, _p, _o, _w, height: shots.append(height))
+    monkeypatch.setattr(builtins, "__import__", no_pillow)
+
+    page = tmp_path / "report.html"
+    page.write_text("<html><body></body></html>", encoding="utf-8")
+
+    with pytest.raises(render_mod.ReportRenderError, match=r"pip install pillow"):
+        render_mod.render_png("chrome", page, tmp_path / "long.png")
+    assert shots == []
+    assert not list(tmp_path.glob("_part*.png"))
 
 
 # ── 5. 报告议题（B 案：独立一次模型调用切细议题）──
@@ -744,16 +872,6 @@ def test_topics_prompt_asks_for_dense_sections() -> None:
     assert "2-3 条" in system
     assert "≥ 10 分钟" in system
     assert "不编造" in system
-    """篇幅口径是实测钉钉听记的：长议题要 2-4 分节、每分节 2-4 组。
-
-    提示词回退成「1 个分节」会直接退回「只有标题没有正文」的粗版式，所以在这里钉住。
-    """
-    engine = minutes_from_transcript()
-    system = engine.topics_request("x")["system"]
-    assert "2-4 个" in system
-    assert "2-3 条" in system
-    assert "≥ 10 分钟" in system
-    assert "不编造" in system
 
 
 def test_thinking_level_translates_to_reasoning_effort() -> None:
@@ -987,3 +1105,250 @@ def test_cli_split_topics_expand_and_finish(tmp_path: Path) -> None:
     minutes = json.loads((out / "minutes.json").read_text(encoding="utf-8"))
     assert [topic["title"] for topic in minutes["summary"]["topics"]] == ["部署上线", "客户演示"]
     assert minutes["summary"]["chapters"][0]["title"] == "部署上线"
+
+
+# ── 7. 长会复盘：split-topics 建议顶到 next / 大纲腿强压缩 ──
+
+SKELETON_TEXT = """张三 [00:00] 先说部署，目标是周五前上线。接口联调还剩两个没打通，这是唯一的外部依赖。
+李四 [00:20] 演示脚本我今天下班前写好。明天上午预演一次，重点讲知识问答那条链路。
+张三 [01:05] 客户那边要的报表口径要统一，不然两边数据对不上，回头又说我们的数不准。
+"""
+
+
+def test_render_skeleton_keeps_every_anchor_but_only_head_sentence() -> None:
+    """骨架材料：时间锚点一个不能少（切议题全靠它），正文只留开头句。"""
+    transcript = load_transcript(_write(SKELETON_TEXT))
+    skeleton = transcript.render_skeleton()
+    assert "[00:00]" in skeleton and "[00:20]" in skeleton and "[01:05]" in skeleton
+    assert "先说部署，目标是周五前上线。" in skeleton
+    # 第二句往后全砍掉——这些字数就是大纲腿白烧的输入
+    assert "接口联调还剩两个没打通" not in skeleton
+    assert "明天上午预演一次" not in skeleton
+    assert len(skeleton) < len(transcript.render())
+
+
+def test_head_sentence_cuts_at_comma_when_first_sentence_too_long() -> None:
+    """首句本身超长时退到最近的逗号，不硬切在词中间。"""
+    from minutecraft.textutil import head_sentence
+
+    # 版本号里的「.」不能被当句末（「3.5」切成「3.」）——所以 ASCII 句点不参与断句
+    assert head_sentence("版本 3.5 已经发布，剩下的细节先不展开说明，后面再对齐一次口径要求。", limit=20) == "版本 3.5 已经发布，"
+    assert head_sentence("短句子。后面还有内容。") == "短句子。"
+
+
+def test_prepare_lean_outline_only_shrinks_the_outline_leg() -> None:
+    """`--lean-outline` 只换大纲腿的输入：summary 一个字不能少，切分口径（system）不变。"""
+    engine = _unconfigured_engine()
+    transcript = load_transcript(_write(SKELETON_TEXT * 3))
+    normal = engine.prepare(transcript, split_topics=True)
+    lean = engine.prepare(transcript, split_topics=True, lean_outline=True)
+
+    assert lean["material"]["lean_outline"] is True
+    assert 0 < lean["material"]["outline_chars"] < normal["material"]["outline_chars"]
+    assert lean["requests"]["summary"]["user"] == normal["requests"]["summary"]["user"]
+    assert lean["requests"]["topics_outline"]["system"] == normal["requests"]["topics_outline"]["system"]
+    assert "接口联调还剩两个没打通" not in lean["requests"]["topics_outline"]["user"]
+
+
+def test_cli_prepare_puts_recommendation_first_in_next(tmp_path: Path, capsys) -> None:
+    """Agent 通常照着 `next` 那行做，所以建议必须排在最前面，不能埋在 plan 里。"""
+    from minutecraft.cli import main
+
+    raw = tmp_path / "meeting.txt"
+    raw.write_text(_minutes_text(40), encoding="utf-8")
+    request = tmp_path / "request.json"
+    assert main(["prepare", str(raw), "-o", str(request), "--json"]) == 0
+    emitted = json.loads(capsys.readouterr().out)
+
+    assert emitted["plan"]["recommend"] == "split-topics"
+    assert emitted["next"].startswith("[建议]")
+    assert "--split-topics" in emitted["next"]
+
+
+# ── 议题正文的密度档：精简 / 详细 / 按宿主实测吞吐自动 ──────────────────────
+
+# 两档共用同一个 JSON 形状：`finish` 与出图只认这一种结构，档位差只能体现在「条数与句长」，
+# 一旦形状漂移，精简档就会在解析层被丢掉（现场表现是报告正文整块空掉）。
+_TOPICS_SHAPE = '"sections": [{"title": "分节名", "groups": [{"title": "看法或子标题", "items": ["要点"]}]}]'
+_SHARED_INVARIANTS = (
+    _TOPICS_SHAPE,
+    '<span class="warm">词</span>',
+    "不编造",
+    "反引号",
+    "讨论情况",
+)
+
+
+def test_both_topics_prompts_keep_the_shared_invariants() -> None:
+    """精简档只准收「条数与句长」，重点口径（结构 / 高亮 / 数字出处 / 空标题禁令）一条不能掉。"""
+    summarizer = minutes_from_transcript()
+    dense = summarizer.topics_request("x")["system"]
+    lean = summarizer.topics_request("x", dense=False)["system"]
+
+    for needle in _SHARED_INVARIANTS:
+        assert needle in dense, f"详细档丢了 {needle}"
+        assert needle in lean, f"精简档丢了 {needle}"
+    assert "≤45 字" in lean and "2-4 个" not in lean
+    assert "2-4 个" in dense, "详细档的篇幅口径是被实测钉住的，不能被精简档带跑"
+
+
+def test_both_expand_prompts_keep_the_shared_invariants() -> None:
+    """逐议题扩写同理：两档共用一套不变量，差异只在条数与句长。"""
+    summarizer = minutes_from_transcript()
+    topic = {"title": "部署上线", "start": 0, "end": 600, "gist": "周五前上线"}
+    dense = summarizer.topic_expand_request(topic, "张三 [00:00] 部署", 1, 2)["system"]
+    lean = summarizer.topic_expand_request(topic, "张三 [00:00] 部署", 1, 2, dense=False)["system"]
+
+    for needle in _SHARED_INVARIANTS + ("区间外",):
+        assert needle in dense, f"详细档丢了 {needle}"
+        assert needle in lean, f"精简档丢了 {needle}"
+    assert "每组 2-3 条" in dense and "≤45 字" in lean
+    # 大纲腿与密度档无关：它本来就不写正文，两条路的输出量一样
+    assert "不要** focus / sections" in minutes_from_transcript().topics_outline_request("x")["system"]
+
+
+def test_resolve_density_uses_measured_speed_before_size() -> None:
+    """吞吐实测优先于材料规模：慢宿主哪怕短会也别写详细档，快宿主长会照样能要详细的。"""
+    from minutecraft.engine import DENSITY_DETAILED_MIN_BPS, resolve_density
+
+    slow, reason = resolve_density("auto", chars=300, minutes=10, output_bps=12.0)
+    assert slow == "concise" and "12" in reason
+    fast, _ = resolve_density("auto", chars=20000, minutes=60, output_bps=60.0)
+    assert fast == "detailed"
+    # 阈值两侧都要判得对（12 字节/秒是一次 59 分钟会 summary 腿的真实水位）
+    assert DENSITY_DETAILED_MIN_BPS > 12.0
+    edge, _ = resolve_density("auto", chars=300, minutes=10, output_bps=DENSITY_DETAILED_MIN_BPS)
+    assert edge == "detailed"
+
+
+def test_resolve_density_without_speed_is_conservative_by_size(monkeypatch) -> None:
+    """宿主没报吞吐时按规模保守判：长会先精简（宁可短，别让一腿烧半小时），短会保持详细。"""
+    from minutecraft.engine import resolve_density
+
+    monkeypatch.delenv("MINUTECRAFT_OUTPUT_BPS", raising=False)
+    long_meeting, reason = resolve_density("auto", chars=15960, minutes=59)
+    assert long_meeting == "concise" and "--output-bps" in reason
+    assert resolve_density("auto", chars=119, minutes=0.5)[0] == "detailed"
+    # 显式指定最大，永远压过自动判断
+    assert resolve_density("detailed", chars=15960, minutes=59) == ("detailed", "手动指定 --density detailed")
+    # 非法环境变量不能把整条链路带崩，退成「未知」按规模判
+    monkeypatch.setenv("MINUTECRAFT_OUTPUT_BPS", "挺快的")
+    assert resolve_density("auto", chars=15960, minutes=59)[0] == "concise"
+    monkeypatch.setenv("MINUTECRAFT_OUTPUT_BPS", "40")
+    assert resolve_density("auto", chars=15960, minutes=59)[0] == "detailed"
+
+
+def test_prepare_density_concise_swaps_only_the_topics_prompt() -> None:
+    """`--density concise` 换掉议题提示词，summary 纪要一个字不动（用户口径：只收议题正文）。"""
+    engine = _unconfigured_engine()
+    transcript = load_transcript(_write(SKELETON_TEXT * 3))
+    dense = engine.prepare(transcript)
+    lean = engine.prepare(transcript, density="concise")
+
+    assert lean["plan"]["density"] == "concise"
+    assert dense["plan"]["density"] == "detailed"
+    assert lean["plan"]["density_requested"] == "concise"
+    assert "≤45 字" in lean["requests"]["topics"]["system"]
+    assert lean["requests"]["topics"]["user"] == dense["requests"]["topics"]["user"]
+    assert lean["requests"]["summary"] == dense["requests"]["summary"]
+
+
+def test_prepare_density_preview_does_not_touch_the_outline_leg() -> None:
+    """两阶段时 prepare 只预告档位：大纲腿不写正文，提示词不能因为档位改变。"""
+    engine = _unconfigured_engine()
+    transcript = load_transcript(_write(SKELETON_TEXT * 3))
+    payload = engine.prepare(transcript, split_topics=True, density="concise")
+
+    assert "topics" not in payload["requests"]
+    assert payload["plan"]["density"] == "concise"
+    assert payload["requests"]["topics_outline"]["system"] == engine.prepare(
+        transcript, split_topics=True
+    )["requests"]["topics_outline"]["system"]
+
+
+def test_expand_inherits_explicit_density_from_prepare() -> None:
+    """prepare 显式指定的档位必须一路带到扩写——同一场会不能前后两次跑出两种版式。"""
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(SPLIT_PLAIN)), split_topics=True, density="concise")
+    outline = json.dumps(SPLIT_OUTLINE, ensure_ascii=False)
+
+    inherited = engine.expand(payload, outline, margin=0)
+    assert inherited["plan"]["density"] == "concise"
+    assert "沿用 prepare" in inherited["plan"]["density_reason"]
+    assert all("≤45 字" in request["system"] for request in inherited["requests"].values())
+
+    # 扩写时显式覆盖 prepare 的选择，也要照办
+    override = engine.expand(payload, outline, margin=0, density="detailed")
+    assert override["plan"]["density"] == "detailed"
+    assert all("每组 2-3 条" in request["system"] for request in override["requests"].values())
+
+    # 没显式指定过（prepare 走 auto）时，扩写自己按吞吐判
+    auto = engine.prepare(load_transcript(_write(SPLIT_PLAIN)), split_topics=True)
+    judged = engine.expand(auto, outline, margin=0, output_bps=12.0)
+    assert judged["plan"]["density"] == "concise"
+    assert judged["plan"]["density_requested"] == ""
+
+
+def test_expand_reuses_the_throughput_reported_at_prepare() -> None:
+    """吞吐只报一次就够：第二阶段沿用它，否则快宿主的长会会在 expand 里被悄悄降成精简档。
+
+    冒烟实测踩过：`prepare --output-bps 12` 判到 concise，`expand` 却报「吞吐未知」——
+    反过来（prepare 30 字节/秒判 detailed、expand 按规模判 concise）同样错。
+    """
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(_minutes_text(45))), split_topics=True, output_bps=30.0)
+    assert payload["plan"]["density"] == "detailed" and payload["plan"]["output_bps"] == 30.0
+
+    outline = json.dumps(SPLIT_OUTLINE, ensure_ascii=False)
+    expanded = engine.expand(payload, outline, margin=0)
+    assert expanded["plan"]["density"] == "detailed"
+    assert "30 字节/秒" in expanded["plan"]["density_reason"]
+
+    # 扩写时重报一个更低的数以新的为准（宿主中途换模型、并发被压下来都会改吞吐）
+    slower = engine.expand(payload, outline, margin=0, output_bps=6.0)
+    assert slower["plan"]["density"] == "concise"
+
+
+def test_finish_accepts_a_lean_topic_body_unchanged() -> None:
+    """精简档的回答必须原样吃下：条数少不是漏答，不该出警告、更不能退回大纲。"""
+    engine = _unconfigured_engine()
+    payload = engine.prepare(load_transcript(_write(SPLIT_PLAIN)), split_topics=True, density="concise")
+    expanded = engine.expand(payload, json.dumps(SPLIT_OUTLINE, ensure_ascii=False), margin=0)
+    summary = {key: value for key, value in SUMMARY.items() if key not in ("chapters", "mindmap")}
+    lean_body = {"focus": ["部署聚焦上线时间"], "sections": [
+        {"title": "上线安排", "groups": [{"title": "责任到人", "items": ["李四跟进部署"]}]}
+    ], "insights": []}
+    answers = {
+        "summary": json.dumps(dict(summary, keywords=["部署"]), ensure_ascii=False),
+        "topics#1": json.dumps(lean_body, ensure_ascii=False),
+        "topics#2": json.dumps(lean_body, ensure_ascii=False),
+    }
+    result = engine.finish(expanded, answers, out_dir=None)
+
+    # 条数少不等于漏答：不能因为走了精简档就警告或退回大纲
+    assert [w for w in result.warnings if "议题" in w or "topics" in w] == []
+    assert result.summary["topics"][0]["sections"][0]["groups"][0]["items"] == ["李四跟进部署"]
+    assert result.summary["topics"][0]["focus"] == ["部署聚焦上线时间"]
+
+
+def test_cli_prepare_and_expand_report_the_density(tmp_path: Path, capsys) -> None:
+    """档位与理由要出现在 `next` 里：宿主照着 next 做，看不到就会自己加戏写长。"""
+    from minutecraft.cli import main
+
+    raw = tmp_path / "meeting.txt"
+    raw.write_text(_minutes_text(40), encoding="utf-8")
+    request = tmp_path / "request.json"
+    assert main(["prepare", str(raw), "-o", str(request), "--split-topics",
+                 "--output-bps", "12", "--json"]) == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["plan"]["density"] == "concise"
+    assert "[正文] concise 档" in emitted["next"]
+
+    outline = tmp_path / "outline.json"
+    outline.write_text(json.dumps(SPLIT_OUTLINE, ensure_ascii=False), encoding="utf-8")
+    expanded = tmp_path / "expand.json"
+    assert main(["expand", str(request), "--outline", str(outline), "-o", str(expanded),
+                 "--density", "detailed", "--json"]) == 0
+    after = json.loads(capsys.readouterr().out)
+    assert after["plan"]["density"] == "detailed"
+    assert after["next"].startswith("[正文] detailed 档")

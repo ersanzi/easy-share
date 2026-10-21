@@ -846,10 +846,46 @@ class MeetingSummarizer:
     # 可用环境变量覆盖，端点不支持时自动回退 8192。
     _TOPICS_MAX_TOKENS = _TOPICS_MAX_TOKENS_DEFAULT
 
-    def topics_request(self, transcript: str) -> dict:
-        """组装报告议题请求（可选步骤；失败只影响长图正文，不影响纪要）。"""
+    # 精简档（`--density concise` / auto 判到吞吐低时启用）：**只收议题正文**，summary 纪要不动。
+    # 与上面那份的差别全在「条数与句长」，重点口径一字不少——结论、数字、期限、责任人、
+    # `warm` 高亮、反引号数字、空标题禁令、不编造，全部保留；砍掉的是过程叙述与发言复述。
+    # 为什么这一刀有效：宿主的墙钟几乎全花在输出上（实测一次 59 分钟会的 summary 腿
+    # 9604 字节 / 13.5 分钟 ≈ 12 字节/秒），正文从单议题 800-1400 字收到 200-400 字，
+    # 就是同一条腿的输出时间按同比例缩短；档位由 `engine.resolve_density` 按实测吞吐判。
+    _TOPICS_SYSTEM_LEAN = (
+        "你是企业会议纪要编辑。把带说话人标签的会议转写整理成一份**按议题组织的精简报告**："
+        "条目少、但每条都是重点。输出严格 JSON 对象，形状为：\n"
+        '{"topics": [{"title": "议题名", "start": "mm:ss", "end": "mm:ss", '
+        '"gist": "一句话摘要", "focus": ["本段讨论聚焦于…"], '
+        '"sections": [{"title": "分节名", "groups": [{"title": "看法或子标题", "items": ["要点"]}]}], '
+        '"insights": ["针对本议题的判断"]}]}\n'
+        "口径：\n"
+        "1. topics 按时间先后排列，切到 4-8 个议题（一场会聊了几件事就切几个）；title 6-14 字；\n"
+        "2. start/end 直接抄转写行里的 [mm:ss]，不重叠、不留空档；\n"
+        "3. gist 一句话说明这个议题谈出了什么（30 字内），写结论不写过程；\n"
+        "4. focus **只 1 条**，≤60 字，一句话说清「聚焦什么 + 结论是什么」；"
+        "需要强调的关键词用 <span class=\"warm\">词</span> 包起来，最多标 2 个；\n"
+        "5. **篇幅收紧**：sections 1-2 个（议题 <5 分钟只给 1 个），每个 section 下 groups 1-2 个，"
+        "每组 items 1-2 条；group.title 6-20 字，写一个**判断或做法**"
+        "（如「SSL 证书无法证明具体算法」），不要写「讨论情况」「其他」这类空标题；\n"
+        "6. items 每条 **≤45 字**，且必须是**结论 / 数字 / 期限 / 责任人 / 依据**之一；"
+        "过程叙述、谁说了什么、「大家讨论了…」这类一律不写；"
+        "具体数字、期限、系统名、文件名用反引号包起来（如 `RSA 2048`、`6 个月`），数字必须来自转写；\n"
+        "7. insights 0-1 条，≤40 字，只写从转写推得出来但没被明说的判断或风险；没有就不写；\n"
+        "8. **宁少不凑**：单个议题正文 200-400 字就够，凑数的分节比缺一节更糟；"
+        "只依据转写内容，**不编造**，没有细节支撑的论点不写。"
+    )
+
+    def topics_request(self, transcript: str, *, dense: bool = True) -> dict:
+        """组装报告议题请求（可选步骤；失败只影响长图正文，不影响纪要）。
+
+        `dense=False` 走精简档：条数与句长收紧，重点口径不变。
+        """
         material = transcript if len(transcript) <= self._TOPICS_LIMIT else transcript[: self._TOPICS_LIMIT]
-        return {"system": self._TOPICS_SYSTEM, "user": "会议转写如下：\n" + material}
+        return {
+            "system": self._TOPICS_SYSTEM if dense else self._TOPICS_SYSTEM_LEAN,
+            "user": "会议转写如下：\n" + material,
+        }
 
     def topics_from_answer(self, answer: str) -> list[dict] | None:
         """解析议题回答（原始文本，含 ``` 围栏也能吃）。不可解析返回 None。"""
@@ -900,12 +936,41 @@ class MeetingSummarizer:
     )
 
     def topics_outline_request(self, transcript: str) -> dict:
-        """第一阶段：只切议题大纲（输出很短，通常几十秒）。"""
+        """第一阶段：只切议题大纲（输出很短，通常几十秒）。
+
+        大纲腿与密度档无关——它本来就不写正文，两条路的输出量一样。
+        """
         material = transcript if len(transcript) <= self._TOPICS_LIMIT else transcript[: self._TOPICS_LIMIT]
         return {"system": self._TOPICS_OUTLINE_SYSTEM, "user": "会议转写如下：\n" + material}
 
-    def topic_expand_request(self, topic: dict, transcript: str, index: int, total: int) -> dict:
-        """第二阶段：只扩写一个议题；输入是切片后的转写，输出只有正文三件套。"""
+    # 精简档的逐议题扩写（配合 `_TOPICS_SYSTEM_LEAN` 同一口径）。
+    # 与 `_TOPIC_EXPAND_SYSTEM` 共享「warm 高亮 / 反引号数字 / 不编造 / 区间外不生成分节」四条，
+    # 只把分节、分组、条数、句长收下来——`test_both_expand_prompts_keep_the_shared_invariants` 钉住。
+    _TOPIC_EXPAND_SYSTEM_LEAN = (
+        "你是企业会议纪要编辑。下面是会议中**某一个议题**的转写片段（前后可能带少量上下文），"
+        "请只为这个议题写**精简版**报告正文：条目少、但每条都是重点。输出严格 JSON 对象，形状为：\n"
+        '{"focus": ["本段讨论聚焦于…"], '
+        '"sections": [{"title": "分节名", "groups": [{"title": "看法或子标题", "items": ["要点"]}]}], '
+        '"insights": ["针对本议题的判断"]}\n'
+        "口径：\n"
+        "1. focus **只 1 条**，≤60 字，一句话说清「聚焦什么 + 结论是什么」；"
+        "**需要强调的关键词**用 <span class=\"warm\">词</span> 包起来，最多标 2 个；\n"
+        "2. **篇幅收紧**：sections 1-2 个（议题 <5 分钟只给 1 个），每个 section 下 groups 1-2 个；\n"
+        "3. group.title 6-20 字，写一个**判断或做法**，不要写「讨论情况」「其他」这类空标题；\n"
+        "4. items 每组 **1-2 条**、每条 **≤45 字**，且必须是**结论 / 数字 / 期限 / 责任人 / 依据**之一；"
+        "过程叙述、谁说了什么一律不写；句中的具体数字、期限、系统名、文件名用反引号包起来"
+        "（如 `RSA 2048`、`6 个月`），数字必须来自转写；\n"
+        "5. insights 0-1 条，≤40 字，只写从转写推得出来但没被明说的判断或风险；\n"
+        "6. **宁少不凑**：这个议题的正文 200-400 字就够，凑数的分节比缺一节更糟；\n"
+        "7. 只依据给定片段，**不编造**；区间外内容只作上下文，不要为它生成分节。"
+    )
+
+    def topic_expand_request(self, topic: dict, transcript: str, index: int, total: int,
+                             *, dense: bool = True) -> dict:
+        """第二阶段：只扩写一个议题；输入是切片后的转写，输出只有正文三件套。
+
+        `dense=False` 用精简档口径——同样的重点要求，条数与句长收下来。
+        """
         start = int(topic.get("start") or 0)
         end = int(topic.get("end") or start)
         user = (
@@ -914,7 +979,10 @@ class MeetingSummarizer:
             f"议题摘要：{topic.get('gist') or '（无）'}\n"
             "转写片段如下：\n" + transcript
         )
-        return {"system": self._TOPIC_EXPAND_SYSTEM, "user": user}
+        return {
+            "system": self._TOPIC_EXPAND_SYSTEM if dense else self._TOPIC_EXPAND_SYSTEM_LEAN,
+            "user": user,
+        }
 
     def topic_body_from_answer(self, answer: str, *, title: str = "", start: int = 0,
                                end: int = 0) -> dict | None:

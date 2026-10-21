@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .textutil import is_filler, join_text
+from .textutil import head_sentence, is_filler, join_text
 
 
 @dataclass(slots=True)
@@ -65,13 +65,43 @@ class Transcript:
         if not compact:
             return self._render_lines(with_timestamps)
 
+        lines: list[str] = []
+        for block in self._blocks(drop_filler=drop_filler, max_chars=max_chars, gap_seconds=gap_seconds):
+            who = self._display_name(TranscriptTurn(block["start"], block["end"], block["text"], block["speaker"]))
+            if not with_timestamps:
+                lines.append(f"{who}: {block['text']}")
+                continue
+            minutes, seconds = divmod(int(block["start"]), 60)
+            lines.append(f"{who} [{minutes:02d}:{seconds:02d}] {block['text']}")
+        return "\n".join(lines)
+
+    def render_skeleton(self, *, max_head_chars: int = 60) -> str:
+        """**大纲腿专用**的强压缩材料：每段只留「说话人 + 段首时间戳 + 开头句」。
+
+        切议题需要的是时间锚点和「这段在讲什么」，不需要逐字正文；实测一份 59 分钟会的
+        大纲请求输入 44KB、输出只有 1.4KB，全量材料换一个小答案。
+        两阶段模式的扩写腿**不吃这份材料**（`expand` 仍按时间窗切完整片段），
+        所以这里的代价只可能是议题切边位置，不会伤到正文质量。
+        """
+        lines: list[str] = []
+        for block in self._blocks():
+            text = head_sentence(block["text"], limit=max_head_chars)
+            if not text:
+                continue
+            who = self._display_name(TranscriptTurn(block["start"], block["end"], text, block["speaker"]))
+            minutes, seconds = divmod(int(block["start"]), 60)
+            lines.append(f"{who} [{minutes:02d}:{seconds:02d}] {text}")
+        return "\n".join(lines)
+
+    def _blocks(self, *, drop_filler: bool = True, max_chars: int = 220, gap_seconds: float = 45.0) -> list[dict]:
+        """压缩后的段落块：丢纯语气词、合并同一说话人的相邻短句，保留段首/段尾时间。"""
         turns = [turn for turn in self.turns if turn.text.strip()]
         if drop_filler:
             kept = [turn for turn in turns if not is_filler(turn.text)]
             # 整份都是「嗯/好的」时别删空，退回原始行
             turns = kept or turns
         if not turns:
-            return ""
+            return []
 
         blocks: list[dict] = []
         current: dict | None = None
@@ -88,16 +118,7 @@ class Transcript:
                 continue
             current["text"] = join_text(current["text"], text)
             current["end"] = max(turn.end, turn.start, current["end"])
-
-        lines: list[str] = []
-        for block in blocks:
-            who = self._display_name(TranscriptTurn(block["start"], block["end"], block["text"], block["speaker"]))
-            if not with_timestamps:
-                lines.append(f"{who}: {block['text']}")
-                continue
-            minutes, seconds = divmod(int(block["start"]), 60)
-            lines.append(f"{who} [{minutes:02d}:{seconds:02d}] {block['text']}")
-        return "\n".join(lines)
+        return blocks
 
     def _render_lines(self, with_timestamps: bool) -> str:
         """逐行渲染（`compact=False` 的旧行为）。"""

@@ -31,6 +31,65 @@ from .transcript import load_transcript, transcript_to_dict
 # 带上版本便于将来格式变化时报出可读的错，而不是键缺失。
 PREPARE_VERSION = "1"
 
+# 单段 topics 的上下文红线（实测反推，不是拍脑袋）。
+# 一次 59 分钟会（压缩后材料 15960 字 / 71 行）在 32K 级窗口的宿主子代理上直接上下文耗尽、
+# 零产出，白烧 25 分钟：账是「材料 + 提示词 ~10k tokens + 子代理自身开销 ~8k + 输出 6-10k tokens」
+# 贴着窗口上限。8k 字以内的短会单段仍然安全，而且少一次往返更快，所以这里**只建议、不自动切**。
+SPLIT_RECOMMEND_MIN_CHARS = 9000
+SPLIT_RECOMMEND_MIN_MINUTES = 35.0
+
+# 议题正文的密度档。墙钟几乎全花在 output token 上（实测宿主 5-8 token/s 量级），
+# 所以「精简 / 详细」应该由**宿主的吞吐**决定，而不是让人每次回忆该加哪个开关。
+# 单位取「输出字节/秒」：宿主只需 `(Get-Item 回答文件).Length ÷ 该腿耗时秒`，
+# 不用自己换算 token（UTF-8 下一个中文字约 3 字节，24 B/s ≈ 8 字/s）。
+DENSITY_MODES = ("auto", "detailed", "concise")
+DENSITY_DETAILED_MIN_BPS = 24.0
+DENSITY_ENV = "MINUTECRAFT_OUTPUT_BPS"
+
+
+def _read_output_bps(explicit: float | None = None) -> tuple[float, str]:
+    """宿主自测的输出吞吐（字节/秒）：显式参数 > 环境变量 > 未知（0）。"""
+    for value, source in ((explicit, "宿主实测"), (os.environ.get(DENSITY_ENV, ""), f"环境变量 {DENSITY_ENV}")):
+        if isinstance(value, str):
+            try:
+                value = float(value)
+            except ValueError:
+                continue
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value), source
+    return 0.0, ""
+
+
+def resolve_density(mode: str, *, chars: int, minutes: float,
+                    output_bps: float | None = None, inherited: str = "") -> tuple[str, str]:
+    """定议题正文的密度档，返回 `(density, reason)`，reason 会原样交给宿主看。
+
+    优先级：显式指定 > 沿用 prepare 的显式指定 > 实测吞吐 > 材料规模（保守）。
+
+    落到「材料规模」这一档时为什么大材料选精简：这种规模本来就到了 `plan.recommend` 的
+    split-topics 红线，单议题 800-1400 字的详细档会把 8 路扩写腿拖成半小时以上，
+    而一次 59 分钟会实测吞吐约 12 字节/秒——精简档把这一腿压到约一半，重点口径一字不少。
+    """
+    if mode in ("detailed", "concise"):
+        return mode, f"手动指定 --density {mode}"
+    if inherited in ("detailed", "concise"):
+        return inherited, f"沿用 prepare 的显式指定（--density {inherited}）"
+    bps, source = _read_output_bps(output_bps)
+    if bps:
+        if bps >= DENSITY_DETAILED_MIN_BPS:
+            return "detailed", f"{source} {bps:.0f} 字节/秒 ≥ {DENSITY_DETAILED_MIN_BPS:.0f}，吞吐够，出详细档"
+        return "concise", (
+            f"{source} {bps:.0f} 字节/秒 < {DENSITY_DETAILED_MIN_BPS:.0f}，吞吐不够"
+            "（详细档单议题 800-1400 字会把最慢一腿拖到 10 分钟以上），出精简档"
+        )
+    if chars >= SPLIT_RECOMMEND_MIN_CHARS or minutes >= SPLIT_RECOMMEND_MIN_MINUTES:
+        return "concise", (
+            f"宿主吞吐未知，压缩后材料 {chars} 字、会议约 {minutes:.0f} 分钟——规模到了长会这一档，"
+            "先按精简出（宁可短，别让一腿烧半小时）；知道自家吞吐时加 --output-bps 让 auto 判得更准"
+        )
+    return "detailed", f"宿主吞吐未知，短会（{chars} 字 / 约 {minutes:.0f} 分钟）本来就不慢，出详细档"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -251,13 +310,17 @@ class MinuteEngine:
         with_topics: bool = True,
         with_compact_material: bool = True,
         split_topics: bool = False,
+        lean_outline: bool = False,
+        density: str = "auto",
+        output_bps: float | None = None,
     ) -> dict:
         """生成待回答的请求包。**不需要任何 LLM 配置。**
 
         返回结构（可 json.dump 落盘）：
             {"version", "transcript"（原样带回，finish 需要）, "template",
              "material": {"chars", "turns", "lines", "compact"},
-             "plan": {"calls", "parallel"},
+             "plan": {"calls", "parallel", "recommend", "recommend_reason", "note",
+                      "density", "density_reason", "density_requested", "output_bps"},
              "requests": {"summary": {...}, "topics": {...}}}
 
         速度取舍（默认值就是快的那条路）：
@@ -272,6 +335,16 @@ class MinuteEngine:
         `expand()` 拆成每议题一个小请求——支持并发的宿主能把墙钟时间从「一次长调用」降到
         「大纲 + 最慢的一个议题」。
 
+        `lean_outline=True`（配合 `split_topics`）把大纲腿的材料换成「说话人 + 段首时间戳 +
+        每段首句」。实测一次 59 分钟会的大纲请求是 44KB 输入换 1.4KB 输出，全量材料换来的
+        只是切分锚点；但**代价是议题切边质量**，得按会议实测 A/B，所以默认关闭。
+
+        `density` 决定**议题正文**（不含 summary 纪要）写多长：`detailed` 是原来的口径，
+        `concise` 是精简档（1-2 分节、每条 ≤45 字、200-400 字/议题），`auto` 按宿主吞吐判——
+        知道自家输出速度就传 `output_bps`（字节/秒，宿主用「回答字节数 ÷ 该腿秒数」算），
+        不知道则按材料规模保守判。两阶段模式下这次判定只是预告，真正选提示词在 `expand()`，
+        它会沿用这里显式指定的档位**和实测吞吐**（`plan.output_bps` 跟着请求包走，不用重报）。
+
         `topics` 是长网页报告的正文骨架（议题 → 分节 → 要点），可选；宿主不回答它时
         finish 会回退到「按章节均分 visual」的旧渲染路径，不会失败。
         """
@@ -279,22 +352,49 @@ class MinuteEngine:
         material = transcript.render(compact=with_compact_material)
         if not material.strip():
             raise MinuteError("转写为空，没有可生成的会议内容")
+        minutes = (transcript.duration_seconds or 0.0) / 60.0
+        density_requested = density if density in ("detailed", "concise") else ""
+        bps_used, _ = _read_output_bps(output_bps)
+        density_used, density_reason = (
+            resolve_density(density, chars=len(material), minutes=minutes,
+                            output_bps=output_bps)
+            if with_topics else ("", "")
+        )
         requests: dict[str, dict] = {
             "summary": self._summarizer.build_request(
                 material, template, with_keywords=with_keywords, derive_from_topics=with_topics
             )
         }
         # with_topics=False 用于「只要 docx/md，不要长图」：议题是最慢的一次调用（实测 250-300s）
+        outline_chars = 0
         if with_topics:
             if split_topics:
-                requests["topics_outline"] = self._summarizer.topics_outline_request(material)
+                # 大纲只需要时间锚点与句意开头，不必逐字读完全文；扩写腿仍吃完整片段，
+                # 所以强压缩的代价只可能是议题切边位置，不伤正文
+                outline_material = transcript.render_skeleton() if lean_outline else material
+                outline_chars = len(outline_material)
+                requests["topics_outline"] = self._summarizer.topics_outline_request(outline_material)
             else:
-                requests["topics"] = self._summarizer.topics_request(material)
+                requests["topics"] = self._summarizer.topics_request(
+                    material, dense=density_used == "detailed"
+                )
         note = (
             "summary 与议题大纲互不依赖，请并发发出；答完大纲后执行 minutecraft expand 拆出各议题扩写请求"
             if split_topics
             else "summary 与 topics 互不依赖，请并发发出；topics 最慢（长会约 4 分钟），不要串行等它"
         )
+        # 单段 topics 会不会撑爆宿主，取决于材料规模；这里提前判定，别让 Agent 跑完 15 分钟才发现零产出
+        recommend = ""
+        recommend_reason = ""
+        if with_topics and not split_topics:
+            if len(material) >= SPLIT_RECOMMEND_MIN_CHARS or minutes >= SPLIT_RECOMMEND_MIN_MINUTES:
+                recommend = "split-topics"
+                recommend_reason = (
+                    f"压缩后材料 {len(material)} 字、会议约 {minutes:.0f} 分钟——单段 topics 在这种规模上"
+                    "会撑爆中等窗口宿主的子代理上下文（实测 59 分钟会跑完只剩零产出）。"
+                    "请重新执行 prepare --split-topics：summary 与议题大纲并发，再用 expand 拆成每议题一个小请求"
+                )
+                note = recommend_reason + "；" + note
         return {
             "version": PREPARE_VERSION,
             "transcript": transcript_to_dict(transcript),
@@ -308,22 +408,38 @@ class MinuteEngine:
                 "lines": material.count("\n") + 1,
                 "turns": len(transcript.turns),
                 "compact": with_compact_material,
+                # 大纲腿实际吃进去的字数（0 = 本次没有大纲腿）；--lean-outline 的 A/B 就靠这两个数对比
+                "outline_chars": outline_chars,
+                "lean_outline": lean_outline,
             },
             "plan": {
                 "calls": list(requests),
                 "parallel": len(requests) > 1,
                 "derive_from_topics": with_topics,
+                "recommend": recommend,
+                "recommend_reason": recommend_reason,
+                # 正文密度档：single 模式这次就是终值；outline 模式只是预告，expand 会沿用显式指定
+                "density": density_used,
+                "density_reason": density_reason,
+                "density_requested": density_requested,
+                # 实测吞吐要跟着请求包走：expand 是另一次进程调用，不记就等于让宿主重报一遍
+                "output_bps": bps_used if with_topics else 0.0,
                 "note": note,
             },
             "requests": requests,
         }
 
-    def expand(self, payload: dict, outline_answer: str, *, margin: float = 30.0) -> dict:
+    def expand(self, payload: dict, outline_answer: str, *, margin: float = 30.0,
+               density: str = "auto", output_bps: float | None = None) -> dict:
         """把「议题大纲回答」拆成每议题一个扩写请求（两阶段议题的第二阶段）。
 
         **不需要 LLM 配置，也不调模型。** 每个请求只带该议题时间窗（前后各留 `margin` 秒
         上下文）的转写，输出只需正文三件套，比整份 topics 短得多；请求之间互不依赖，
         支持并发的宿主应全部并行发出。
+
+        `density` / `output_bps` 定正文档位，口径同 `prepare()`。这里能拿到 prepare 的产物，
+        所以 `auto` 优先沿用宿主在 prepare 上**显式**指定过的档位、其次沿用它报过的实测吞吐
+        （`plan.output_bps`）——两阶段是一场会，不能前后各出一种版式。
 
         返回的新请求包仍可直接交给 `finish`：`topic_outline` 保存大纲，
         `requests` 的键是 `topics#1`…`topics#N`，宿主按同名键写进 answers.json。
@@ -334,6 +450,18 @@ class MinuteEngine:
             raise MinuteError(
                 "议题大纲无法解析：需要 {\"topics\": [{\"title\", \"start\", \"end\", \"gist\"}]}"
             )
+        plan_before = payload.get("plan") or {}
+        chars = int((payload.get("material") or {}).get("chars") or 0)
+        # 吞吐只测一次就够：prepare 记下的实测值继续用，否则第二阶段会退回「按规模判」，
+        # 同一场会前后跑出两种版式（冒烟实测踩过：prepare 报 12 判 concise，expand 却说「吞吐未知」）
+        bps = output_bps or float(plan_before.get("output_bps") or 0.0)
+        density_used, density_reason = resolve_density(
+            density,
+            chars=chars,
+            minutes=(transcript.duration_seconds or 0.0) / 60.0,
+            output_bps=bps,
+            inherited=str(plan_before.get("density_requested") or ""),
+        )
         requests: dict[str, dict] = {}
         for index, topic in enumerate(outline, 1):
             start = int(topic.get("start") or 0)
@@ -345,7 +473,7 @@ class MinuteEngine:
                     end = int(transcript.duration_seconds or start)
             piece = _slice_transcript(transcript, start, end, margin)
             requests[f"topics#{index}"] = self._summarizer.topic_expand_request(
-                topic, piece.render(), index, len(outline)
+                topic, piece.render(), index, len(outline), dense=density_used == "detailed"
             )
         expanded = dict(payload)
         expanded["topics_mode"] = "split"
@@ -354,6 +482,11 @@ class MinuteEngine:
         expanded["plan"] = {
             "calls": list(requests),
             "parallel": True,
+            "density": density_used,
+            "density_reason": density_reason,
+            "density_requested": density if density in ("detailed", "concise")
+            else str(plan_before.get("density_requested") or ""),
+            "output_bps": bps,
             "note": "各议题扩写互不依赖，请并发发出；每个请求只带该议题时间窗，输出比整份 topics 短得多",
         }
         return expanded

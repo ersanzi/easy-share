@@ -66,7 +66,10 @@ minutecraft run <输入> [--out DIR] [--template ID] [--title T]
                        [--full-text] [--with-transcript] [--json]
 minutecraft prepare <输入> -o request.json     # 只组装提示词，不调模型（另写 request.prompts/）
 minutecraft prepare <输入> -o req.json --split-topics  # 长会两阶段：只出议题大纲
+minutecraft prepare <输入> -o req.json --split-topics --lean-outline  # 实验项：大纲腿只喂骨架材料
 minutecraft expand req.json --outline outline.json -o expand.json  # 大纲 → 每议题一个扩写请求
+minutecraft prepare/expand ... [--density auto|detailed|concise] [--output-bps 字节/秒]
+                                  # 议题正文的密度档；auto 按宿主实测吞吐判（默认 auto）
 minutecraft finish <请求包> --answers a.json   # 只解析回答与导出，不调模型（answers 支持 "@文件"）
 minutecraft schema [--json]       # 输入/产物结构自描述（Agent 组织提示用）
 minutecraft templates [--json]    # 内置模板：会议纪要/周会/站会/面试/访谈/培训/头脑风暴
@@ -257,6 +260,56 @@ result.files     # {"docx": ..., "md": ..., "json": ..., "visual": ...}
 支持并发的宿主墙钟 ≈ 大纲 + 最慢的一个议题，且单个议题的输出更不容易被截断；
 **串行宿主会更慢**，所以默认关闭。合并时标题与起止以大纲为准，避免十个请求各写一套时间轴；
 某个 `topics#N` 没答只会让该议题退回大纲，警告点名到具体键。
+
+**什么时候该用它，`prepare` 自己说**：压缩后材料 ≥`SPLIT_RECOMMEND_MIN_CHARS`（9000）字、或会议
+≥`SPLIT_RECOMMEND_MIN_MINUTES`（35）分钟且本次走单段 topics 时，`plan.recommend` 写 `split-topics`、
+`plan.note` 与 CLI 的 `next` 第一行（`[建议]` 开头）同步点名。阈值不是拍脑袋：一次 59 分钟会
+（压缩后 15960 字 / 71 行）在 32K 级窗口的宿主子代理上跑单段 topics，**上下文耗尽、零产出**，
+白烧 25 分钟才回头重走两阶段。**只建议、不自动切**——短会少一次往返更快，而自动改默认路径会让
+快路随阈值漂移。
+
+**实验项 `--lean-outline`（默认关）**：大纲腿的材料换成 `Transcript.render_skeleton()`——每段只留
+「说话人 + 段首时间戳 + 开头句」。一次 59 分钟会的大纲请求实测是 **44KB 输入换 1.4KB 输出**，
+全量材料买回来的只是切分锚点；两份样例的骨架材料比压缩材料再少 68% / 79%
+（`material.outline_chars` 报的就是这个数）。扩写腿照旧吃完整时间窗，所以代价**只可能是议题切边
+位置**，不伤正文。没跑过多场 A/B 之前不要设成默认。
+
+### 议题正文的密度档：`--density` / `--output-bps`
+
+宿主的墙钟几乎全花在**输出**上（实测一次 59 分钟会的 summary 腿：9604 字节 / 13.5 分钟
+≈ 12 字节/秒）。所以「报告写多长」不该让人每次回忆开关，而应按自家吞吐自动定：
+
+| 档 | 单议题正文 | 口径 |
+| --- | --- | --- |
+| `detailed` | 800-1400 字 | 原口径：按议题时长给 1-4 分节、每组 2-3 条 30-90 字整句 |
+| `concise` | 200-400 字 | sections 1-2、groups 1-2、每组 1-2 条 **≤45 字**，focus 只 1 条、insights 0-1 条 |
+| `auto`（默认） | — | 见下面的判定顺序 |
+
+**只收议题正文**：`summary` 纪要、待办、关键词一个字都不减——那是 docx/md 的骨架，砍它就是砍结论。
+两档共用同一套不变量（JSON 形状、`warm` 高亮、反引号数字、空标题禁令、不编造），
+差别只在条数与句长，由 `test_both_topics_prompts_keep_the_shared_invariants` /
+`test_both_expand_prompts_keep_the_shared_invariants` 钉住。少条数**不是漏答**：`finish` 不因此出警告，
+出图也不留空框（`minutecraft/render.py` · `build_report` 本来就是「有则画、没有不画」）。
+
+`auto` 的判定顺序（`engine.py` · `resolve_density`）：**显式指定 > 沿用 prepare 的显式指定 >
+实测吞吐（本次传的 `--output-bps`，或 prepare 记在 `plan.output_bps` 里的那个）> 材料规模**。
+吞吐单位取**输出字节/秒**——宿主只需 `(Get-Item 回答文件).Length ÷ 该腿秒数`，
+不用自己换算 token（UTF-8 下一个中文字约 3 字节）。阈值 `DENSITY_DETAILED_MIN_BPS`（24 字节/秒 ≈ 8 字/秒）：
+高于它详细档不会把墙钟拖长，低于它详细档会把最慢一腿拖到十分钟以上，直接改出精简档。
+拿不到吞吐时按规模保守判：长会（≥9000 字或 ≥35 分钟）先精简，短会保持详细。
+**吞吐只报一次**：`expand` 会接着用 prepare 记下的值，否则同一场会会在第二阶段悄悄变档
+（冒烟实测踩过：`prepare --output-bps 12` 判 concise，`expand` 却回退成「吞吐未知」按规模重判）。
+判定结果与**理由**都写进 `plan.density` / `plan.density_reason`，并顶到 CLI 的 `next`
+（`[正文] concise 档：…`）——Agent 照着 next 做，看不到就会自己加戏写长。
+
+```bash
+minutecraft prepare meeting.txt -o req.json --split-topics          # 先按规模保守判一档
+minutecraft expand req.json --outline outline.json -o exp.json --output-bps 12   # 宿主自测吞吐后重判
+minutecraft prepare meeting.txt -o req.json --density detailed      # 明确要详细的，谁也别自动改
+```
+
+环境变量 `MINUTECRAFT_OUTPUT_BPS` 可以设一次不用每次传；值非法就当没给（退成按规模判），
+不能让一个手滑的环境变量把链路搞挂。
 
 ### 关于「按时间硬切」的实测结论
 

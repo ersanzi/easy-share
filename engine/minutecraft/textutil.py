@@ -46,3 +46,23 @@ def join_text(left: str, right: str) -> str:
     if left[-1].isascii() and right[0].isascii() and left[-1] not in " ":
         return f"{left} {right}"
     return left + right
+
+
+# 句末标点。**故意不含 ASCII 句点**：ASR 正文里「3.5」「v1.0」这类版本号会被当成句子结束，
+# 切出来的首句就成了「版本 3.」。中文句子绝大多数以「。」收尾，够用了。
+_SENTENCE_END_RE = re.compile(r"[。！？；]|[!?;]")
+
+
+def head_sentence(text: str, limit: int = 60) -> str:
+    """取一段话的**开头句**（用于「大纲腿」这类只要锚点与句意的材料）。
+
+    合并后的段落可能有 200 多字，只留首句能再砍一半以上；超过 `limit` 时退到最近的逗号，
+    避免硬切在词中间。
+    """
+    stripped = text.strip()
+    match = _SENTENCE_END_RE.search(stripped)
+    head = stripped[: match.end()] if match else stripped
+    if len(head) > limit:
+        cut = head[:limit].rfind("，")
+        head = head[: cut + 1] if cut > limit // 3 else head[:limit]
+    return head

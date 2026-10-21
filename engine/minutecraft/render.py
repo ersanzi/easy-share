@@ -288,21 +288,18 @@ def render_png(chrome: str, page: Path, out: Path, width: int = DEFAULT_WIDTH) -
     和一句「装 pillow」；现在开头就问一次，失败时不产出任何半成品。
     """
     total = _measure_height(chrome, page, width)
-    image = None
     if total > MAX_SHOT_HEIGHT:
         try:
-            from PIL import Image as image
+            from PIL import Image
         except ImportError as exc:
             raise ReportRenderError(
                 f"报告高 {total}px，超过单次截图上限（{MAX_SHOT_HEIGHT}px），需要分段拼接，"
                 "但没装 Pillow。装一个再跑：pip install pillow（或 pip install 'minutecraft[render]'）；"
                 "不装的话可以加 --pdf 出 PDF，同样能交差"
             ) from exc
-
-    if total <= MAX_SHOT_HEIGHT:
+    else:
         _shot(chrome, page, out, width, total)
         return out
-    assert image is not None
 
     out.parent.mkdir(parents=True, exist_ok=True)
     parts: list[Path] = []

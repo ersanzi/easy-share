@@ -56,7 +56,17 @@ minutecraft finish request.json --answers answers.json -o out/    # ③ 导出�
 要原样逐行喂模型用 `--full-text`。
 
 长会可以加 `--split-topics` 走两阶段：先答议题大纲，再用 `expand` 拆成每议题一个小请求
-（可全部并发），最后同样 `finish`。细节见 [`SKILL.md`](SKILL.md) 第 3 节。
+（可全部并发），最后同样 `finish`。**该不该走两阶段不用自己判断**：压缩后材料 ≥9000 字或会议
+≥35 分钟时，`prepare` 会在 `plan.recommend` 与 `next` 第一行直接建议——实测 59 分钟的会走单段
+topics 会把子代理上下文撑爆、跑完零产出。细节见 [`SKILL.md`](SKILL.md) 第 3 节。
+
+用并发子代理回答时，`finish` 前**先列目录对账**：子代理「汇报已写入」不等于文件落盘（见第 2 节
+落盘规矩）。
+
+报告正文写多长**不用你判断**：`prepare` / `expand` 的 `plan.density` 按宿主吞吐定档（慢宿主自动
+出精简档：单议题 200-400 字、每条 ≤45 字，只收议题正文，纪要与待办不减）。跑完一条腿把
+「回答字节数 ÷ 该腿秒数」用 `--output-bps` 告诉它，判得更准；要固定就 `--density detailed|concise`。
+见 [`SKILL.md`](SKILL.md) 第 2 节「正文档位」。
 
 出图两条路，按需要选：
 

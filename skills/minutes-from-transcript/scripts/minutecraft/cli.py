@@ -32,7 +32,7 @@ from pathlib import Path
 
 from . import __version__
 from .docx.visual import build_visual_report
-from .engine import LLMSettings, MinuteEngine, MinuteError
+from .engine import DENSITY_DETAILED_MIN_BPS, DENSITY_ENV, LLMSettings, MinuteEngine, MinuteError
 from .models import SCHEMA
 from .render import ReportRenderError, render_report
 from .templates import BUILTIN_TEMPLATES
@@ -228,7 +228,10 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         payload = engine.prepare(transcript, template_id=args.template, with_keywords=not args.no_keywords,
                                  with_topics=not getattr(args, "no_topics", False),
                                  with_compact_material=not getattr(args, "full_text", False),
-                                 split_topics=getattr(args, "split_topics", False))
+                                 split_topics=getattr(args, "split_topics", False),
+                                 lean_outline=getattr(args, "lean_outline", False),
+                                 density=getattr(args, "density", "auto"),
+                                 output_bps=getattr(args, "output_bps", None))
     except MinuteError as exc:
         print(f"准备失败：{exc}", file=sys.stderr)
         return EXIT_ENGINE
@@ -254,6 +257,13 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             "（summary 必答；keywords 已并入 summary；topics 决定长报告正文，"
             "不答会退回按章节均分的粗版式，并记一条警告）"
         )
+    # 档位与建议都要顶到 next 前面：Agent 一般只照着 next 做。倒着拼，最终 [建议] 在 [正文] 之上
+    if payload["plan"].get("density"):
+        next_step = (
+            f"[正文] {payload['plan']['density']} 档：{payload['plan']['density_reason']}\n{next_step}"
+        )
+    if payload["plan"].get("recommend"):
+        next_step = f"[建议] {payload['plan']['recommend_reason']}\n{next_step}"
     _emit(
         {
             "ok": True,
@@ -287,7 +297,9 @@ def cmd_expand(args: argparse.Namespace) -> int:
 
     engine = MinuteEngine(LLMSettings(base_url="", api_key="", model=""))
     try:
-        expanded = engine.expand(payload, outline, margin=args.margin)
+        expanded = engine.expand(payload, outline, margin=args.margin,
+                                 density=getattr(args, "density", "auto"),
+                                 output_bps=getattr(args, "output_bps", None))
     except MinuteError as exc:
         print(f"展开失败：{exc}", file=sys.stderr)
         return EXIT_INPUT
@@ -301,16 +313,22 @@ def cmd_expand(args: argparse.Namespace) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(expanded, ensure_ascii=False, indent=2), encoding="utf-8")
         prompt_files = _write_prompt_files(expanded, target)
+    next_step = "各 topics#N 的 system/user 已写成文件（见 prompt_files），请全部并发回答；" \
+        "把模型原始输出分别写入文件，answers.json 形如 " \
+        '{"summary": "@summary.txt", "topics#1": "@topic-1.txt", ...}，再执行 finish'
+    if expanded["plan"].get("density"):
+        next_step = (
+            f"[正文] {expanded['plan']['density']} 档：{expanded['plan']['density_reason']}\n{next_step}"
+        )
     _emit(
         {
             "ok": True,
             "topics": len(expanded.get("topic_outline") or []),
             "requests": list(expanded["requests"]),
             "prompt_files": prompt_files,
+            "plan": expanded["plan"],
             "request_file": str(args.out) if args.out else "",
-            "next": "各 topics#N 的 system/user 已写成文件（见 prompt_files），请全部并发回答；"
-            "把模型原始输出分别写入文件，answers.json 形如 "
-            '{"summary": "@summary.txt", "topics#1": "@topic-1.txt", ...}，再执行 finish',
+            "next": next_step,
             **({"payload": expanded} if not args.out else {}),
         },
         args.json,
@@ -424,6 +442,18 @@ def cmd_templates(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_density_args(sub: argparse.ArgumentParser) -> None:
+    """议题正文的密度档开关（prepare / expand 共用）。只影响议题正文，不动 summary 纪要。"""
+    sub.add_argument("--density", choices=("auto", "detailed", "concise"), default="auto",
+                     help="议题正文档位：detailed 每议题 800-1400 字，concise 200-400 字"
+                          "（1-2 分节、每条 ≤45 字，重点口径不变）；auto 按 --output-bps 判，"
+                          "拿不到吞吐时按材料规模保守判（长会→concise，短会→detailed）")
+    sub.add_argument("--output-bps", type=float, default=None, metavar="字节/秒",
+                     help="宿主实测的输出吞吐，供 auto 判档：回答文件字节数 ÷ 该腿耗时秒。"
+                          f"≥{DENSITY_DETAILED_MIN_BPS:g} 出详细档，更低出精简档；"
+                          f"也可用环境变量 {DENSITY_ENV} 设一次")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="minutecraft",
@@ -442,7 +472,11 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--no-topics", action="store_true", help="不要报告议题请求（只要纪要与 Word 时省一次最慢的调用）")
     prepare.add_argument("--split-topics", action="store_true",
                          help="两阶段议题：只先产出大纲，答完用 expand 拆成每议题一个小请求（长会+可并发宿主）")
+    prepare.add_argument("--lean-outline", action="store_true",
+                         help="配合 --split-topics：大纲腿只喂「说话人+段首时间戳+每段首句」的骨架材料，"
+                              "输入能再砍一半以上；代价是议题切边质量，需按会议实测 A/B（实验项，默认关）")
     prepare.add_argument("--no-keywords", action="store_true", help="不要在 summary 里顺带生成关键词")
+    _add_density_args(prepare)
     prepare.add_argument("--full-text", action="store_true",
                          help="不做材料压缩：逐行喂原始转写（默认会合并短句并丢掉语气词，能显著提速）")
     prepare.add_argument("--json", action="store_true", help="机器可读输出")
@@ -453,6 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
     expand.add_argument("--outline", required=True, help="议题大纲的模型原始回答（或 JSON 文件），也可用 - 从标准输入读")
     expand.add_argument("-o", "--out", help="展开后的请求包 JSON（后续交给 finish）")
     expand.add_argument("--margin", type=float, default=30.0, help="议题时间窗前后各留的上下文秒数（默认 30）")
+    _add_density_args(expand)
     expand.add_argument("--json", action="store_true", help="机器可读输出")
     expand.set_defaults(func=cmd_expand)
 
