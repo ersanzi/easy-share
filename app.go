@@ -163,6 +163,8 @@ func (a *App) Startup(ctx context.Context) {
 	a.clientLock.Unlock()
 	a.logger.Printf("connected to Core at %s", baseURL)
 
+	// 必须先清旧入口，再恢复会话；恢复会异步发布新入口，之后清理会误删刚挂好的云盘。
+	a.registerNamespace()
 	// 恢复上次登录的账号会话（令牌落盘、只存用户级 AppData）。失败/过期时静默回到登录页。
 	a.restoreAccountSession()
 
@@ -172,9 +174,6 @@ func (a *App) Startup(ctx context.Context) {
 	go a.autoUpdateCheck()
 	// 插件系统 + 剪切板监听（失败不阻断主程序，见 appplugin.go）
 	a.initPluginSystem()
-
-	// Register EasyShare entries in Windows Explorer "此电脑" (This PC).
-	a.registerNamespace()
 }
 
 // FilesDroppedEvent 是前端拖放文件后 Go 端返回的分类结果。
@@ -386,6 +385,7 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 	a.accountMu.Lock()
 	a.accountSession = session
 	a.accountMu.Unlock()
+	a.SetDropSpace("")
 	a.saveAccountSession(session)
 	a.logger.Printf("user logged in: %s", session.User.UserName)
 	a.publishTrayUser()
@@ -439,6 +439,7 @@ func (a *App) clearAccountSession() {
 	a.accountMu.Lock()
 	a.accountSession = nil
 	a.accountMu.Unlock()
+	a.SetDropSpace("")
 	path := a.accountSessionPath()
 	if path == "" {
 		return
@@ -472,6 +473,10 @@ func (a *App) restoreAccountSession() {
 	a.accountSession = session
 	a.accountMu.Unlock()
 	a.logger.Printf("restored account session for %s", session.User.UserName)
+	// 前端可能早于 Core 启动完成读取过未登录态；恢复后发布不含令牌的用户快照。
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "auth:restored", a.CurrentUser())
+	}
 	a.publishTrayUser()
 	go a.refreshSpaceMounts()
 	go a.validateAccountSession()
@@ -1173,6 +1178,10 @@ func (a *App) driveClient() (*drive.Client, string, error) {
 // driveObjectToFile 把控制面返回的对象转成前端已在用的 cloud.File。
 // 控制面不返回 contentType（S3 列举本就没有），按扩展名推断。
 func driveObjectToFile(object drive.Object) cloud.File {
+	// 前端沿用尾斜杠目录视图；服务器的Directory才是持久目录身份，不创建标记对象。
+	if object.Directory {
+		object.Path = strings.TrimSuffix(object.Path, "/") + "/"
+	}
 	contentType := cloud.ContentTypeForKey(object.Path)
 	// 目录标记对象的 Path 带尾斜杠（"photos/"）：Base 前先去掉，
 	// 否则不同平台上对尾斜杠的处理不一致，Name 可能带上斜杠
@@ -1486,11 +1495,11 @@ func (a *App) uploadClients() (*desktop.Client, *drive.Client, string, error) {
 
 // uploadSingleFile 上传单个文件：字节经控制面预签名直传 RustFS，
 // 进度仍写入 Core 的统一任务存储（Core 保留传输任务职责，ADR-0007 不变量 3）。
-func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, token, space, filePath, objectKey string) {
+func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, token, space, filePath, objectKey string) error {
 	fileName := filepath.Base(filePath)
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return
+		return err
 	}
 	fileSize := info.Size()
 	created, createErr := core.CreateTask(a.ctx, map[string]any{
@@ -1499,14 +1508,14 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 	})
 	if createErr != nil {
 		a.reportError("create cloud upload task", createErr)
-		return
+		return createErr
 	}
 	// 上传前先看一眼当前版本：这是 CAS 的“我看到的世界”。
 	objects, listErr := driveClient.Objects(a.ctx, token, space)
 	if listErr != nil {
 		a.reportError("cloud upload list", listErr)
 		a.failTask(core, created.ID, listErr)
-		return
+		return listErr
 	}
 	versions := objectVersionMap(objects)
 
@@ -1536,7 +1545,7 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 		if freshErr != nil {
 			a.reportError("cloud upload refresh", freshErr)
 			a.failTask(core, created.ID, uploadErr)
-			return
+			return uploadErr
 		}
 		// 情形 1（哈希去重）：远端那份与我这次要写的内容逐字节相同 →
 		// 认作同一文件，直接算成功，不再留一份多余副本。
@@ -1545,7 +1554,7 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 			_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 				"transferredBytes": fileSize, "speed": 0, "status": "completed",
 			})
-			return
+			return nil
 		}
 		// 情形 2（内容不同）：保双方，本地落到冲突副本
 		versions = objectVersionMap(fresh)
@@ -1558,26 +1567,34 @@ func (a *App) uploadSingleFile(core *desktop.Client, driveClient *drive.Client, 
 	if uploadErr != nil {
 		a.reportError("cloud upload", uploadErr)
 		a.failTask(core, created.ID, uploadErr)
-		return
+		return uploadErr
 	}
 	_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 		"transferredBytes": fileSize, "speed": 0, "status": "completed",
 	})
+	return nil
 }
 
 // uploadDir 遍历目录逐文件上传，保留目录结构（baseDir 为网盘内目标目录前缀）。
 // 进度写入 Core 统一任务存储。
-func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, space, dir, baseDir string) {
+func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, space, dir, baseDir string) error {
 	folderName := filepath.Base(dir)
 	var files []string
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
+	walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
 			files = append(files, path)
 		}
 		return nil
 	})
+	if walkErr != nil {
+		return walkErr
+	}
 	if len(files) == 0 {
-		return
+		_, err := driveClient.CreateDirectory(a.ctx, token, space, joinObjectKey(baseDir, folderName))
+		return err
 	}
 	// 文件夹级任务：totalBytes 为文件数，transferredBytes 为已完成文件数
 	created, createErr := core.CreateTask(a.ctx, map[string]any{
@@ -1586,14 +1603,14 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 	})
 	if createErr != nil {
 		a.reportError("create cloud folder upload task", createErr)
-		return
+		return createErr
 	}
 	// 批量上传只列一次版本，避免每个文件都打一遍控制面。
 	objects, listErr := driveClient.Objects(a.ctx, token, space)
 	if listErr != nil {
 		a.reportError("cloud folder upload list", listErr)
 		a.failTask(core, created.ID, listErr)
-		return
+		return listErr
 	}
 	versions := objectVersionMap(objects)
 
@@ -1612,7 +1629,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 			if freshErr != nil {
 				a.reportError("cloud folder upload refresh", freshErr)
 				a.failTask(core, created.ID, uploadErr)
-				return
+				return uploadErr
 			}
 			// 情形 1（哈希去重）：内容相同 → 视为同一文件，跳过
 			if sameContentOnRemote(fresh, objectKey, filePath) {
@@ -1634,7 +1651,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 		if uploadErr != nil {
 			a.reportError("cloud folder upload", uploadErr)
 			a.failTask(core, created.ID, uploadErr)
-			return
+			return uploadErr
 		}
 		_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 			"transferredBytes": int64(i + 1), "status": "running",
@@ -1644,6 +1661,7 @@ func (a *App) uploadDir(core *desktop.Client, driveClient *drive.Client, token, 
 	_ = core.PatchTask(a.ctx, created.ID, map[string]any{
 		"transferredBytes": int64(len(files)), "speed": 0, "status": "completed",
 	})
+	return nil
 }
 
 // CloudUploadFolder 选择文件夹并逐文件上传到网盘，保留目录结构。
@@ -1666,9 +1684,8 @@ func (a *App) CloudUploadFolder(targetDir string) (string, error) {
 
 // CloudMkdir 在网盘当前目录下新建文件夹。
 //
-// targetDir 语义与 CloudUploadPaths 一致：” 或 '/' 表示根。目录在对象存储里
-// 没有实体，落地为「键以 / 结尾的 0 字节标记对象」，网盘页据此显示空文件夹；
-// 建完立即可见（CloudList 走带目录的列举），点进去可继续上传。
+// targetDir 语义与 CloudUploadPaths 一致。通过与Windows写回相同的持久目录接口创建，
+// 不再用对象存储零字节标记伪造目录；同名文件必须由服务端拒绝。
 //
 // 重复创建同名文件夹幂等成功，与本地文件系统行为对齐——用户为点第二次
 // 「新建文件夹」先手动删一次，是不可接受的交互。
@@ -1698,7 +1715,7 @@ func (a *App) CloudMkdir(targetDir, name string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := client.Mkdir(a.ctx, token, drive.SpacePersonal, target); err != nil {
+	if _, err := client.CreateDirectory(a.ctx, token, drive.SpacePersonal, target); err != nil {
 		a.reportError("cloud mkdir", err)
 		return err
 	}
@@ -1968,12 +1985,24 @@ func (a *App) CloudDelete(key string) error {
 	if err != nil {
 		return err
 	}
-	// 目录键（带尾斜杠）走递归：控制面把子树里每个文件各自软删进回收站，
-	// 目录标记一并清掉。非目录仍走单对象软删，语义与挂载盘/WebDAV 一致。
-	// 递归与否由键形决定，不再多加一个绑定参数——前端只有一个「删除」动作，
-	// 让它去区分两种后端语义只会把「以为删了其实没删」留在界面里。
+	// 保留上游主窗口递归目录删除；新目录有身份时带fileId，旧marker仍按路径兼容。
 	if strings.HasSuffix(key, "/") {
-		err = client.DeleteTree(a.ctx, token, drive.SpacePersonal, key)
+		objects, listErr := client.Objects(a.ctx, token, drive.SpacePersonal)
+		if listErr != nil {
+			return listErr
+		}
+		var directoryID int64
+		for _, object := range objects {
+			if object.Path == strings.TrimSuffix(key, "/") && object.Directory {
+				directoryID = object.FileId.Int64()
+				break
+			}
+		}
+		if directoryID > 0 {
+			err = client.DeleteTreeByFileID(a.ctx, token, drive.SpacePersonal, directoryID, key)
+		} else {
+			err = client.DeleteTree(a.ctx, token, drive.SpacePersonal, key)
+		}
 	} else {
 		// 软删（P1 回收站）：控制面置 state='recycled'，对象保留，可经回收站还原
 		err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
@@ -2448,8 +2477,8 @@ func (a *App) beginQuit() {
 		cancel()
 	}
 
-	// CfApi 同步根要在退出前注销：不注销会在 HKLM\SyncRootManager 留下
-	// 指向已退出进程的注册表残留，下次注册同根会报 ERROR_ALREADY_EXISTS
+	// 正常退出仅断开 CfApi 回调，保留持久注册及占位符身份。
+	// 注销会删除未水合文件、普通化目录，不能用于进程资源释放。
 	a.unmountCfapiSpaces()
 }
 

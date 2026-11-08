@@ -11,6 +11,10 @@ import "errors"
 // cfapiMounts 是 Windows 版 cfapiMounts 的空壳（无字段无行为）。
 type cfapiMounts struct{}
 
+// 非 Windows 保留既有 WebDAV/Finder 生命周期。
+func (a *App) refreshNativeSpaceMounts() bool        { return false }
+func (a *App) openNativeCurrentSpace() (bool, error) { return false, nil }
+
 // mountCfapiSpaces 挂载个人空间 CfApi 占位符同步根（Windows 专属，此处为空实现）。
 func (a *App) mountCfapiSpaces() {}
 
@@ -35,3 +39,5 @@ func (a *App) CloudKeepOnDevice(string) error {
 func (a *App) CloudFreeUpSpace(string) error {
 	return errors.New("此平台不支持释放本地空间")
 }
+
+func (a *App) nativeDropAvailable(string) error { return nil }

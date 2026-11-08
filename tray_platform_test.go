@@ -51,6 +51,20 @@ func TestDarwinTrayBridgeDoesNotOwnApplicationDelegate(t *testing.T) {
 	}
 }
 
+func TestWindowsHoverKeepsExternalDOMFileDropEnabled(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(testPackageDir(t), "tray_hover_windows.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "AllowExternalDrag(true)") || strings.Contains(text, "AllowExternalDrag(false)") {
+		t.Fatal("悬浮窗的 DOM 文件拖放通道不能禁用 WebView2 外部 drop")
+	}
+	if !strings.Contains(text, "MessageWithAdditionalObjectsCallback = p.handleDroppedObjects") {
+		t.Fatal("必须通过附加 File 对象取真实路径，不能只依赖 WM_DROPFILES")
+	}
+}
+
 func testPackageDir(t *testing.T) string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)

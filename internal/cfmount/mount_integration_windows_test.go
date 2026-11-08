@@ -93,6 +93,11 @@ func TestMountThroughAdapter(t *testing.T) {
 		ProviderID:   testGUID,
 	}
 
+	defer func() {
+		if err := cfapi.UnregisterSyncRoot(root); err != nil {
+			t.Errorf("explicit test unregister: %v", err)
+		}
+	}()
 	m, err := cfapi.MountSpace(cfapi.MountOptions{
 		RootPath:         root,
 		Provider:         cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "0.1.0", ID: cfg.ProviderID},
@@ -233,6 +238,11 @@ func TestMountThroughAdapterRange(t *testing.T) {
 		ProviderID:   testGUID,
 	}
 
+	defer func() {
+		if err := cfapi.UnregisterSyncRoot(root); err != nil {
+			t.Errorf("explicit test unregister: %v", err)
+		}
+	}()
 	m, err := cfapi.MountSpace(cfapi.MountOptions{
 		RootPath:         root,
 		Provider:         cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "0.1.0", ID: cfg.ProviderID},

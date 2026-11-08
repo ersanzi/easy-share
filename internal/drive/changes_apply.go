@@ -38,6 +38,7 @@ func applyChange(objects []Object, change Change) []Object {
 		}
 		return append(objects, Object{
 			Path:         change.Path,
+			Directory:    change.Directory,
 			Size:         change.Size,
 			LastModified: change.LastModified(),
 			FileId:       change.FileId,

@@ -41,7 +41,7 @@ func mountReadOnlyProbe(t *testing.T) (string, func()) {
 		return io.NopCloser(bytes.NewReader(content[offset:end])), nil
 	}
 
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath: root, Provider: testProvider, List: list, Open: open,
 		SyncRootIdentity: []byte("easyshare-ro-probe"),
 	})

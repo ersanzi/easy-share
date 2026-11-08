@@ -32,6 +32,8 @@ const (
 // FileId 是控制面 es_file 目录层的稳定身份（2026-09-06 起），回收站/版本/
 // 分享重命名稳定都挂它；存量对象首次列举时由控制面惰性补账，亦有值。
 type Object struct {
+	// Directory 表示持久化远端目录；旧服务端未返回时默认 false。
+	Directory    bool      `json:"directory"`
 	Path         string    `json:"path"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
@@ -209,6 +211,8 @@ const (
 
 // Change 是一次文件生命周期变更（增量列举，路线图切片 2）。
 type Change struct {
+	// Directory 是事件发生时的目录类型快照。
+	Directory    bool      `json:"directory"`
 	SpaceVersion FlexInt64 `json:"spaceVersion"`
 	Event        string    `json:"event"`
 	FileId       FlexInt64 `json:"fileId"`
@@ -359,6 +363,20 @@ func (c *Client) Delete(ctx context.Context, token, space, path string) error {
 func (c *Client) DeleteTree(ctx context.Context, token, space, path string) error {
 	body, err := json.Marshal(map[string]any{
 		"path": path, "space": normalizeSpace(space), "recursive": true,
+	})
+	if err != nil {
+		return err
+	}
+	return c.call(ctx, http.MethodDelete, "/easyshare/drive/object", token, body, nil)
+}
+
+// DeleteTreeByFileID 保持显式递归语义，同时用已确认的目录身份避免路径被改名后误删。
+func (c *Client) DeleteTreeByFileID(ctx context.Context, token, space string, fileID int64, path string) error {
+	if fileID <= 0 {
+		return fmt.Errorf("目录身份无效")
+	}
+	body, err := json.Marshal(map[string]any{
+		"fileId": fileID, "path": path, "space": normalizeSpace(space), "recursive": true,
 	})
 	if err != nil {
 		return err
@@ -556,6 +574,11 @@ func (c *Client) putURLWithRetry(ctx context.Context, what, path, target string,
 		// 预签名刻意不签 Content-Type，故这里不设该头，避免签名不匹配。
 		if size >= 0 {
 			req.ContentLength = size
+		}
+		// 非 nil 的包装 reader 配合 ContentLength=0 会被 net/http 当作未知长度，
+		// 改发 chunked；明确空正文才能发送对象存储所需的 Content-Length: 0。
+		if size == 0 {
+			req.Body = http.NoBody
 		}
 		resp, doErr := c.transfer.Do(req)
 		guard.stop()

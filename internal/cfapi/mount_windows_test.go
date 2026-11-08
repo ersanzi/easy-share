@@ -71,7 +71,7 @@ func TestMountSpaceEndToEnd(t *testing.T) {
 	}
 
 	// ── 挂载 ────────────────────────────────────────────────────
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath:         root,
 		Provider:         testProvider,
 		List:             list,

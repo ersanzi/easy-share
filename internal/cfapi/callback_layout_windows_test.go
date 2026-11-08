@@ -36,9 +36,9 @@ const (
 	cOffCallbackProcessInfo    = 136
 	cOffCallbackRequestKey     = 144
 
-	cSizeCallbackParamsFetch    = 56
-	cOffParamRequiredFileOffset = 8
-	cOffParamRequiredLength     = 16
+	cSizeCallbackParamsFetch    = 64
+	cOffParamRequiredFileOffset = 16
+	cOffParamRequiredLength     = 24
 
 	// CF_PROCESS_INFO —— 读取节流要读进程名，布局错一格就会读到野指针
 	// CF_PROCESS_INFO —— 读取节流要读进程名，布局错一格就会读到野指针。

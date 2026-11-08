@@ -76,16 +76,14 @@ type Config struct {
 
 	// FetchTimeout 是单次拉取上限；0 用 cfapi 默认值。
 	FetchTimeout time.Duration
-	// State 是增量列举的跨调用状态；nil 表示每次走全量（旧行为）。
-	//
-	// 每个空间一个实例（个人 / 共享分开），见 ListState 的说明。
+	// State 仅为可选增量视图；可写挂载仍以本轮服务器全量为安全依据。
 	State *ListState
+	// Writable 仅在接入条件写回及保护同步后设置。
+	Writable bool
+	// CacheIdleFor 为自动回收空闲期；0 使用五分钟。
+	CacheIdleFor time.Duration
 }
 
-// modifiedUnixOf 把对象的修改时间换成 cfapi 的秒制哨兵：没有时间为 0（未知）。
-//
-// 不能直接 `.Unix()`：`time.Time{}` 会给出 -62135596800，换算 FILETIME 后是负数，
-// 内核会拒绝创建该占位符（真机 0x80070057）。
 func modifiedUnixOf(t time.Time) int64 {
 	if t.IsZero() {
 		return 0
@@ -95,20 +93,29 @@ func modifiedUnixOf(t time.Time) int64 {
 
 // Entries 把控制面对象列表转成 cfapi 的清单条目。
 //
-// 两个转换要点：
-//  1. **目录要自己补**：控制面返回的是扁平对象列表，只有文件（对象存储里没有目录）。
-//     而 CfApi 建树需要显式的目录条目——否则逐层建树时找不到父目录。
-//     本函数从文件路径反推出所有中间目录。
-//  2. **身份用 fileId 编码**：cfapi.EncodeIdentity(fileId)。
-//     占位符身份必须稳定且与路径无关（改名后仍能反查），fileId 满足这一点。
-//     见 ADR-0001 的文件身份模型。
+// 显式 Directory 对象（包括空目录）与路径推导父目录统一去重。
+// 文件身份只接受有效 FileId；无效文件在本兼容入口跳过，List 会返回错误。
+// 此入口保持只读；可写投影由 List(Config{Writable: true}) 显式开启。
 func Entries(objects []drive.Object) []cfapi.CloudEntry {
+	return entries(objects, false)
+}
+
+// entries 对无有效 FileId 的文件不生成占位符；List 会先返回明确错误。
+func entries(objects []drive.Object, writable bool) []cfapi.CloudEntry {
 	out := make([]cfapi.CloudEntry, 0, len(objects))
 	seenDir := map[string]bool{}
 
 	for _, o := range objects {
+		if !o.Directory && o.FileId <= 0 {
+			continue
+		}
+		// 补齐父目录；显式目录自身也参与同一去重集合。
+		dirs := ancestorDirs(o.Path)
+		if o.Directory {
+			dirs = append(dirs, o.Path)
+		}
 		// 先补齐该文件路径上的所有父目录（去重）
-		for _, dir := range ancestorDirs(o.Path) {
+		for _, dir := range dirs {
 			if seenDir[dir] {
 				continue
 			}
@@ -119,13 +126,15 @@ func Entries(objects []drive.Object) []cfapi.CloudEntry {
 				// 目录没有自己的 mtime（对象存储里不存在这个对象）——
 				// 用 0 让 cfapi 走「未知时间」分支，而不是编一个假时间。
 				ModifiedUnix: 0,
-				// 目录没有 fileId（控制面的 es_file 目录层尚未覆盖目录对象，
-				// 见路线图切片 4「目录对象」）。用路径派生一个**看起来稳定**的
-				// 身份：同一路径在同一会话内一致即可，不承诺跨会话稳定。
+				// 显式和隐式目录统一使用路径派生身份，避免目录被补账
+				// 或清单顺序变化时切换身份；目录无需文件 hydration。
 				Identity: dirIdentity(dir),
 				// 只读：见下方清单条目处的说明，目录同理
-				ReadOnly: true,
+				ReadOnly: !writable,
 			})
+		}
+		if o.Directory {
+			continue
 		}
 		out = append(out, cfapi.CloudEntry{
 			Path: o.Path,
@@ -143,7 +152,7 @@ func Entries(objects []drive.Object) []cfapi.CloudEntry {
 			// internal/cfapi/write_probe_windows_test.go 的 TestResyncSameRoot）。
 			// 置位后写入得到明确的「拒绝访问」，且**不影响按需读取**（hydration 已实测正常）。
 			// 双向同步（切片 5b）落地时要连同写回调一起放开这里。
-			ReadOnly: true,
+			ReadOnly: !writable,
 		})
 	}
 	return out
@@ -166,12 +175,12 @@ func List(cfg Config) cfapi.ListFunc {
 		}
 
 		changes, canIncremental := cfg.Client.(ChangeLister)
-		if cfg.State == nil || !canIncremental {
+		if cfg.Writable || cfg.State == nil || !canIncremental {
 			objects, err := cfg.Client.Objects(ctx, token, cfg.Space)
 			if err != nil {
 				return nil, fmt.Errorf("cfmount: 列举空间 %s 失败: %w", cfg.Space, err)
 			}
-			return Entries(objects), nil
+			return projectEntries(objects, cfg.Writable)
 		}
 
 		base, since := cfg.State.snapshot()
@@ -192,16 +201,29 @@ func List(cfg Config) cfapi.ListFunc {
 				return nil, fmt.Errorf("cfmount: 列举空间 %s 失败: %w", cfg.Space, listErr)
 			}
 			cfg.State.set(objects, 0)
-			return Entries(objects), nil
+			return projectEntries(objects, cfg.Writable)
 		}
-
 		view := result.Files
-		if sincePtr != nil {
+		if sincePtr != nil && result.Files == nil {
 			view = drive.ApplyChanges(base, result.Changes)
 		}
+		out, err := projectEntries(view, cfg.Writable)
+		if err != nil {
+			return nil, err
+		}
 		cfg.State.set(view, result.NewestSpaceVersion.Int64())
-		return Entries(view), nil
+		return out, nil
 	}
+}
+
+// projectEntries 不给缺失文件身份的对象制造无法读回的占位符。
+func projectEntries(objects []drive.Object, writable bool) ([]cfapi.CloudEntry, error) {
+	for _, o := range objects {
+		if !o.Directory && o.FileId <= 0 {
+			return nil, fmt.Errorf("cfmount: 文件 %q 缺少有效 FileId，无法创建可水合占位符", o.Path)
+		}
+	}
+	return entries(objects, writable), nil
 }
 
 // ChangeLister 是**可选**能力：支持增量列举的客户端（`*drive.Client` 满足）。
@@ -336,14 +358,13 @@ func ancestorDirs(p string) []string {
 // 所有这类文件会共享身份 `esf:0`——fetch 回调按身份反查路径时会全部指错，
 // 表现为「打开 A 文件读到 B 的内容」，是静默的数据错误。
 //
-// 因此 fileId 不可用时退回**按路径派生**的身份（前缀 `esp:` 与 fileId 的 `esf:`
-// 区分开，便于日志里一眼看出是哪一类）。代价是这类身份不跨会话稳定——
-// 但它们本来就是脏数据兜底路径，且下次列表补账成功后会拿到真 fileId。
+// fileId 不可用时返回 nil；不得使用无法被 DecodeIdentity 解析的 esp: 伪身份。
+// entries 跳过此类文件，List 对整份清单报错，防止制造永远无法水合的占位符。
 func fileIdentity(o drive.Object) []byte {
 	if o.FileId > 0 {
 		return cfapi.EncodeIdentity(o.FileId.Int64())
 	}
-	return []byte("esp:" + shortHash(o.Path))
+	return nil // 无法 DecodeIdentity 的伪身份不能用于 hydration。
 }
 
 // dirIdentity 为目录派生一个身份字节。

@@ -82,6 +82,7 @@ func LANCLSID() string { return lanCLSID }
 type SpaceMount struct {
 	Kind        string
 	Port        int
+	TargetPath  string
 	UserID      string
 	DisplayName string
 	Subtitle    string
@@ -92,9 +93,13 @@ type SpaceMount struct {
 func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
 	entries := make([]Entry, 0, len(mounts))
 	for _, mount := range mounts {
+		target := mount.TargetPath
+		if target == "" {
+			target = WebDAVUNC(mount.Port)
+		}
 		entry := Entry{
 			IconPath:   iconPath,
-			TargetPath: WebDAVUNC(mount.Port),
+			TargetPath: target,
 			UserID:     mount.UserID,
 			Subtitle:   mount.Subtitle,
 		}

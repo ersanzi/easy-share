@@ -50,6 +50,7 @@ export function useEasyShare() {
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
+  let authRevision = 0
 
   const inactive = () => disposed || shuttingDown.value || stopped.value
 
@@ -257,9 +258,17 @@ export function useEasyShare() {
     updateAvailable.value = data?.latestVersion ?? ''
   }
 
+  // 后台会话恢复可能晚于前端首次查询，按事件更新且不让早到请求的迟到结果覆盖。
+  const handleAuthRestored = (user: AuthUser) => {
+    if (disposed || !user) return
+    authRevision++
+    currentUser.value = user
+  }
+
   // 启动恢复的账号令牌被控制面判定失效：清空登录态，App 自动回到登录页。
   const handleAuthExpired = () => {
     if (disposed) return
+    authRevision++
     currentUser.value = { ...emptyUser }
     error.value = '登录已过期，请重新登录'
     errorSource = 'operation'
@@ -275,14 +284,16 @@ export function useEasyShare() {
     // 订阅升级可用通知（update:available）
     EventsOn('update:available', handleUpdateAvailable)
     EventsOn('auth:expired', handleAuthExpired)
+    EventsOn('auth:restored', handleAuthRestored)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
       .catch(value => reportError('resolve log directory', value))
 
     // 拉取当前登录态（进程内若已登录，重开窗口后恢复头像）
+    const initialAuthRevision = authRevision
     void Promise.resolve(core.currentUser())
-      .then(user => { if (!disposed && user) currentUser.value = user })
+      .then(user => { if (!disposed && user && authRevision === initialAuthRevision) currentUser.value = user })
       .catch(() => undefined)
 
     void initialize().finally(() => {
@@ -298,6 +309,7 @@ export function useEasyShare() {
     EventsOff('core-event')
     EventsOff('update:available')
     EventsOff('auth:expired')
+    EventsOff('auth:restored')
     document.removeEventListener('visibilitychange', handleVisibility)
     OnFileDropOff()
   })
@@ -322,6 +334,7 @@ export function useEasyShare() {
     loggingIn,
     updateAvailable,
     login: async (username: string, password: string): Promise<boolean> => {
+      authRevision++
       loggingIn.value = true
       try {
         const user = await core.login(username, password)
@@ -337,6 +350,7 @@ export function useEasyShare() {
       }
     },
     logout: async () => {
+      authRevision++
       try { await core.logout() } catch { /* 本地清除即可 */ }
       currentUser.value = { ...emptyUser }
     },

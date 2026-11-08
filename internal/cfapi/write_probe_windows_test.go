@@ -46,7 +46,7 @@ func mountForWriteProbe(t *testing.T) (string, func()) {
 		return io.NopCloser(bytes.NewReader(content[offset:end])), nil
 	}
 
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath:         root,
 		Provider:         testProvider,
 		List:             list,
@@ -166,7 +166,7 @@ func TestSyncIsRepeatableWithoutLosingContent(t *testing.T) {
 		}
 		return io.NopCloser(bytes.NewReader(content[offset:end])), nil
 	}
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath: root, Provider: testProvider, List: list, Open: open,
 		SyncRootIdentity: []byte("easyshare-resync-probe"),
 	})

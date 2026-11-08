@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"easyshare/internal/account"
@@ -39,6 +41,7 @@ const (
 	hoverMsgSetUser     = winui.WMApp + 205
 	hoverMsgSetSpaces   = winui.WMApp + 206
 	hoverMsgBeginDrag   = winui.WMApp + 207
+	hoverMsgDropStatus  = winui.WMApp + 208
 
 	// dropMessage 是页面拖入文件时发来的消息名，与页面里的字面量必须一致。
 	dropMessage = "file:drop"
@@ -66,6 +69,8 @@ type hoverSpace struct {
 	Quota string `json:"quota"`
 	// ReadOnly 的空间不能作上传目标，档位置灰。
 	ReadOnly bool `json:"readOnly"`
+	// Unavailable 表示窗口入口尚未实际挂载；不能只按配额推断可用。
+	Unavailable string `json:"unavailable,omitempty"`
 }
 
 type hoverPopup struct {
@@ -102,6 +107,10 @@ type hoverPopup struct {
 	spaces      []hoverSpace
 	activeSpace string
 
+	// 上传工作线程只提交状态，由浮窗消息循环调用 WebView2。
+	dropStatusMu sync.Mutex
+	dropStatus   [3]string
+
 	// dragged 记录用户是否手动拖过窗口。拖过之后就别再把它拽回右下角，
 	// 否则每次显示都跳回原位，等于把用户的摆放丢掉。
 	dragged atomic.Bool
@@ -110,7 +119,7 @@ type hoverPopup struct {
 	// onSpaceSelect 在用户切换目标空间时回调，供上层记住选择。
 	onSpaceSelect func(kind string)
 	// onFilesDropped 在用户往浮窗拖入文件时回调，参数是真实文件系统路径。
-	onFilesDropped func(paths []string)
+	onFilesDropped func(paths []string, space string)
 	// onOpenSpace 在用户点「打开」时回调，打开当前选中的空间。
 	onOpenSpace func()
 	logf        func(string, ...any)
@@ -129,7 +138,7 @@ var (
 
 // newHoverPopup 在独立线程上创建浮窗并等待其就绪。
 // 返回 error 时调用方应继续提供「无浮窗」的托盘，而不是终止托盘本身。
-func newHoverPopup(dpi int32, startPinned bool, onOpenMain func(), onSpaceSelect func(string), onFilesDropped func([]string), onOpenSpace func(), logf func(string, ...any)) (*hoverPopup, error) {
+func newHoverPopup(dpi int32, startPinned bool, onOpenMain func(), onSpaceSelect func(string), onFilesDropped func([]string, string), onOpenSpace func(), logf func(string, ...any)) (*hoverPopup, error) {
 	scale := func(v int32) int32 { return v * dpi / 96 }
 	p := &hoverPopup{
 		width:          scale(hoverPopupWidth),
@@ -264,14 +273,11 @@ func (p *hoverPopup) embedWebView() error {
 		return fmt.Errorf("webview2 显示失败: %w", err)
 	}
 
-	// 关掉 WebView2 自己的外部拖放：它默认接管拖放，把消息吃掉，
-	// 于是宿主窗口的 WM_DROPFILES 永远收不到（这正是拖入无反应的原因）。
-	// 关掉之后拖放落到宿主窗口，我们才能拿到真实文件路径。
-	//
-	// 旧版 Runtime 不支持该能力，返回 UnsupportedCapabilityError；此时拖放无法工作，
-	// 但不该因此让浮窗整体不可用——只记日志。
-	if err := p.chromium.AllowExternalDrag(false); err != nil {
-		p.logf("hover popup: 关闭 WebView2 内建拖放失败，拖入上传可能无效: %v", err)
+	// 页面通过 HTML5 drop + postMessageWithAdditionalObjects 接收文件。
+	// AllowExternalDrag 直接对应 Controller.AllowExternalDrop；关闭它会屏蔽外部拖入，
+	// 不会把拖放转交宿主 WM_DROPFILES。导航默认行为由页面 preventDefault 阻止。
+	if err := p.chromium.AllowExternalDrag(true); err != nil {
+		p.logf("hover popup: 启用 WebView2 外部拖放失败，拖入上传可能无效: %v", err)
 	}
 
 	// 启动即固定（B 形态）：用 Init 注入的脚本在页面脚本运行前置好标志，页面 onload
@@ -306,9 +312,18 @@ func (p *hoverPopup) handleWebMessage(message string, _ *edge.ICoreWebView2, _ *
 	// 空间切换带参数，前缀匹配后单独处理
 	if kind, ok := strings.CutPrefix(text, "space-select:"); ok {
 		p.spaceMu.Lock()
-		p.activeSpace = kind
+		valid := false
+		for _, space := range p.spaces {
+			if space.Kind == kind && !space.ReadOnly && space.Unavailable == "" {
+				valid = true
+				break
+			}
+		}
+		if valid {
+			p.activeSpace = kind
+		}
 		p.spaceMu.Unlock()
-		if p.onSpaceSelect != nil {
+		if valid && p.onSpaceSelect != nil {
 			p.onSpaceSelect(kind)
 		}
 		return
@@ -415,15 +430,25 @@ func (p *hoverPopup) SetSpaces(spaces []hoverSpace) {
 	// 当前选中的空间如果已经不在列表里（配额被收回、授权被撤销），清掉让页面重选
 	stillThere := false
 	for _, space := range spaces {
-		if space.Kind == p.activeSpace && !space.ReadOnly {
+		if space.Kind == p.activeSpace && !space.ReadOnly && space.Unavailable == "" {
 			stillThere = true
 			break
 		}
 	}
 	if !stillThere {
 		p.activeSpace = ""
+		for _, space := range spaces {
+			if !space.ReadOnly && space.Unavailable == "" {
+				p.activeSpace = space.Kind
+				break
+			}
+		}
 	}
+	selected := p.activeSpace
 	p.spaceMu.Unlock()
+	if p.onSpaceSelect != nil {
+		p.onSpaceSelect(selected)
+	}
 	winui.PostMessage(p.hwnd, hoverMsgSetSpaces, 0, 0)
 }
 
@@ -534,11 +559,24 @@ func (p *hoverPopup) togglePinOnOwnThread() {
 //
 // kind 取 "busy" / "ok" / "err"，空串恢复默认样式。可从任意线程调用。
 func (p *hoverPopup) SetDropStatus(title, hint, kind string) {
+	p.dropStatusMu.Lock()
+	p.dropStatus = [3]string{title, hint, kind}
+	p.dropStatusMu.Unlock()
+	if p.hwnd != 0 {
+		winui.PostMessage(p.hwnd, hoverMsgDropStatus, 0, 0)
+	}
+}
+
+// setDropStatusOnOwnThread 只能由创建 WebView2 的浮窗线程调用。
+func (p *hoverPopup) setDropStatusOnOwnThread() {
 	if p.chromium == nil {
 		return
 	}
-	// 文案含文件名与错误信息，走 JSON 免得引号把 JS 搞坏
-	payload, err := json.Marshal([]string{title, hint, kind})
+	p.dropStatusMu.Lock()
+	status := p.dropStatus
+	p.dropStatusMu.Unlock()
+	// 文案含文件名与错误信息，走 JSON 免得引号把 JS 搞坏。
+	payload, err := json.Marshal(status)
 	if err != nil {
 		return
 	}
@@ -718,8 +756,13 @@ func (p *hoverPopup) handleDroppedObjects(message string, _ *edge.ICoreWebView2,
 	if p.onFilesDropped == nil {
 		return
 	}
-	// 上传要回控制面且可能很久，绝不能占着这个回调——那会让整个浮窗卡住
-	go p.onFilesDropped(paths)
+	space := p.ActiveSpace()
+	if space == "" {
+		p.SetDropStatus("暂不能上传", "请等待云盘连接完成", "err")
+		return
+	}
+	// 在浮窗线程固定选择，再异步上传；不在工作线程重读可能已经切换的档位。
+	go p.onFilesDropped(paths, space)
 }
 
 // hideOnOwnThread 立即收起浮窗。
@@ -784,6 +827,9 @@ func hoverWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		case hoverMsgSetSpaces:
 			p.setSpacesOnOwnThread()
 			return 0
+		case hoverMsgDropStatus:
+			p.setDropStatusOnOwnThread()
+			return 0
 		case hoverMsgBeginDrag:
 			p.beginDragOnOwnThread()
 			return 0
@@ -824,10 +870,32 @@ func trimJSONQuotes(s string) string {
 // 选完拖了文件再被控制面拒掉，是最差的顺序。共享空间只读时列出但置灰，
 // 让用户知道它存在、只是不能作为上传目标。
 func (a *App) hoverSpaces() ([]hoverSpace, error) {
-	spaces, err := a.MySpaces()
+	a.accountMu.RLock()
+	session := a.accountSession
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" || base == "" {
+		return nil, fmt.Errorf("请先登录")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	spaces, err := account.New(base).MySpaces(ctx, session.Token)
 	if err != nil {
 		return nil, err
 	}
+	a.accountMu.RLock()
+	sameSession := a.accountSession == session && strings.TrimSpace(a.config.PlatformBaseURL) == base
+	a.accountMu.RUnlock()
+	if !sameSession {
+		return nil, fmt.Errorf("账号已变化")
+	}
+	a.cfapi.mu.Lock()
+	mounted := a.cfapi.personal != nil && a.cfapi.session == session
+	a.cfapi.mu.Unlock()
+	return projectHoverSpaces(spaces, mounted), nil
+}
+
+func projectHoverSpaces(spaces []account.Space, personalMounted bool) []hoverSpace {
 	var result []hoverSpace
 	for _, space := range spaces {
 		if space.QuotaBytes == account.QuotaUnset {
@@ -835,19 +903,14 @@ func (a *App) hoverSpaces() ([]hoverSpace, error) {
 		}
 		switch space.SpaceType {
 		case account.SpacePersonal:
-			result = append(result, hoverSpace{
-				Kind:  account.SpacePersonal,
-				Label: spaceLabel(drive.SpacePersonal),
-				Quota: usageSubtitle(space),
-			})
+			item := hoverSpace{Kind: account.SpacePersonal, Label: spaceLabel(drive.SpacePersonal), Quota: usageSubtitle(space)}
+			if !personalMounted {
+				item.Unavailable = "云盘尚未连接，请等待挂载完成"
+			}
+			result = append(result, item)
 		case account.SpaceShared:
-			result = append(result, hoverSpace{
-				Kind:     account.SpaceShared,
-				Label:    spaceLabel(drive.SpaceShared),
-				Quota:    usageSubtitle(space),
-				ReadOnly: space.Permission != account.PermWrite,
-			})
+			result = append(result, hoverSpace{Kind: account.SpaceShared, Label: spaceLabel(drive.SpaceShared), Quota: usageSubtitle(space), ReadOnly: space.Permission != account.PermWrite, Unavailable: "共享云盘尚未支持安全挂载"})
 		}
 	}
-	return result, nil
+	return result
 }

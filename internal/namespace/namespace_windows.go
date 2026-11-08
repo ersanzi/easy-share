@@ -13,11 +13,12 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Fixed CLSIDs for EasyShare's two namespace entries.
-// These are stable identifiers — changing them would orphan old registry entries.
+// Shell 入口标识按实现版本固定；迁移只影响 Explorer 定义，不改变服务器空间或 CFAPI 根。
 const (
-	// cloudCLSID 是个人云盘空间（RustFS users/{userId}/，经控制面授权）。
-	cloudCLSID = "{E5A1F2B3-C4D5-6E7F-8A9B-0C1D2E3F4A5B}"
+	// 长期运行的 Explorer 会缓存旧 FolderShortcut 定义，刷新通知不能清除此缓存。
+	// v2 使用固定新标识；注册/注销时明确清理旧标识，不在登录时生成随机入口。
+	cloudCLSID       = "{8327AC46-BCC2-45D2-A46F-0737E2CC6557}"
+	legacyCloudCLSID = "{E5A1F2B3-C4D5-6E7F-8A9B-0C1D2E3F4A5B}"
 	// lanCLSID 是局域网收件箱（本机目录，无认证，仅回环可达）。
 	//
 	// 这个 GUID 历史上叫「EasyShare 共享」，指的是局域网收件箱，**不是**云端共享空间。
@@ -56,6 +57,10 @@ type Entry struct {
 
 	// SortOrderIndex 控制在「此电脑」里的排序位置，越小越靠前。
 	SortOrderIndex uint32
+
+	// writableFilesystem 仅由 SpaceEntries 为已通过上层可写能力闸门的
+	// CFAPI 个人同步根设置；不把共享、WebDAV 或任意品牌入口声明成拖放目标。
+	writableFilesystem bool
 }
 
 // WebDAVUNC 将 WebDAV 端口号转换为 Windows 资源管理器可识别的 UNC 路径。
@@ -103,6 +108,8 @@ type SpaceMount struct {
 	Kind string
 	// Port 是该空间的本机 WebDAV 端口。
 	Port int
+	// TargetPath 显式同步根；非空时绝不改写为历史 WebDAV UNC。
+	TargetPath string
 	// UserID 是当前登录账号，写进 CLSID 做账号绑定。
 	UserID string
 	// DisplayName 是账号的展示名（昵称优先），用于个人空间的条目名。
@@ -131,11 +138,20 @@ func LANCLSID() string { return lanCLSID }
 func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
 	entries := make([]Entry, 0, len(mounts))
 	for _, mount := range mounts {
+		target := mount.TargetPath
+		if target == "" {
+			target = WebDAVUNC(mount.Port)
+		}
 		entry := Entry{
 			IconPath:   iconPath,
-			TargetPath: WebDAVUNC(mount.Port),
+			TargetPath: target,
 			UserID:     mount.UserID,
 			Subtitle:   mount.Subtitle,
+			// Windows CFAPI 的个人根由调用方完成写回能力探测后发布。
+			// 只接受显式盘符绝对路径：UNC（含 WebDAV）、相对路径及未知类型不升级能力。
+			writableFilesystem: mount.Kind == "personal" && !mount.ReadOnly &&
+				filepath.IsAbs(mount.TargetPath) && len(filepath.VolumeName(mount.TargetPath)) == 2 &&
+				filepath.VolumeName(mount.TargetPath)[1] == ':',
 		}
 		switch mount.Kind {
 		case "shared":
@@ -164,11 +180,43 @@ func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
 	return entries
 }
 
+// Shell folder capability bits (SFGAO), not NTFS access rights.
+const (
+	sfgaoCanCopy         uint32 = 0x00000001
+	sfgaoCanMove         uint32 = 0x00000002
+	sfgaoCanLink         uint32 = 0x00000004
+	sfgaoStorage         uint32 = 0x00000008
+	sfgaoCanRename       uint32 = 0x00000010
+	sfgaoCanDelete       uint32 = 0x00000020
+	sfgaoHasPropSheet    uint32 = 0x00000040
+	sfgaoReadOnly        uint32 = 0x00040000
+	sfgaoStorageAncestor uint32 = 0x00800000
+	sfgaoDropTarget      uint32 = 0x00000100
+	sfgaoFileSysAncestor uint32 = 0x10000000
+	sfgaoFolder          uint32 = 0x20000000
+	sfgaoFileSystem      uint32 = 0x40000000
+	sfgaoHasSubFolder    uint32 = 0x80000000
+)
+
+func shellFolderAttributes(entry Entry) uint32 {
+	attributes := sfgaoFolder | sfgaoFileSystem
+	if entry.writableFilesystem {
+		attributes |= sfgaoCanCopy | sfgaoCanLink | sfgaoStorage | sfgaoHasPropSheet |
+			sfgaoDropTarget | sfgaoStorageAncestor | sfgaoFileSysAncestor | sfgaoHasSubFolder
+	}
+	// 品牌根不声明 CANMOVE / CANDELETE / CANRENAME；拖入能力与移动根是两回事。
+	return attributes
+}
+
 // Register adds EasyShare entries to "此电脑" in Windows Explorer.
 // It is idempotent — calling it multiple times simply overwrites the values.
 func Register(entries []Entry) error {
 	for _, entry := range entries {
-		if err := registerOne(entry); err != nil {
+		obsolete := ""
+		if entry.CLSID == cloudCLSID {
+			obsolete = legacyCloudCLSID
+		}
+		if err := registerWithObsolete(entry, obsolete); err != nil {
 			return fmt.Errorf("register %q: %w", entry.Name, err)
 		}
 	}
@@ -177,12 +225,57 @@ func Register(entries []Entry) error {
 	return nil
 }
 
+func registerWithObsolete(entry Entry, obsolete string) error {
+	if err := registerOne(entry); err != nil {
+		return err
+	}
+	if obsolete != "" {
+		if err := removeNamespaceEntry(obsolete); err != nil {
+			unregisterOne(entry.CLSID)
+			return fmt.Errorf("migrate personal namespace: %w", err)
+		}
+	}
+	return nil
+}
+
 // Unregister removes EasyShare entries from "此电脑".
 func Unregister(entries []Entry) error {
+	var firstErr error
 	for _, entry := range entries {
-		unregisterOne(entry.CLSID)
+		for _, clsid := range namespaceCleanupCLSIDs(entry.CLSID) {
+			if err := removeNamespaceEntry(clsid); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
 	notifyExplorer()
+	return firstErr
+}
+
+// 所有个人入口清理路径（启动、登出、退出、旧版调用）覆盖新旧两种固定身份。
+func namespaceCleanupCLSIDs(clsid string) []string {
+	if clsid == cloudCLSID || clsid == legacyCloudCLSID {
+		return []string{cloudCLSID, legacyCloudCLSID}
+	}
+	return []string{clsid}
+}
+
+func removeNamespaceEntry(clsid string) error {
+	unregisterOne(clsid)
+	for _, path := range []string{
+		`Software\Classes\CLSID\` + clsid,
+		`Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + clsid,
+	} {
+		key, err := registry.OpenKey(registry.CURRENT_USER, path, registry.QUERY_VALUE)
+		if err == registry.ErrNotExist {
+			continue
+		}
+		if err == nil {
+			key.Close()
+			return fmt.Errorf("namespace key remains after removal: %s", path)
+		}
+		return fmt.Errorf("verify namespace removal: %w", err)
+	}
 	return nil
 }
 
@@ -216,9 +309,12 @@ func registerOne(entry Entry) error {
 
 	// 账号绑定：条目属于哪个登录账号。换账号时随 TargetPath 一并更新。
 	if entry.UserID != "" {
-		_ = clsidKey.SetStringValue("UserId", entry.UserID)
+		err = clsidKey.SetStringValue("UserId", entry.UserID)
 	} else {
-		_ = clsidKey.DeleteValue("UserId")
+		err = deleteOptionalValue(clsidKey, "UserId")
+	}
+	if err != nil {
+		return fmt.Errorf("configure UserId: %w", err)
 	}
 
 	if entry.SortOrderIndex > 0 {
@@ -227,32 +323,56 @@ func registerOne(entry Entry) error {
 
 	// 2. InProcServer32 — tells Explorer to use shell32.dll as the handler.
 	// Must be REG_EXPAND_SZ with the full system path for Explorer to load it.
+	//
+	// 这三处曾经写成 `if err == nil { ... }` 静默吞掉错误：CreateKey 失败时
+	// CLSID 定义整段缺失，而第 5 步仍然把 CLSID 登记进 NameSpace，于是「此电脑」
+	// 里留下一个**指向不存在 CLSID 的空壳条目**——双击必然卡死/报错，且日志显示
+	// 「已挂载」，排查时完全看不出问题（实测见 known-issues）。
+	// 现在一律上抛：宁可这次不挂，也不要挂出一个坏条目。
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" {
 		systemRoot = `C:\Windows`
 	}
 	ipsKey, _, err := registry.CreateKey(registry.CURRENT_USER, clsidPath+`\InProcServer32`, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("create InProcServer32 key: %w", err)
+	}
+	err = ipsKey.SetExpandStringValue("", systemRoot+`\system32\shell32.dll`)
 	if err == nil {
-		_ = ipsKey.SetExpandStringValue("", systemRoot+`\system32\shell32.dll`)
-		_ = ipsKey.SetStringValue("ThreadingModel", "Apartment")
-		ipsKey.Close()
+		err = ipsKey.SetStringValue("ThreadingModel", "Apartment")
+	}
+	ipsKey.Close()
+	if err != nil {
+		return fmt.Errorf("configure InProcServer32: %w", err)
 	}
 
 	// 3. ShellFolder attributes — marks the entry as an openable folder.
 	sfKey, _, err := registry.CreateKey(registry.CURRENT_USER, clsidPath+`\ShellFolder`, registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("create ShellFolder key: %w", err)
+	}
+	// 完整文件系统委托配置仅用于可写 CFAPI 个人根；切回旧模式删除专用值。
+	err = sfKey.SetDWordValue("Attributes", shellFolderAttributes(entry))
 	if err == nil {
-		// SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_FILESYSANCESTOR
-		_ = sfKey.SetDWordValue("Attributes", 0x60000000)
-		sfKey.Close()
+		if entry.writableFilesystem {
+			err = sfKey.SetDWordValue("FolderValueFlags", 0x28)
+		} else {
+			err = deleteOptionalValue(sfKey, "FolderValueFlags")
+		}
+	}
+	sfKey.Close()
+	if err != nil {
+		return fmt.Errorf("configure ShellFolder: %w", err)
 	}
 
 	// 3. Set icon.
 	if entry.IconPath != "" {
 		iconKey, _, err := registry.CreateKey(registry.CURRENT_USER, clsidPath+`\DefaultIcon`, registry.SET_VALUE)
-		if err == nil {
-			_ = iconKey.SetStringValue("", entry.IconPath+",0")
-			iconKey.Close()
+		if err != nil {
+			return fmt.Errorf("create DefaultIcon key: %w", err)
 		}
+		_ = iconKey.SetStringValue("", entry.IconPath+",0")
+		iconKey.Close()
 	}
 
 	// 4. Set Instance to Shell File System Folder with target path.
@@ -260,27 +380,63 @@ func registerOne(entry Entry) error {
 	if err != nil {
 		return fmt.Errorf("create Instance key: %w", err)
 	}
-	_ = instanceKey.SetStringValue("CLSID", shellFolder)
+	err = instanceKey.SetStringValue("CLSID", shellFolder)
 	instanceKey.Close()
+	if err != nil {
+		return fmt.Errorf("configure Instance CLSID: %w", err)
+	}
 
 	bagKey, _, err := registry.CreateKey(registry.CURRENT_USER, clsidPath+`\Instance\InitPropertyBag`, registry.SET_VALUE)
 	if err != nil {
 		return fmt.Errorf("create InitPropertyBag key: %w", err)
 	}
-	_ = bagKey.SetStringValue("TargetFolderPath", entry.TargetPath)
+	if entry.writableFilesystem {
+		err = bagKey.SetDWordValue("Attributes", 0x11)
+		if err == nil {
+			err = bagKey.SetExpandStringValue("TargetFolderPath", entry.TargetPath)
+		}
+	} else {
+		err = deleteOptionalValue(bagKey, "Attributes")
+		if err == nil {
+			err = bagKey.SetStringValue("TargetFolderPath", entry.TargetPath)
+		}
+	}
 	bagKey.Close()
+	if err != nil {
+		return fmt.Errorf("configure InitPropertyBag: %w", err)
+	}
 
 	// 5. Add to MyComputer NameSpace.
+	//
+	// **必须是最后一步**：NameSpace 里的 CLSID 是「可见性开关」，一旦登记，资源管理器
+	// 就会去加载对应 CLSID 定义。若定义还没写全（或前面任何一步失败），用户看到的
+	// 就是一个打不开的空壳条目——比不显示更糟。所以先把定义全部写完整，最后才让它可见。
+	//
+	// 失败时回滚已写的 CLSID 定义，避免留下不完整的残骸。
 	nsPath := `Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + entry.CLSID
 	nsKey, _, err := registry.CreateKey(registry.CURRENT_USER, nsPath, registry.SET_VALUE)
 	if err != nil {
+		unregisterOne(entry.CLSID)
 		return fmt.Errorf("create NameSpace key: %w", err)
 	}
-	_ = nsKey.SetStringValue("", entry.Name)
+	err = nsKey.SetStringValue("", entry.Name)
 	clearStaleDisplayOverrides(nsKey)
 	nsKey.Close()
+	if err != nil {
+		unregisterOne(entry.CLSID)
+		return fmt.Errorf("configure NameSpace: %w", err)
+	}
 
 	return nil
+}
+
+// Missing optional values are already clean; all other deletion failures matter.
+func deleteOptionalValue(key registry.Key, name string) error {
+	err := key.DeleteValue(name)
+	if err == registry.ErrNotExist {
+		return nil
+	}
+	return err
 }
 
 func unregisterOne(clsid string) {

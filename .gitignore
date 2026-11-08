@@ -73,6 +73,11 @@ engine/*.egg-info/
 engine/build/
 engine/dist/
 
+# 本机验收与私有归档（不纳入公开源码）
+.rd-test/
+archives/
+evidence/
+
 # 本机运维凭据与 agent 临时文件（仅本地使用，不入库）
 .easyshare-local/
 .workbuddy/

@@ -2,164 +2,293 @@
 
 package main
 
-// CfApi 按需占位符的登录态联动（路线图切片 5 的最后一步：接入 app.go）。
-//
-// 定位：与「此电脑」的 WebDAV 盘（spacemount.go）是**同一份云盘的两种本地呈现**
-// （internal/cfmount 包注）。生产上当前主形态仍是 WebDAV（注册表 NameSpace 指 UNC），
-// 本文件把 CfApi 挂成一个**普通目录下的同步根**（数据根下的 cloud-drive/<space>），
-// 用户可以在资源管理器直接打开它体验「万级文件 0 字节占盘、点开才拉」。
-// 两入口共存不冲突：同一份内容，一个走 HTTP 物化、一个走按需水合。
-
 import (
+	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	"golang.org/x/sys/windows"
-
+	"easyshare/internal/account"
 	"easyshare/internal/cfapi"
 	"easyshare/internal/cfmount"
 	"easyshare/internal/drive"
 	"easyshare/internal/fsutil"
+	"easyshare/internal/namespace"
+	"golang.org/x/sys/windows"
 )
 
-// cfapiMounts 持有 CfApi 同步根挂载状态。
-//
-// 与 spaceMounts（WebDAV）分开管理：生命周期回调点相同（登录挂载/登出卸载/定期同步），
-// 但 Close 语义完全不同（CfApi 要断连接 + 注销同步根），不能混在一起。
+// cfapiMounts 的世代在卸载时失效；旧网络请求即使成功也不能再发布入口。
 type cfapiMounts struct {
-	mu       sync.Mutex
-	personal *cfapi.Mount
-	// root 记录同步根本地路径（卸载时即使 Mount 已损也要能注销根目录）。
+	// lifecycleMu is never acquired while holding mu. Cancellation must precede
+	// waiting for mu, because reconcile holds mu during cancellable network I/O.
+	lifecycleMu  sync.Mutex
+	lifetime     *nativeMountLifetime
+	mu           sync.Mutex
+	personal     *cfapi.Mount
 	personalRoot string
-	// listState 是增量列举的跨调用状态：挂载与每轮定期同步**共用一个**，
-	// 否则每轮都从「没底」开始、每次全量，增量就白做了。
-	listState *cfmount.ListState
-	// syncStop 停掉定期同步循环。
-	syncStop chan struct{}
-	// mounting 标记「正在挂载中」——单飞闸门。
-	//
-	// 为什么需要：refreshSpaceMounts 会在多个时机被并发触发（登录、配额刷新、
-	// 上传完成）。实测日志里一次登录打了两条挂载，第一条撞
-	// `CfConnectSyncRoot` 的 0x8007017A（ERROR_CLOUD_FILE_ALREADY_CONNECTED）失败、
-	// 第二条成功。结果虽然对（有重复挂载保护），但**日志里留了一条误导性的失败**，
-	// 排查时会被当成真故障。挂载是有状态的内核操作，应当串行。
-	mounting bool
+	syncStop     chan struct{}
+	mounting     bool
+	generation   uint64
+	session      *account.Session
+	lastError    error
+	cacheApply   func(context.Context, *cfapi.Mount, string, bool) error
 }
 
-// cfaPiProviderID 个人空间同步根的提供方 GUID（固定不变，换了系统会当成新提供方）。
-//
-// {C5D8B7A2-3E1F-4A6B-9C2D-EASY0001} 便于在注册表 HKLM\SyncRootManager 里认出来。
+type nativeLifetimeReader struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r *nativeLifetimeReader) Close() error {
+	r.cancel()
+	return r.ReadCloser.Close()
+}
+
+type nativeMountLifetime struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func newNativeMountLifetime() *nativeMountLifetime {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &nativeMountLifetime{ctx: ctx, cancel: cancel}
+}
+
+// cancelBeforeLock serializes lifecycle replacement with teardown. In particular,
+// an old teardown must never cancel a newer mount's context.
+func (m *cfapiMounts) cancelBeforeLock(expected *nativeMountLifetime) bool {
+	m.lifecycleMu.Lock()
+	if expected != nil && m.lifetime != expected {
+		m.lifecycleMu.Unlock()
+		return false
+	}
+	if m.lifetime != nil {
+		m.lifetime.cancel()
+	}
+	m.mu.Lock()
+	return true // caller releases mu, then lifecycleMu
+}
+
 var cfapiPersonalProviderID = windows.GUID{
 	Data1: 0xC5D8B7A2, Data2: 0x3E1F, Data3: 0x4A6B,
 	Data4: [8]byte{0x9C, 0x2D, 0xEA, 0x53, 0x00, 0x01, 0x00, 0x01},
 }
 
-// cfapiSyncInterval 定期重新拉清单的间隔。
-//
-// CfApi 占位符是本地视图，云端在别处改了文件这里不会自动知道——定期 Sync
-// 是只读形态下的对账手段（增量列举接上后这里可以换成 /changes 驱动，见切片 2）。
-const cfapiSyncInterval = 5 * time.Minute
+const cfapiSyncInterval = 5 * time.Second
 
-// mountCfapiSpaces 登录后挂载个人空间的 CfApi 占位符同步根。
-//
-// 由 refreshSpaceMounts（spacemount.go）在登录态变化时调用。任何失败都只记日志：
-// CfApi 是增强形态，挂不上不该影响登录主流程（WebDAV 盘照常挂）。
-func (a *App) mountCfapiSpaces() {
-	// 旧系统（Win10 1709 之前）没有 cldapi.dll：降级为不挂，WebDAV 不受影响
-	if !cfapi.Available() {
-		a.logger.Printf("cfapi mount: 系统不支持 Cloud Files API，跳过（WebDAV 盘不受影响）")
-		return
+func validateNativeMountIdentity(session *account.Session) error {
+	if session == nil || strings.TrimSpace(session.User.UserID) == "" {
+		return fmt.Errorf("CFAPI 未挂载：登录会话缺少用户 ID，拒绝使用共用同步根")
 	}
+	return nil
+}
 
-	// ── 单飞闸门 ──────────────────────────────────────────────
-	//
-	// refreshSpaceMounts 会被并发触发（登录、配额刷新、上传完成）。
-	// 实测过一次登录打了两条：第一条撞 0x8007017A（已连接）失败、
-	// 第二条成功——结果对，但日志里那条失败是**误导性噪声**。
-	// 挂载是有状态的内核操作，并发进来只该有一个真干活。
-	//
-	// 判定必须在**取 client 之前**做：越早挡住，浪费越少。
+// nativeSpaceIdentity 不含令牌，按服务器、账号、空间隔离本地根和持久化写回状态。
+func nativeSpaceIdentity(base, userID, space string) string {
+	sum := sha256.Sum256([]byte(strings.TrimRight(strings.TrimSpace(base), "/") + "\x00" + userID + "\x00" + space))
+	return fmt.Sprintf("%x", sum)
+}
+
+// boundSessionToken 只能为创建挂载的那次登录取令牌；同账号重新登录也不能复用旧根回调。
+func (a *App) boundSessionToken(session *account.Session, base string) cfmount.TokenFunc {
+	return func() string {
+		a.accountMu.RLock()
+		defer a.accountMu.RUnlock()
+		if a.accountSession != session || session == nil || strings.TrimSpace(a.config.PlatformBaseURL) != base {
+			return ""
+		}
+		return session.Token
+	}
+}
+
+// refreshNativeSpaceMounts 完全接管 Windows 云空间；不影响局域网 WebDAV。
+func (a *App) refreshNativeSpaceMounts() bool {
+	defer a.publishTrayUser()
+	// 清理历史云空间端点，不允许失败时回退 UNC。
+	a.stopUnkeptServices(map[string]bool{})
 	a.cfapi.mu.Lock()
-	if a.cfapi.personal != nil || a.cfapi.mounting {
-		a.cfapi.mu.Unlock()
-		return
+	stale := []namespace.Entry{{CLSID: namespace.SharedCLSID()}}
+	if a.cfapi.personal == nil {
+		stale = append(stale, namespace.Entry{CLSID: namespace.PersonalCLSID()})
 	}
-	a.cfapi.mounting = true
+	_ = namespace.Unregister(stale)
 	a.cfapi.mu.Unlock()
-	// 无论成功失败都要清标记，否则一次失败会让后续再也不敢挂
-	defer func() {
+	a.mountCfapiSpaces()
+	return true
+}
+
+func (a *App) mountCfapiSpaces() {
+	a.accountMu.RLock()
+	session := a.accountSession
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" || base == "" {
+		a.unmountCfapiSpaces()
+		return
+	}
+
+	if err := validateNativeMountIdentity(session); err != nil {
+		a.unmountCfapiSpaces()
 		a.cfapi.mu.Lock()
-		a.cfapi.mounting = false
+		a.cfapi.lastError = err
 		a.cfapi.mu.Unlock()
-	}()
-
-	client, token, err := a.driveClient()
-	if err != nil {
-		// 未登录/未配置：这不是错误，卸载语义在别处处理
-		return
-	}
-	_ = token // 令牌由 TokenFunc 每次现取，这里只需要 client
-
-	root := filepath.Join(filepath.Dir(a.configPath), "cloud-drive", drive.SpacePersonal)
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		a.logger.Printf("cfapi mount: 建同步根目录失败: %v", err)
-		return
-	}
-
-	// 增量状态挂在挂载上：首轮全量拿底，之后每轮只问「那个版本之后发生了啥」
-	listState := cfmount.NewListState()
-
-	cfg := cfmount.Config{
-		RootPath:     root,
-		Space:        drive.SpacePersonal,
-		Client:       client,
-		Token:        cfmount.TokenFunc(a.sessionToken()),
-		ProviderName: "EasyShare 网盘",
-		ProviderID:   cfapiPersonalProviderID,
-		State:        listState,
-	}
-
-	mount, err := cfapi.MountSpace(cfapi.MountOptions{
-		RootPath:         cfg.RootPath,
-		Provider:         cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "1.0", ID: cfg.ProviderID},
-		SyncRootIdentity: []byte("easyshare:personal"),
-		List:             cfmount.List(cfg),
-		Open:             cfmount.Open(cfg),
-	})
-	if err != nil {
-		a.logger.Printf("cfapi mount: 挂载个人空间占位符失败: %v", err)
+		a.logger.Printf("cfapi mount: %v", err)
 		return
 	}
 
 	a.cfapi.mu.Lock()
-	// 重复挂载保护：refreshSpaceMounts 可能被多次触发（登录/配额变化/上传后），
-	// 已挂上就不再重复挂（重复注册同步根会报 ERROR_ALREADY_EXISTS）
-	if a.cfapi.personal != nil {
+	expectedRoot := filepath.Join(filepath.Dir(a.configPath), "cloud-drive", nativeSpaceIdentity(base, session.User.UserID, drive.SpacePersonal))
+	changed := a.cfapi.session != nil && (a.cfapi.session != session || a.cfapi.personalRoot != expectedRoot)
+	a.cfapi.mu.Unlock()
+	if changed {
+		a.unmountCfapiSpaces()
+	}
+	a.cfapi.lifecycleMu.Lock()
+	a.cfapi.mu.Lock()
+	if a.cfapi.mounting || (a.cfapi.personal != nil && a.cfapi.session == session) {
 		a.cfapi.mu.Unlock()
+		a.cfapi.lifecycleMu.Unlock()
+		return
+	}
+	lifetime := newNativeMountLifetime()
+	a.cfapi.lifetime = lifetime
+	a.cfapi.mounting = true
+	generation := a.cfapi.generation
+	a.cfapi.mu.Unlock()
+	a.cfapi.lifecycleMu.Unlock()
+	published := false
+	defer func() {
+		a.cfapi.lifecycleMu.Lock()
+		a.cfapi.mu.Lock()
+		if a.cfapi.lifetime == lifetime {
+			a.cfapi.mounting = false
+			if !published {
+				lifetime.cancel()
+				a.cfapi.lifetime = nil
+			}
+		}
+		a.cfapi.mu.Unlock()
+		a.cfapi.lifecycleMu.Unlock()
+	}()
+	fail := func(err error) {
+		a.cfapi.mu.Lock()
+		if a.cfapi.generation == generation {
+			a.cfapi.lastError = err
+		}
+		a.cfapi.mu.Unlock()
+		a.logger.Printf("cfapi mount: %v", err)
+	}
+	token := a.boundSessionToken(session, base)
+	ctx, cancel := context.WithTimeout(lifetime.ctx, 60*time.Second)
+	defer cancel()
+	spaces, err := account.New(base).MySpaces(ctx, token())
+	if err != nil {
+		a.unmountCfapiLifetime(lifetime)
+		fail(fmt.Errorf("远端空间认证失败: %w", err))
+		return
+	}
+	var personal *account.Space
+	for i := range spaces {
+		s := &spaces[i]
+		if s.SpaceType == account.SpacePersonal && s.QuotaBytes != account.QuotaUnset {
+			personal = s
+		}
+		if s.SpaceType == account.SpaceShared && s.QuotaBytes != account.QuotaUnset {
+			// 只读属性不能保护目录新建/删除；没有执行层拒写保障时明确拒绝挂载。
+			a.logger.Printf("cfapi mount: 共享空间暂不支持安全挂载（权限 %s），不发布入口", s.Permission)
+		}
+	}
+	if personal == nil {
+		a.unmountCfapiLifetime(lifetime)
+		return
+	}
+	if !cfapi.Available() {
+		fail(fmt.Errorf("系统不支持 Cloud Files API，不回退云空间 WebDAV"))
+		return
+	}
+	a.cfapi.mu.Lock()
+	mounted := a.cfapi.personal != nil && a.cfapi.session == session
+	a.cfapi.mu.Unlock()
+	if mounted {
+		return
+	}
+	identity := nativeSpaceIdentity(base, session.User.UserID, drive.SpacePersonal)
+	root := filepath.Join(filepath.Dir(a.configPath), "cloud-drive", identity)
+	stateDir := filepath.Join(filepath.Dir(a.configPath), "cfapi-state", identity)
+	client := drive.New(base)
+	client.Sessions = drive.NewSessionStore(filepath.Join(stateDir, "upload-sessions"))
+	cfg := cfmount.Config{RootPath: root, Space: drive.SpacePersonal, Client: client, Token: token, ProviderName: "EasyShare 网盘", ProviderID: cfapiPersonalProviderID}
+	// 能力探测必须先于 Mkdir/注册；旧服务端或尚未接好写回保护时 fail closed。
+	controller := &nativeCacheController{}
+	list, reconcile, err := prepareNativeCFAPI(withNativeCacheController(ctx, controller), cfg, stateDir, identity, lifetime.ctx)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if lifetime.ctx.Err() != nil || token() == "" {
+		return
+	}
+	if err = os.MkdirAll(root, 0700); err != nil {
+		fail(err)
+		return
+	}
+	openRemote := cfmount.Open(cfg)
+	open := func(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
+		ctx, cancel := nativeLifetimeContext(ctx, lifetime.ctx)
+		reader, err := openRemote(ctx, path, offset, length)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		return &nativeLifetimeReader{ReadCloser: reader, cancel: cancel}, nil
+	}
+	mount, err := cfapi.MountSpace(cfapi.MountOptions{RootPath: root, Provider: cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "1.0", ID: cfg.ProviderID}, SyncRootIdentity: []byte(identity), List: list, Open: open})
+	if err != nil {
+		fail(err)
+		return
+	}
+
+	// 持账号读锁至注册完成，登出必须先改变会话再卸载，因此无法越过此发布屏障。
+	a.accountMu.RLock()
+	a.cfapi.mu.Lock()
+	if lifetime.ctx.Err() != nil || a.cfapi.generation != generation || a.accountSession != session || session.Token == "" || strings.TrimSpace(session.User.UserID) == "" || strings.TrimSpace(a.config.PlatformBaseURL) != base {
+		a.cfapi.mu.Unlock()
+		a.accountMu.RUnlock()
 		_ = mount.Close()
 		return
 	}
-	a.cfapi.personal = mount
-	a.cfapi.personalRoot = root
-	a.cfapi.listState = listState
+	name := session.User.NickName
+	if name == "" {
+		name = session.User.UserName
+	}
+	entries := namespace.SpaceEntries(namespace.IconFromBuild(), []namespace.SpaceMount{{Kind: "personal", TargetPath: root, UserID: session.User.UserID, DisplayName: name, Subtitle: usageSubtitle(*personal)}})
+	if err = namespace.Register(entries); err != nil {
+		_ = namespace.Unregister(entries)
+		a.cfapi.mu.Unlock()
+		a.accountMu.RUnlock()
+		_ = mount.Close()
+		fail(err)
+		return
+	}
+	a.cfapi.personal, a.cfapi.personalRoot, a.cfapi.session = mount, root, session
+	a.cfapi.cacheApply = controller.Apply
+	a.cfapi.lastError = nil
 	stop := make(chan struct{})
 	a.cfapi.syncStop = stop
-	clientRef := client
+	published = true
 	a.cfapi.mu.Unlock()
-
-	a.logger.Printf("cfapi mount: 个人空间占位符同步根已挂载: %s", root)
-	go a.cfapiSyncLoop(stop, clientRef)
+	a.accountMu.RUnlock()
+	a.logger.Printf("cfapi mount: 个人空间已挂载 %s", root)
+	go a.cfapiSyncLoop(stop, mount, reconcile)
 }
 
-// cfapiSyncLoop 定期重新拉云端清单、更新占位符树（含幽灵清理）。
-//
-// client 在挂载成功时取一次、循环内复用：drive.Client 是无状态 HTTP 客户端，
-// 令牌由 TokenFunc 每次现取，会话过期表现为清单拉取失败（下轮重试），不需要换实例。
-func (a *App) cfapiSyncLoop(stop chan struct{}, client *drive.Client) {
+// cfapiSyncLoop 由写回适配器串行执行扫描/写回/保护树同步，不直接调用破坏性 Sync。
+func (a *App) cfapiSyncLoop(stop chan struct{}, mount *cfapi.Mount, reconcile func(*cfapi.Mount) error) {
 	ticker := time.NewTicker(cfapiSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -168,63 +297,47 @@ func (a *App) cfapiSyncLoop(stop chan struct{}, client *drive.Client) {
 			return
 		case <-ticker.C:
 			a.cfapi.mu.Lock()
-			mount := a.cfapi.personal
-			root := a.cfapi.personalRoot
-			state := a.cfapi.listState
+			if a.cfapi.personal != mount {
+				a.cfapi.mu.Unlock()
+				return
+			}
+			err := reconcile(mount)
 			a.cfapi.mu.Unlock()
-			if mount == nil {
-				return
-			}
-			if client == nil {
-				return
-			}
-			if err := mount.Sync(cfmount.List(cfmount.Config{
-				RootPath:     root,
-				Space:        drive.SpacePersonal,
-				Client:       client,
-				Token:        cfmount.TokenFunc(a.sessionToken()),
-				ProviderName: "EasyShare 网盘",
-				ProviderID:   cfapiPersonalProviderID,
-				State:        state,
-			})); err != nil {
-				a.logger.Printf("cfapi mount: 定期同步失败（下轮重试）: %v", err)
+			if err != nil {
+				a.logger.Printf("cfapi mount: 写回/同步失败，保留本地内容: %v", err)
 			}
 		}
 	}
 }
 
-// unmountCfapiSpaces 登出/退出时断开 CfApi 同步根。
 func (a *App) unmountCfapiSpaces() {
-	a.cfapi.mu.Lock()
-	mount := a.cfapi.personal
-	root := a.cfapi.personalRoot
-	stop := a.cfapi.syncStop
-	a.cfapi.personal = nil
-	a.cfapi.personalRoot = ""
-	// 增量状态一并丢掉：换账号后不能沿用上一个账号的清单与空间游标，
-	// 否则会拿别人的版本号去要自己的差异。
-	a.cfapi.listState = nil
-	a.cfapi.syncStop = nil
-	a.cfapi.mu.Unlock()
-
-	if stop != nil {
-		close(stop)
-	}
-	if mount == nil {
-		return
-	}
-	if err := mount.Close(); err != nil {
-		a.logger.Printf("cfapi mount: 卸载同步根失败: %v", err)
-		// Close 失败时再兜底注销一次根目录，避免留下指向已退出进程的注册表残留
-		_ = cfapi.UnregisterSyncRoot(root)
-		return
-	}
-	a.logger.Printf("cfapi mount: 个人空间占位符同步根已卸载")
+	a.unmountCfapiLifetime(nil)
 }
 
-// CfapiMountPath 返回个人空间 CfApi 同步根的本地路径（前端「本地挂载」入口用）。
-//
-// 未挂载返回空串：前端据此隐藏入口，而不是点开报错。
+func (a *App) unmountCfapiLifetime(expected *nativeMountLifetime) {
+	if !a.cfapi.cancelBeforeLock(expected) {
+		return
+	}
+	defer a.cfapi.lifecycleMu.Unlock()
+	defer a.cfapi.mu.Unlock()
+	a.cfapi.lifetime = nil
+	a.cfapi.mounting = false
+	a.cfapi.generation++
+	// 即使本进程尚未发布入口，也清理上次退出遗留的云空间 UNC 条目。
+	_ = namespace.Unregister([]namespace.Entry{{CLSID: namespace.PersonalCLSID()}, {CLSID: namespace.SharedCLSID()}})
+	if a.cfapi.syncStop != nil {
+		close(a.cfapi.syncStop)
+	}
+	if a.cfapi.personal != nil {
+		if err := a.cfapi.personal.Close(); err != nil {
+			a.logger.Printf("cfapi mount: 卸载失败: %v", err)
+		}
+	}
+	a.cfapi.personal, a.cfapi.session = nil, nil
+	a.cfapi.cacheApply = nil
+	a.cfapi.personalRoot, a.cfapi.syncStop = "", nil
+}
+
 func (a *App) CfapiMountPath() string {
 	a.cfapi.mu.Lock()
 	defer a.cfapi.mu.Unlock()
@@ -234,94 +347,57 @@ func (a *App) CfapiMountPath() string {
 	return a.cfapi.personalRoot
 }
 
-// OpenCfapiFolder 在资源管理器中打开占位符同步根目录。
-//
-// 用 OpenFolder 而不是 OpenFile：OpenFile 是「选中并高亮」，对目录会在父目录里
-// 选中它，而不是打开它本身。
+func (a *App) openNativeCurrentSpace() (bool, error) {
+	if a.targetSpace() == drive.SpaceShared {
+		return true, fmt.Errorf("共享空间尚无安全的 CFAPI 权限执行适配，未挂载")
+	}
+	return true, a.OpenCfapiFolder()
+}
+
 func (a *App) OpenCfapiFolder() error {
 	path := a.CfapiMountPath()
 	if path == "" {
-		return fmt.Errorf("占位符目录未挂载")
-	}
-	if err := fsutil.OpenFolder(path); err != nil {
-		a.reportError("open cfapi folder", err)
-		return err
-	}
-	return nil
-}
-
-// CloudKeepOnDevice 「始终保留在这台电脑上」——钉住并立刻取回内容。
-//
-// 对标钉盘/WPS 的桌面标配（WPS 取证 §3.5 `freeUpPlaceholder` 的同族动作）。
-// 只钉不取是不够的：SDK 明说钉住后平台是**异步**通知提供方拉数据，
-// 用户点这个按钮的期望是「现在就在这台电脑上」，所以钉完再 Hydrate 一次。
-func (a *App) CloudKeepOnDevice(key string) error {
-	path, err := a.placeholderLocalPath(key)
-	if err != nil {
-		return err
-	}
-	if err := cfapi.SetPinState(path, cfapi.PinStatePinned, cfapi.SetPinFlagNone); err != nil {
-		a.reportError("cfapi keep on device", err)
-		return err
-	}
-	if err := cfapi.Hydrate(path); err != nil {
-		a.reportError("cfapi hydrate", err)
-		return err
-	}
-	return nil
-}
-
-// CloudFreeUpSpace 「释放空间」——解除钉住后把本地内容退回空壳。
-//
-// 先解除钉住是刻意的：平台**拒绝**对已钉占位符脱水（真机实测 `0x80070188`，
-// 见 state_ops_windows_test.go），若直接 Dehydrate，用户点了「释放空间」只会拿到一个
-// 看不懂的错误。云上的文件不受影响，重新点开会自动拉回来。
-func (a *App) CloudFreeUpSpace(key string) error {
-	path, err := a.placeholderLocalPath(key)
-	if err != nil {
-		return err
-	}
-	if err := cfapi.SetPinState(path, cfapi.PinStateUnspecified, cfapi.SetPinFlagNone); err != nil {
-		a.reportError("cfapi unpin", err)
-		return err
-	}
-	if err := cfapi.Dehydrate(path); err != nil {
-		a.reportError("cfapi dehydrate", err)
-		return err
-	}
-	return nil
-}
-
-// placeholderLocalPath 把云端相对路径映射到同步根下的本地路径。
-//
-// 三道闸：同步根必须已挂载；路径不能是绝对路径、不能含 `..` 段；
-// 拼接后的结果必须仍在同步根内。占位符操作是对真实文件系统下手，
-// 一个越界的路径就是删/钉用户磁盘上的别的文件。
-func (a *App) placeholderLocalPath(key string) (string, error) {
-	root := a.CfapiMountPath()
-	if root == "" {
-		return "", fmt.Errorf("本地挂载未启用")
-	}
-	if key == "" || strings.HasPrefix(key, "/") || filepath.IsAbs(key) {
-		return "", fmt.Errorf("非法路径：%s", key)
-	}
-	for _, seg := range strings.Split(key, "/") {
-		if seg == ".." {
-			return "", fmt.Errorf("非法路径：%s", key)
+		a.cfapi.mu.Lock()
+		err := a.cfapi.lastError
+		a.cfapi.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("云空间未挂载: %w", err)
 		}
+		return fmt.Errorf("云空间未挂载，请确认登录、空间权限及服务器目录能力")
 	}
-	path := filepath.Join(root, filepath.FromSlash(key))
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", err
+	// 使用已注册的此电脑入口；文件系统路径被 Explorer 参数解析后可能误落到文档目录。
+	return fsutil.OpenShellLocation("shell:::" + namespace.PersonalCLSID())
+}
+
+// CloudKeepOnDevice 与 CloudFreeUpSpace 保留新版公开接口，但不绕过上传确认和挂载世代。
+func (a *App) CloudKeepOnDevice(key string) error { return a.applyNativeCache(key, true) }
+func (a *App) CloudFreeUpSpace(key string) error  { return a.applyNativeCache(key, false) }
+
+func (a *App) applyNativeCache(key string, keep bool) error {
+	if key == "" || strings.ContainsAny(key, "\\:\x00") || filepath.IsAbs(key) || filepath.ToSlash(filepath.Clean(key)) != key || key == "." || key == ".." || strings.HasPrefix(key, "../") {
+		return fmt.Errorf("云文件路径无效")
 	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
+	a.cfapi.mu.Lock()
+	defer a.cfapi.mu.Unlock()
+	if a.cfapi.personal == nil || a.cfapi.cacheApply == nil || a.cfapi.lifetime == nil {
+		return fmt.Errorf("云空间未连接，不能修改缓存状态")
 	}
-	rel, err := filepath.Rel(absRoot, absPath)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("路径越过同步根：%s", key)
+	ctx, cancel := context.WithTimeout(a.cfapi.lifetime.ctx, 60*time.Second)
+	defer cancel()
+	return a.cfapi.cacheApply(ctx, a.cfapi.personal, key, keep)
+}
+
+func (a *App) nativeDropAvailable(space string) error {
+	if space != drive.SpacePersonal {
+		return fmt.Errorf("共享云盘尚未支持安全挂载，请在主窗口使用共享空间")
 	}
-	return absPath, nil
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	a.cfapi.mu.Lock()
+	defer a.cfapi.mu.Unlock()
+	if session == nil || a.cfapi.session != session || a.cfapi.personal == nil || a.cfapi.lifetime == nil || a.cfapi.lifetime.ctx.Err() != nil {
+		return fmt.Errorf("云盘尚未连接，请等待此电脑入口就绪")
+	}
+	return nil
 }
