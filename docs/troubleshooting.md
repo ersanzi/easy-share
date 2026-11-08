@@ -22,7 +22,20 @@ Windows 可按 `Win + R` 粘贴对应路径；macOS 可在 Finder 使用“前�
 
 ## 2. 「此电脑」入口打不开或内容为空
 
-EasyShare 不再映射盘符。「此电脑」入口直接委托到 WebDAV UNC：局域网共享 `\\127.0.0.1@19080\DavWWWRoot`（Core 常驻）；云端空间盘登录后由桌面端挂载——个人盘 19082、共享盘 19083（未登录/未分配容量时不出现）。双击打不开或显示为空时，按顺序检查：
+### Windows 个人CFAPI实验入口
+
+这条路径不依赖 WebDAV UNC。先确认配套双程序、账号/配额和服务端目录迁移，再看 `desktop.log` 的能力探测及CFAPI连接结果。具体协议与测试见 [windows-cloud-primary.md](windows-cloud-primary.md)。
+
+- 缺 `/capabilities`、数据库 `directory` 列或协议不匹配时必须停止发布入口，不能手工造本地目录或退回UNC冒充服务器接入。
+- 点击悬浮窗“打开”应进入同一 `namespace.PersonalCLSID()` 注册入口；落到文档目录不算成功。
+- 重启主窗仍在登录页但后台已登录，检查 `auth:restored` 与初查时序；入口刚出现又消失，检查旧入口清理是否发生在会话恢复之后。
+- 悬浮拖入需开启 WebView2 Controller 外部drop；状态回写必须由窗口线程执行，不能在上传工作线程直接调用 COM/Eval。
+- 对未水合/冲突/未上传文件的保护告警不能用删除pending、注销同步根、盲目重建目录消除。保存原文件、状态和日志后再诊断。
+- 真实验收必须从“此电脑”点击进入，在根目录新建/粘贴/拖入，独立从服务器回读；仅namespace注册或API测试成功不足以验收。
+
+### 旧WebDAV入口、局域网或非Windows通路
+
+以下排查只适用于原有WebDAV路径，不适用于上述Windows个人CFAPI。EasyShare不映射固定盘符：局域网服务默认 `\\127.0.0.1@19080\DavWWWRoot`；非Windows云空间保留个人19082、共享19083服务。双击打不开或显示为空时，按顺序检查：
 
 1. 确认正在运行的是最新的 `easyshare.exe` 和配套的 `easyshare-core.exe`，且 `core.log` 出现 WebDAV ready；空间盘还需要已登录（`desktop.log` 有 `space mount: N 个空间已挂载`）。
 2. 确认端口在监听（共享盘 19080 恒应监听；19082/19083 仅登录后）：
