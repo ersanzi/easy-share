@@ -61,6 +61,14 @@ public class EsFile extends BaseEntity {
     /** 文件名（路径末段，列表展示用，免得每处都切一遍） */
     private String fileName;
 
+    /** 目录是数据库持久化实体，不对应对象存储 marker；历史行默认为文件。 */
+    private Boolean directory;
+
+    // 非 JavaBean helper：Boolean getDirectory() 是唯一属性 getter，避免 MyBatis 与 primitive is getter 冲突。
+    public boolean directoryEntry() {
+        return Boolean.TRUE.equals(directory);
+    }
+
     /** 最近一次登记的字节数 */
     private Long fileSize;
 

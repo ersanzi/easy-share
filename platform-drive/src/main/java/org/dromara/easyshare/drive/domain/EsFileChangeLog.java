@@ -61,4 +61,7 @@ public class EsFileChangeLog extends BaseEntity {
 
     /** moved 的源路径；其他事件为空 */
     private String oldPath;
+
+    /** 事件发生时的类型快照，删除后仍可用于增量合并。 */
+    private Boolean directory;
 }

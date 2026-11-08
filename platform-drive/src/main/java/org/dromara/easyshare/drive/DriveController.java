@@ -29,6 +29,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -84,6 +85,30 @@ public class DriveController {
     /** 版本历史 */
     private final org.dromara.easyshare.drive.service.FileVersionService versionService;
 
+    /** 创建数据库目录；沿用个人空间配额初始化和共享空间写权限。 */
+    @PostMapping("/directories")
+    public R<FileVo> createDirectory(@Validated @RequestBody DirectoryBo body) {
+        Long userId = LoginHelper.getUserId();
+        String space = body.space() == null || body.space().isBlank() ? EsSpace.TYPE_PERSONAL : body.space();
+        if (!EsSpace.TYPE_PERSONAL.equals(space) && !EsSpace.TYPE_SHARED.equals(space)) {
+            throw new org.dromara.common.core.exception.ServiceException("未知空间类型");
+        }
+        String prefix = EsSpace.TYPE_SHARED.equals(space)
+            ? spaceService.checkSharedWritable(userId, 0L)
+            : spaceService.checkPersonalWritable(userId, 0L);
+        Long ownerId = ownerIdOf(space, userId);
+        // 先补账存量对象，避免把实际文件误认为可用目录路径。
+        fileService.list(space, ownerId, userId, storage.listWithDirs(prefix).stream()
+            .filter(object -> !object.path().startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
+            .toList());
+        EsFile row = fileService.createDirectory(space, ownerId, userId, body.path());
+        return R.ok(new FileVo(row.getFilePath(), 0L, toInstant(row.getCreateTime()),
+            row.getFileId(), row.getVersionId(), null, toInstant(row.getCreateTime()), null, true));
+    }
+
+    public record DirectoryBo(@NotBlank String path, String space) {
+    }
+
     /**
      * 列举指定空间内的文件。默认个人空间。响应按 es_file 目录层回填稳定 fileId
      * （目录层上线前的存量对象在首次列举时惰性补账，自愈归账）。
@@ -106,7 +131,8 @@ public class DriveController {
         // 查库 → 藏掉软删 → 回填 fileId（KI-10）。三步的配套关系是正确性的一部分，
         // 故收在 DriveFileService.list 里一次做完，控制器不再自己串。
         // 版本快照（.versions/）必须先剔掉：它是实现细节，不是用户文件。
-        List<DriveObject> raw = (includeDirs ? storage.listWithDirs(prefix) : storage.listAt(prefix))
+        // 旧marker同样参与目录身份迁移；includeDirs只控制旧客户端的尾斜杠展示。
+        List<DriveObject> raw = storage.listWithDirs(prefix)
             .stream()
             .filter(object -> !object.path()
                 .startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
@@ -125,7 +151,13 @@ public class DriveController {
         Map<String, EsFile> activeRows = listing.activeByPath();
         Map<Long, String> uploaderNames = uploaderNamesOf(activeRows);
         return R.ok(objects.stream()
-            .map(object -> toFileVo(object, listing, activeRows, uploaderNames))
+            .map(object -> {
+                FileVo file = toFileVo(object, listing, activeRows, uploaderNames);
+                return includeDirs && file.directory()
+                    ? new FileVo(file.path() + "/", file.size(), file.lastModified(), file.fileId(),
+                        file.versionId(), file.contentMd5(), file.createdAt(), file.uploadByName(), true)
+                    : file;
+            })
             .toList());
     }
 
@@ -148,7 +180,8 @@ public class DriveController {
             listing.versions().get(object.path()),
             row == null ? null : row.getContentMd5(),
             row == null ? null : toInstant(row.getCreateTime()),
-            row == null ? null : uploaderNames.get(row.getUploadBy()));
+            row == null || row.getUploadBy() == null ? null : uploaderNames.get(row.getUploadBy()),
+            row != null && row.directoryEntry());
     }
 
     /**
@@ -208,7 +241,7 @@ public class DriveController {
         long newest = changeLogService.currentVersion(space, ownerId);
         if (sinceVersion == null) {
             DriveFileService.Listing listing = fileService.list(
-                space, ownerId, userId, storage.listAt(prefix).stream()
+                space, ownerId, userId, storage.listWithDirs(prefix).stream()
                     .filter(object -> !object.path()
                         .startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR))
                     .toList());
@@ -225,7 +258,8 @@ public class DriveController {
             // 全量重建意味着客户端即将拿到完整列表：老日志从此无人需要，顺手裁剪
             // （切片 2 的日志回收；失败不影响列举）
             changeLogService.trim(changeLogTrimKeep);
-            return R.ok(new ChangesVo(newest, null, full, null));
+            // 列表可能刚把旧marker认领为持久目录；返回完成后的空间版本作为增量游标。
+            return R.ok(new ChangesVo(changeLogService.currentVersion(space, ownerId), null, full, null));
         }
         List<ChangeVo> changes = changeLogService.changesAfter(space, ownerId, sinceVersion)
             .stream()
@@ -237,7 +271,8 @@ public class DriveController {
                     log.getSpaceVersion(), log.getEventType(), log.getFileId(),
                     log.getFilePath(), log.getOldPath(),
                     file == null ? 0L : file.getFileSize(),
-                    file == null ? null : file.getCreateTime());
+                    file == null ? null : file.getCreateTime(),
+                    Boolean.TRUE.equals(log.getDirectory()));
             })
             .toList();
         return R.ok(new ChangesVo(newest, sinceVersion, null, changes));
@@ -260,6 +295,7 @@ public class DriveController {
      * @return 预签名 URL（秒传命中时 url 为 null、deduped=true）
      */
     @PostMapping("/presign-put")
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public R<PresignVo> presignPut(@Validated @RequestBody PutBo body) {
         Long userId = LoginHelper.getUserId();
         long size = body.size() == null ? 0L : body.size();
@@ -270,23 +306,39 @@ public class DriveController {
             : spaceService.checkPersonalWritable(userId, size);
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
-        // 覆盖前留档：客户端直传会在「拿 URL」与「登记」之间覆盖对象，
-        // 控制面只有这一刻能抢救旧内容（服务端 copyObject，不耗客户端带宽）
-        versionService.snapshot(userId, space, ownerId, prefix,
-            DriveKeys.normalizeRelative(body.path()));
-        // 秒传判定先于登记：命中时字节路径整段跳过，哈希随登记一并落行
+        String path = DriveKeys.normalizeRelative(body.path());
+        EsFile current = fileService.lockActiveForPresign(space, ownerId, path);
+        boolean unfinishedRetry = sameUnfinishedUpload(current, userId, size, body.expectedVersion(), body.contentMd5())
+            && storage.metadataAt(prefix, path) == null;
+        if (unfinishedRetry) {
+            // 上次只登记了同一份上传意图；不复制不存在的旧对象、不重复推进版本。
+            // 仍校验既有版本、目录类型与祖先；行锁保持到本事务签发完成。
+            fileService.assertVersion(space, ownerId, path, current.getVersionId());
+        } else {
+            fileService.assertVersion(space, ownerId, path, body.expectedVersion());
+            versionService.snapshot(userId, space, ownerId, prefix, path);
+        }
+        // 数据库哈希只是候选；确认真实对象大小和单请求 ETag 后才允许秒传。
+        EsFile source = null;
         if (body.contentMd5() != null && !body.contentMd5().isBlank()) {
-            EsFile source = fileService.findByContentHash(space, ownerId, body.contentMd5());
-            if (source != null && !source.getFilePath().equals(DriveKeys.normalizeRelative(body.path()))) {
-                fileService.registerOnPresign(space, ownerId, userId, body.path(), size,
-                    body.expectedVersion(), body.contentMd5());
-                storage.copyAt(prefix, source.getFilePath(), DriveKeys.normalizeRelative(body.path()));
-                usageService.invalidate(prefix);
-                return R.ok(new PresignVo(null, body.path(), true));
+            EsFile candidate = fileService.findByContentHash(space, ownerId, body.contentMd5());
+            if (candidate != null && !candidate.directoryEntry() && !candidate.getFilePath().equals(path)) {
+                DriveStorage.ObjectMetadata metadata = storage.metadataAt(prefix, candidate.getFilePath());
+                if (metadata != null && metadata.matches(size, body.contentMd5())) {
+                    source = candidate;
+                }
             }
         }
-        fileService.registerOnPresign(space, ownerId, userId, body.path(), size,
-            body.expectedVersion(), body.contentMd5());
+        if (!unfinishedRetry) {
+            fileService.registerOnPresign(space, ownerId, userId, path, size,
+                body.expectedVersion(), body.contentMd5());
+        }
+        if (source != null) {
+            // 若 Copy 期间源消失或出错，事务回滚本次登记，不留下假成功/新幽灵版本。
+            storage.copyAt(prefix, source.getFilePath(), path);
+            usageService.invalidate(prefix);
+            return R.ok(new PresignVo(null, path, true));
+        }
         // 上传声明可见范围（可选，仅共享空间语义）：登记后立即写入目录层
         if (body.visibleDepts() != null && !body.visibleDepts().isEmpty()
             && EsSpace.TYPE_SHARED.equals(space)) {
@@ -294,6 +346,17 @@ public class DriveController {
                 userId, body.path(), body.visibleDepts());
         }
         return R.ok(new PresignVo(storage.presignPutAt(prefix, body.path()), body.path(), false));
+    }
+
+    // 仅恢复同一上传者的精确意图；不同内容、空哈希、其他版本绝不借缺对象绕过 CAS。
+    static boolean sameUnfinishedUpload(EsFile row, Long userId, long size, Long expectedVersion, String md5) {
+        return row != null && !row.directoryEntry() && EsFile.STATE_ACTIVE.equals(row.getState())
+            && Objects.equals(row.getUploadBy(), userId)
+            && expectedVersion != null && expectedVersion >= 0 && expectedVersion < Long.MAX_VALUE
+            && Objects.equals(row.getVersionId(), expectedVersion + 1L)
+            && size >= 0 && Objects.equals(row.getFileSize(), size)
+            && DriveFileService.MD5_RELIABLE_CLIENT.equals(row.getMd5Reliable())
+            && md5 != null && md5.matches("(?i)[0-9a-f]{32}") && md5.equalsIgnoreCase(row.getContentMd5());
     }
 
     /**
@@ -334,18 +397,22 @@ public class DriveController {
             ? spaceService.checkSharedWritable(userId, 0L)
             : DriveKeys.userPrefix(userId);
         Long ownerId = ownerIdOf(body.space(), userId);
-        // 目录标记对象的 path 带尾斜杠（"photos/"）。normalizeRelative 拒绝尾斜杠，
-        // 故先剥掉再走解析；是否目录记下来，删对象时要补回斜杠拼对键。
+        // 兼容旧接口的尾斜杠，并按数据库类型识别新目录；始终先以fileId校验归属。
         boolean isDir = body.path() != null && body.path().endsWith("/");
         String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(),
             isDir ? body.path().replaceAll("/+$", "") : body.path());
-        if (isDir && body.fileId() == null && Boolean.TRUE.equals(body.recursive())) {
-            // 递归删：先软删子树里的每个文件行（对象保留、可还原），再清掉整棵
-            // 目录标记。顺序不能反——反了中途失败会留下「标记没了但文件还在」的孤儿。
+        EsFile target = fileService.activeAt(body.space(), ownerId, path);
+        isDir = target != null ? target.directoryEntry() : isDir;
+        if (isDir && Boolean.TRUE.equals(body.recursive())) {
+            // 先按深度软删子项和目录实体，再清旧marker；文件正文保留用于回收站还原。
             fileService.recycleSubtree(body.space(), ownerId, path);
             storage.deleteDirectoryTree(prefix, path);
             usageService.invalidate(prefix);
             return R.ok();
+        }
+        if (target != null && target.directoryEntry()
+            && storage.listAt(prefix).stream().anyMatch(object -> object.path().startsWith(path + "/"))) {
+            throw new org.dromara.common.core.exception.ServiceException("目录非空，请先处理子项");
         }
         // 软删（P1 回收站）：RustFS 对象保留，目录行置 recycled + 原路径快照。
         // 还原时同键复位，无需搬对象；彻底删除走 /recycle/purge 才真删对象。
@@ -360,6 +427,9 @@ public class DriveController {
             } else {
                 storage.deleteAt(prefix, path);
             }
+        } else if (isDir) {
+            // 持久目录软删后清掉可能遗留的旧marker；文件正文仍只由purge释放。
+            storage.deleteDirectory(prefix, path);
         }
         usageService.invalidate(prefix);
         return R.ok();
@@ -423,16 +493,9 @@ public class DriveController {
      */
     @PostMapping("/mkdir")
     public R<MkdirVo> mkdir(@Validated @RequestBody MkdirBo body) {
-        Long userId = LoginHelper.getUserId();
-        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
-        String prefix = shared
-            ? spaceService.checkSharedWritable(userId, 0L)
-            : DriveKeys.userPrefix(userId);
-        // normalizeRelative 会拒绝空串、首尾斜杠、. / .. 段与控制字符——
-        // 调用方传什么就原样校验，不在这里另写一套规则
-        String relative = DriveKeys.normalizeRelative(body.path());
-        storage.createDirectory(prefix, relative);
-        return R.ok(new MkdirVo(relative + "/"));
+        // 保留旧API响应尾斜杠，内部与CFAPI共用持久目录和冲突校验，不再只建marker。
+        FileVo directory = createDirectory(new DirectoryBo(body.path(), body.space())).getData();
+        return R.ok(new MkdirVo(directory.path() + "/"));
     }
 
     /**
@@ -955,7 +1018,7 @@ public class DriveController {
      * @param uploadByName 上传者显示名（nickName 优先，退回 userName）；未知为 null
      */
     public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId,
-                         String contentMd5, Instant createdAt, String uploadByName) {
+                         String contentMd5, Instant createdAt, String uploadByName, boolean directory) {
     }
 
     /**
@@ -981,7 +1044,7 @@ public class DriveController {
      */
     public record ChangeVo(long spaceVersion, String event, Long fileId,
                            String path, String oldPath, long size,
-                           java.time.LocalDateTime lastModified) {
+                           java.time.LocalDateTime lastModified, boolean directory) {
     }
 
     /**

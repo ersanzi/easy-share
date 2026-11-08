@@ -45,6 +45,67 @@ public class DriveFileService {
     private final EsFileMapper fileMapper;
     private final DriveChangeLogService changeLog;
 
+    /** 目录存在性由数据库维护，与文件共用空间内唯一路径与稳定身份。 */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
+    public EsFile createDirectory(String spaceType, Long ownerId, Long userId, String rawPath) {
+        String path = DriveKeys.normalizeRelative(rawPath);
+        assertAncestors(spaceType, ownerId, path);
+        EsFile existing = selectActiveByPath(spaceType, ownerId, path);
+        if (existing != null) {
+            if (!existing.directoryEntry()) {
+                throw new ServiceException("该位置已有同名文件");
+            }
+            return existing;
+        }
+        EsFile row = new EsFile();
+        row.setSpaceType(spaceType);
+        row.setOwnerId(ownerId);
+        row.setUploadBy(userId);
+        row.setFilePath(path);
+        row.setFileName(fileNameOf(path));
+        row.setFileSize(0L);
+        row.setDirectory(true);
+        row.setState(EsFile.STATE_ACTIVE);
+        row.setVersionId(1L);
+        fileMapper.insert(row);
+        changeLog.record(spaceType, ownerId, EsFileChangeLog.EVENT_CREATED, row,
+            row.getFileId(), path, null);
+        return row;
+    }
+
+    /** 缺失父路径兼容历史隐式目录，但文件不能充当父目录。 */
+    private void assertAncestors(String spaceType, Long ownerId, String path) {
+        for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+            EsFile parent = selectActiveByPath(spaceType, ownerId, path.substring(0, slash));
+            if (parent != null && !parent.directoryEntry()) {
+                throw new ServiceException("父路径是文件，不能创建子项");
+            }
+        }
+    }
+
+    public EsFile activeAt(String spaceType, Long ownerId, String path) {
+        return selectActiveByPath(spaceType, ownerId, DriveKeys.normalizeRelative(path));
+    }
+
+    /** 预签上传事务锁定既有行，避免缺对象重试在检查后被另一版本抢占。 */
+    public EsFile lockActiveForPresign(String spaceType, Long ownerId, String path) {
+        return fileMapper.selectOne(new LambdaQueryWrapper<EsFile>()
+            .eq(EsFile::getSpaceType, spaceType)
+            .eq(EsFile::getOwnerId, ownerId)
+            .eq(EsFile::getFilePath, DriveKeys.normalizeRelative(path))
+            .eq(EsFile::getState, EsFile.STATE_ACTIVE)
+            .last("limit 1 for update"));
+    }
+
+    /** 最小安全语义：不支持非空目录递归删除/移动，避免孤立子树。 */
+    private void assertEmptyDirectory(String spaceType, Long ownerId, EsFile row) {
+        if (row.directoryEntry() && rowsInSpace(spaceType, ownerId).stream()
+            .anyMatch(child -> EsFile.STATE_ACTIVE.equals(normalizedState(child))
+                && child.getFilePath().startsWith(row.getFilePath() + "/"))) {
+            throw new ServiceException("目录非空，请先处理子项");
+        }
+    }
+
     /**
      * **只校验、不登记**：确认调用方看到的版本与服务端当前版本一致。
      *
@@ -60,11 +121,15 @@ public class DriveFileService {
      * @param expectedVersion 调用方看到的版本；null = 不校验（向后兼容）
      */
     public void assertVersion(String spaceType, Long ownerId, String relativePath, Long expectedVersion) {
-        if (expectedVersion == null) {
-            return; // 旧调用方：行为与引入 CAS 之前一致
-        }
         String path = DriveKeys.normalizeRelative(relativePath);
+        assertAncestors(spaceType, ownerId, path);
         EsFile existing = selectActiveByPath(spaceType, ownerId, path);
+        if (existing != null && existing.directoryEntry()) {
+            throw new ServiceException("该位置是目录，不能上传文件");
+        }
+        if (expectedVersion == null) {
+            return; // 旧调用方不校验版本，但仍必须校验目录类型与祖先。
+        }
         if (existing == null) {
             if (expectedVersion > 0L) {
                 throw new ServiceException(
@@ -127,7 +192,11 @@ public class DriveFileService {
                                   String relativePath, long declaredSize, Long expectedVersion,
                                   String contentMd5) {
         String path = DriveKeys.normalizeRelative(relativePath);
+        assertAncestors(spaceType, ownerId, path);
         EsFile existing = selectActiveByPath(spaceType, ownerId, path);
+        if (existing != null && existing.directoryEntry()) {
+            throw new ServiceException("该位置是目录，不能上传文件");
+        }
         if (existing == null) {
             // 调用方以为文件已存在（带了 >0 的期望版本），但目录层里没有——
             // 说明它看到的那份已经被删掉了。这是冲突，不是新建。
@@ -228,9 +297,60 @@ public class DriveFileService {
      * @param objects 存储列举的原始结果（含回收站对象——软删不动 RustFS 对象）
      * @return 过滤 + 回填后的完整结果
      */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public Listing list(String spaceType, Long ownerId, Long uploadBy, List<DriveObject> objects) {
         ListView view = listView(spaceType, ownerId);
-        List<DriveObject> visible = hideDeleted(objects, view);
+        Set<String> ordinaryPaths = new HashSet<>();
+        objects.stream().filter(object -> !object.path().endsWith("/"))
+            .map(object -> normalizedOrNull(object.path())).filter(Objects::nonNull)
+            .forEach(ordinaryPaths::add);
+        // 同一存储位置若同时有文件和marker，先拒绝，不能把实际文件认领成目录。
+        for (DriveObject object : objects) {
+            if (!object.path().endsWith("/")) {
+                continue;
+            }
+            String path = normalizedOrNull(object.path().replaceAll("/+$", ""));
+            if (path == null || view.hiddenPaths().contains(path)) {
+                continue;
+            }
+            if (ordinaryPaths.contains(path)) {
+                throw new ServiceException("目录标记与同名文件冲突");
+            }
+            for (int slash = path.indexOf('/'); slash >= 0; slash = path.indexOf('/', slash + 1)) {
+                if (ordinaryPaths.contains(path.substring(0, slash))) {
+                    throw new ServiceException("父路径是文件，不能创建子项");
+                }
+            }
+        }
+        // 把旧零字节目录marker接入稳定目录身份，避免新挂载把它误当无fileId文件。
+        List<DriveObject> files = new ArrayList<>(objects.size());
+        for (DriveObject object : objects) {
+            if (!object.path().endsWith("/")) {
+                files.add(object);
+                continue;
+            }
+            String path = normalizedOrNull(object.path().replaceAll("/+$", ""));
+            if (path == null || view.hiddenPaths().contains(path)) {
+                continue;
+            }
+            EsFile directory = view.activeByPath().get(path);
+            if (directory == null) {
+                directory = createDirectory(spaceType, ownerId, uploadBy, path);
+                view.activeByPath().put(path, directory);
+            } else if (!directory.directoryEntry()) {
+                throw new ServiceException("目录标记与同名文件冲突");
+            }
+        }
+        List<DriveObject> visible = hideDeleted(files, view);
+        // 空目录以数据库为真相源；新旧目录同路径只输出一次。
+        Set<String> paths = new HashSet<>();
+        visible.forEach(object -> paths.add(object.path()));
+        view.activeByPath().forEach((path, row) -> {
+            if (row.directoryEntry() && paths.add(path)) {
+                visible.add(new DriveObject(path, 0L, row.getCreateTime() == null ? null
+                    : row.getCreateTime().atZone(java.time.ZoneId.systemDefault()).toInstant()));
+            }
+        });
         Map<String, Long> fileIds = reconcileAndMap(spaceType, ownerId, uploadBy, visible, view);
         // 版本号一并透出：客户端下次写同一路径时要把它带回来做 CAS 校验
         // （路线图切片 1）。不给出的话客户端无从知道「我看到的是哪一版」。
@@ -404,40 +524,38 @@ public class DriveFileService {
         if (row == null) {
             return null;
         }
+        assertEmptyDirectory(spaceType, ownerId, row);
         return markRowRecycled(spaceType, ownerId, row);
     }
 
     /**
-     * 递归软删一个目录的子树（对标钉盘 {@code deleteDentry} 的子树语义）：
-     * 目录内每个在用文件各自进回收站，对象保留、按 {@code origin_path} 逐个还原。
-     *
-     * <p>目录本身**不建行**——与 mkdir 同口径（目录没有内容哈希、版本与上传者，
-     * 补一行只会污染秒传判定）。目录标记对象由
-     * {@link DriveStorage#deleteDirectoryTree} 直接删；子文件还原后目录会按路径段
-     * 重新推导出来，不依赖标记对象复活。
-     *
-     * <p>扫描条件刻意带 {@code state IS NULL}：读侧把存量 NULL 行当在用
-     * （{@code normalizedState}），漏了它们就会出现「文件夹删了、里面的文件还在」。
-     *
-     * @param dirPath 目录相对路径，不含首尾斜杠（调用方剥掉尾斜杠再传）
-     * @return 进入回收站的文件数
+     * 显式递归软删目录及其子项，保留普通文件对象；最深层先执行以满足数据库非空保护。
+     * 旧marker没有目录行时也能软删其子文件。查询继续包含历史NULL状态，
+     * 再以规范路径精确过滤，避免SQL LIKE中的通配符匹配到别的目录。
      */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public int recycleSubtree(String spaceType, Long ownerId, String dirPath) {
         String normalized = DriveKeys.normalizeRelative(dirPath);
-        List<EsFile> rows = fileMapper.selectList(new LambdaQueryWrapper<EsFile>()
+        List<EsFile> rows = new ArrayList<>(fileMapper.selectList(new LambdaQueryWrapper<EsFile>()
             .eq(EsFile::getSpaceType, spaceType)
             .eq(EsFile::getOwnerId, ownerId)
             .and(w -> w.eq(EsFile::getState, EsFile.STATE_ACTIVE).or().isNull(EsFile::getState))
-            .likeRight(EsFile::getFilePath, normalized + "/"));
+            .likeRight(EsFile::getFilePath, normalized + "/")));
+        EsFile directory = selectActiveByPath(spaceType, ownerId, normalized);
+        if (directory != null && directory.directoryEntry()) {
+            rows.add(directory);
+        }
+        rows.removeIf(row -> !EsFile.STATE_ACTIVE.equals(normalizedState(row))
+            || !(row.getFilePath().startsWith(normalized + "/")
+                || row.directoryEntry() && row.getFilePath().equals(normalized)));
+        rows.sort(java.util.Comparator.comparingInt((EsFile row) -> row.getFilePath().length()).reversed());
         for (EsFile row : rows) {
             markRowRecycled(spaceType, ownerId, row);
         }
         return rows.size();
     }
 
-    /**
-     * 把一条在用行置进回收站（单文件与子树递归共用同一次状态迁移）。
-     */
+    /** 把一条已校验的在用行置进回收站；递归调用已保证子项先处理。 */
     private EsFile markRowRecycled(String spaceType, Long ownerId, EsFile row) {
         // 显式置 state：列上线前的存量行在库里是 NULL，置 recycled 必须先落成 active，
         // 否则 MyBatis-Plus 默认忽略 NULL 字段，行会带 NULL state 进回收站
@@ -472,6 +590,7 @@ public class DriveFileService {
      */
     public EsFile restoreFromRecycle(String spaceType, Long ownerId, Long fileId) {
         EsFile row = recycledOwned(spaceType, ownerId, fileId);
+        assertAncestors(spaceType, ownerId, row.getFilePath());
         String origin = row.getOriginPath() != null && !row.getOriginPath().isBlank()
             ? row.getOriginPath() : row.getFilePath();
         if (selectActiveByPath(spaceType, ownerId, origin) != null) {
@@ -524,9 +643,9 @@ public class DriveFileService {
             .eq(EsFile::getFilePath, row.getFilePath())
             .ne(EsFile::getFileId, row.getFileId()));
         fileMapper.deleteById(row.getFileId());
-        changeLog.record(spaceType, ownerId, EsFileChangeLog.EVENT_PURGED, null,
+        changeLog.record(spaceType, ownerId, EsFileChangeLog.EVENT_PURGED, row,
             row.getFileId(), null, null);
-        return new PurgeResult(row, !referencedByOthers);
+        return new PurgeResult(row, !row.directoryEntry() && !referencedByOthers);
     }
 
     /**
@@ -643,6 +762,9 @@ public class DriveFileService {
         // ① 有 active 行：直接按它判可见性
         EsFile active = selectActiveByPath(spaceType, ownerId, normalized);
         if (active != null) {
+            if (active.directoryEntry()) {
+                throw new ServiceException("目录不能下载");
+            }
             if (EsSpace.TYPE_SHARED.equals(spaceType)
                 && !sharedRowVisible(active, viewerDeptId, viewerUserId)) {
                 throw new ServiceException("文件不存在或无权访问");
@@ -677,6 +799,11 @@ public class DriveFileService {
         if (row == null) {
             return null;
         }
+        assertEmptyDirectory(spaceType, ownerId, row);
+        if (to.startsWith(from + "/")) {
+            throw new ServiceException("不能移动到自身子目录");
+        }
+        assertAncestors(spaceType, ownerId, to);
         EsFile occupied = selectActiveByPath(spaceType, ownerId, to);
         if (occupied != null && !Objects.equals(occupied.getFileId(), row.getFileId())) {
             throw new ServiceException("目标位置已有同名文件，未覆盖");
@@ -817,6 +944,7 @@ public class DriveFileService {
         row.setFilePath(path);
         row.setFileName(fileNameOf(path));
         row.setFileSize(Math.max(0L, size));
+        row.setDirectory(false);
         if (contentMd5 != null && !contentMd5.isBlank()) {
             row.setContentMd5(contentMd5);
             row.setMd5Reliable(MD5_RELIABLE_CLIENT);
@@ -837,6 +965,11 @@ public class DriveFileService {
         } catch (DuplicateKeyException ex) {
             EsFile existing = selectActiveByPath(spaceType, ownerId, path);
             if (existing != null) {
+                // 初次查询后目录可能抢先占位；唯一键冲突不代表可上传的文件已存在。
+                // 所有上传重载和分片 complete 共用此入口，必须在回退时再次校验类型。
+                if (existing.directoryEntry()) {
+                    throw new ServiceException("该位置是目录，不能上传文件");
+                }
                 return existing;
             }
             throw ex;

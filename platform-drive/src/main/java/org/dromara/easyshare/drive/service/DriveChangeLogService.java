@@ -89,6 +89,7 @@ public class DriveChangeLogService {
         entry.setFileId(fileId);
         entry.setFilePath(newPath);
         entry.setOldPath(oldPath);
+        entry.setDirectory(row != null && row.directoryEntry());
         logMapper.insert(entry);
     }
 

@@ -10,7 +10,8 @@
 # 用法（仓库根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\ship-control-plane.ps1 -SshTarget root@192.168.1.10
 #   快速重发（不重新构建）：加 -SkipBuild
-#   跳过商城上架：加 -SkipMarketSeed；控制面账号非默认时传 -MarketUsername / -MarketPassword
+#   上架口令从 EASYSHARE_MARKET_PASSWORD 环境变量读取，或显式传 -MarketPassword；不维护固定默认口令
+#   跳过商城上架：加 -SkipMarketSeed；控制面账号非默认时传 -MarketUsername
 #   SshTarget 用的是 ssh 配置别名（开发机直连不到 IP）时，显式传 -MarketUrl http://<可达地址>:<端口>
 param(
     [Parameter(Mandatory = $true)][string]$SshTarget,   # user@host
@@ -19,12 +20,15 @@ param(
     [int]$ControlPort = 8090,                           # 宿主机暴露端口（容器内固定 8090；服务器 8090 被占时用 8091）
     [string]$MarketUrl = "",                            # 上架用的控制面地址；留空按 SshTarget 主机 + ControlPort 推导
     [string]$MarketUsername = "admin",
-    [string]$MarketPassword = "admin123",
+    [string]$MarketPassword = $env:EASYSHARE_MARKET_PASSWORD,
     [switch]$SkipBuild,
     [switch]$SkipMarketSeed
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $SkipMarketSeed -and [string]::IsNullOrWhiteSpace($MarketPassword)) {
+    throw "上架需要本机注入 EASYSHARE_MARKET_PASSWORD 或 -MarketPassword；仅投递控制面可用 -SkipMarketSeed"
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $jarLocal = Join-Path $repoRoot "platform\ruoyi-admin\target\ruoyi-admin.jar"
 $cpRemote = "$ServerDir/control-plane"
@@ -73,7 +77,7 @@ $easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-v
     "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql",
     "easyshare-content-hash.sql", "easyshare-incremental-list.sql",
     "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql",
-    "easyshare-client-session.sql")
+    "easyshare-client-session.sql", "easyshare-directory.sql")
 foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }
@@ -95,7 +99,7 @@ if ($hasSchema -eq "yes") {
         if ($LASTEXITCODE -ne 0) { Write-Fail "灌入 $f 失败"; exit 1 }
         Write-Ok "$f"
     }
-    Write-Ok "基础表完成（默认账号 admin/admin123，上线后尽快在客户端管理页改密）"
+    Write-Ok "基础表完成（上线前立即修改默认账号口令）"
 }
 # EasyShare 业务表全部 IF NOT EXISTS：每次都重放，存量库自动补增量表
 foreach ($f in $easyshareSql) {
