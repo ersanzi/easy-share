@@ -82,6 +82,10 @@ const accountInitial = computed(() => {
   const name = user.value?.nickName || user.value?.userName || ''
   return name ? Array.from(name)[0] : '我'
 })
+// 未加载完按全开渲染，避免设置页首帧把整块卡片抖没
+const features = computed(() => user.value?.features ?? {
+  knowledge: true, meeting: true, drive: true, shared: true, plugin: true,
+})
 const personalSpace = computed(() => spaces.value.find(s => s.spaceType === 'personal') ?? null)
 const sharedSpace = computed(() => spaces.value.find(s => s.spaceType === 'shared') ?? null)
 const personalUsage = computed(() => {
@@ -97,6 +101,96 @@ const sharedUsage = computed(() => {
   const perm = s.permission === 'owner' ? '所有者' : s.permission === 'write' ? '可写' : s.permission === 'read' ? '只读' : '未授权'
   return `已用 ${formatBytes(s.usedBytes)} · ${perm}`
 })
+
+// ─── 资料编辑：昵称 / 头像 / 密码 ───
+const nickName = ref('')
+const profileBusy = ref<'' | 'nick' | 'avatar' | 'password'>('')
+const profileNotice = ref('')
+const profileError = ref('')
+const passwordOpen = ref(false)
+const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
+
+const errorText = (value: unknown) => value instanceof Error ? value.message : String(value)
+const applyUser = (next: AuthUser) => {
+  user.value = next
+  nickName.value = next.nickName || ''
+}
+const clearProfileFeedback = () => {
+  profileError.value = ''
+  profileNotice.value = ''
+}
+
+const saveNickName = async () => {
+  const value = nickName.value.trim()
+  if (!value) { profileError.value = '昵称不能为空'; return }
+  if (value === (user.value?.nickName || '')) { profileNotice.value = '昵称未发生变化'; return }
+  clearProfileFeedback()
+  profileBusy.value = 'nick'
+  try {
+    applyUser(await core.updateNickName(value))
+    profileNotice.value = '昵称已更新'
+  } catch (e) {
+    profileError.value = errorText(e)
+  } finally {
+    profileBusy.value = ''
+  }
+}
+
+const changeAvatar = async () => {
+  clearProfileFeedback()
+  const before = user.value?.avatar || ''
+  profileBusy.value = 'avatar'
+  try {
+    const next = await core.uploadAvatar()
+    applyUser(next)
+    // 取消选择时 Go 端原样返回当前登录态，不能提示「已更新」
+    if ((next.avatar || '') !== before) profileNotice.value = '头像已更新'
+  } catch (e) {
+    profileError.value = errorText(e)
+  } finally {
+    profileBusy.value = ''
+  }
+}
+
+const removeAvatar = async () => {
+  if (!await confirm({ title: '移除头像', message: '移除后显示昵称首字，可随时重新上传。', confirmText: '移除' })) return
+  clearProfileFeedback()
+  profileBusy.value = 'avatar'
+  try {
+    applyUser(await core.removeAvatar())
+    profileNotice.value = '头像已移除'
+  } catch (e) {
+    profileError.value = errorText(e)
+  } finally {
+    profileBusy.value = ''
+  }
+}
+
+const openPassword = () => {
+  clearProfileFeedback()
+  passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+  passwordOpen.value = true
+}
+const closePassword = () => { passwordOpen.value = false }
+
+const submitPassword = async () => {
+  const { oldPassword, newPassword, confirmPassword } = passwordForm.value
+  if (!oldPassword || !newPassword) { profileError.value = '请填写当前密码与新密码'; return }
+  if (newPassword.length < 5 || newPassword.length > 20) { profileError.value = '新密码长度需为 5–20 位'; return }
+  if (newPassword !== confirmPassword) { profileError.value = '两次输入的新密码不一致'; return }
+  clearProfileFeedback()
+  profileBusy.value = 'password'
+  try {
+    await core.changePassword(oldPassword, newPassword)
+    passwordOpen.value = false
+    passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+    profileNotice.value = '密码已修改，下次登录请使用新密码'
+  } catch (e) {
+    profileError.value = errorText(e)
+  } finally {
+    profileBusy.value = ''
+  }
+}
 
 const load = async () => {
   try {
@@ -252,7 +346,14 @@ const regenerateMcp = async () => {
 onMounted(async () => {
   load()
   try { appVersion.value = await core.appVersion() } catch { appVersion.value = '' }
-  try { user.value = await core.currentUser() } catch { user.value = null }
+  try {
+    user.value = await core.currentUser()
+    nickName.value = user.value?.nickName || ''
+  } catch { user.value = null }
+  // 控制面可能在别处改过资料/权限：后台拉一次最新态，失败保持本地缓存
+  void core.refreshProfile()
+    .then(next => applyUser(next))
+    .catch(() => undefined)
   try {
     spaces.value = await core.mySpaces()
   } catch (e) {
@@ -317,8 +418,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 共享空间 -->
-      <div class="card settings-card">
+      <!-- 共享空间（由控制面权限控制，关掉网盘时一并隐藏） -->
+      <div v-if="features.drive && features.shared" class="card settings-card">
         <div class="card-header">
           <h2>共享空间</h2>
         </div>
@@ -334,8 +435,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 插件 -->
-      <div class="card settings-card">
+      <!-- 插件（插件中心被关闭时整块隐藏） -->
+      <div v-if="features.plugin" class="card settings-card">
         <div class="card-header">
           <h2>插件</h2>
           <button class="secondary-button compact" type="button" :disabled="pluginBusy === 'install'" @click="installFromZip">
@@ -388,21 +489,75 @@ onBeforeUnmount(() => {
         </div>
         <div class="settings-body">
           <div class="settings-account">
-            <span class="settings-account-avatar" aria-hidden="true">{{ accountInitial }}</span>
+            <span class="settings-account-avatar" aria-hidden="true">
+              <img v-if="user?.avatar" :src="user.avatar" alt="">
+              <template v-else>{{ accountInitial }}</template>
+            </span>
             <div class="settings-account-meta">
               <strong>{{ user?.nickName || user?.userName || '…' }}</strong>
               <span class="setting-hint">@{{ user?.userName || '…' }}<template v-if="user?.isAdmin"> · 管理员</template></span>
             </div>
             <button class="secondary-button danger compact" type="button" @click="emit('logout')">退出登录</button>
           </div>
+
+          <div class="setting-row">
+            <label class="setting-label" for="profileNickName">昵称</label>
+            <p class="setting-hint">同事在共享空间与成员列表里看到的名字</p>
+            <div class="setting-path">
+              <input
+                id="profileNickName"
+                v-model="nickName"
+                class="setting-input"
+                type="text"
+                maxlength="30"
+                placeholder="请输入昵称"
+                @keyup.enter="saveNickName"
+              />
+              <button class="secondary-button compact" type="button" :disabled="profileBusy === 'nick'" @click="saveNickName">
+                {{ profileBusy === 'nick' ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label class="setting-label">头像</label>
+            <p class="setting-hint">PNG / JPG / GIF / WebP，不超过 2MB</p>
+            <div class="profile-actions">
+              <button class="secondary-button compact" type="button" :disabled="profileBusy === 'avatar'" @click="changeAvatar">
+                {{ profileBusy === 'avatar' ? '处理中…' : '更换头像' }}
+              </button>
+              <button v-if="user?.avatar" class="text-button" type="button" :disabled="profileBusy === 'avatar'" @click="removeAvatar">移除</button>
+            </div>
+          </div>
+
+          <div class="setting-row">
+            <label class="setting-label">登录密码</label>
+            <p class="setting-hint">修改后请用新密码重新登录其他设备</p>
+            <button v-if="!passwordOpen" class="secondary-button compact" type="button" @click="openPassword">修改密码</button>
+            <div v-else class="password-form">
+              <input v-model="passwordForm.oldPassword" class="setting-input" type="password" placeholder="当前密码" autocomplete="current-password" />
+              <input v-model="passwordForm.newPassword" class="setting-input" type="password" placeholder="新密码（5–20 位）" autocomplete="new-password" />
+              <input v-model="passwordForm.confirmPassword" class="setting-input" type="password" placeholder="再次输入新密码" autocomplete="new-password" @keyup.enter="submitPassword" />
+              <div class="profile-actions">
+                <button class="primary-button compact" type="button" :disabled="profileBusy === 'password'" @click="submitPassword">
+                  {{ profileBusy === 'password' ? '提交中…' : '确认修改' }}
+                </button>
+                <button class="secondary-button compact" type="button" :disabled="profileBusy === 'password'" @click="closePassword">取消</button>
+              </div>
+            </div>
+          </div>
+
+          <p v-if="profileError" class="update-error profile-feedback" role="alert">{{ profileError }}</p>
+          <p v-else-if="profileNotice" class="profile-notice" role="status">{{ profileNotice }}</p>
+
           <div v-if="spacesError" class="setting-row">
             <p class="update-error">空间信息读取失败：{{ spacesError }}</p>
           </div>
-          <div v-if="personalSpace" class="setting-row">
+          <div v-if="features.drive && personalSpace" class="setting-row">
             <label class="setting-label">个人网盘</label>
             <p class="setting-hint">{{ personalUsage }} · 挂载在「此电脑」</p>
           </div>
-          <div v-if="sharedSpace" class="setting-row">
+          <div v-if="features.drive && features.shared && sharedSpace" class="setting-row">
             <label class="setting-label">共享空间</label>
             <p class="setting-hint">{{ sharedUsage }}</p>
           </div>

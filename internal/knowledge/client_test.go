@@ -32,6 +32,16 @@ func fakeKnowledgeServer(t *testing.T, token string) *httptest.Server {
 			"token": token, "username": "alice", "role": "member", "expires_at": "2026-12-31T00:00:00Z",
 		})
 	})
+	mux.HandleFunc("GET /auth/me", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+token {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(writer).Encode(map[string]string{"detail": "未登录或令牌无效"})
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"username": "alice", "role": "member", "dept": "10"})
+	})
 	mux.HandleFunc("POST /query", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer "+token {
 			writer.Header().Set("Content-Type", "application/json")
@@ -125,6 +135,9 @@ func TestClientLoginAndQuery(t *testing.T) {
 	if session.Token != "tok-1" || session.Username != "alice" || session.Role != "member" {
 		t.Fatalf("session = %+v", session)
 	}
+	if session.Mode != ModePassword {
+		t.Fatalf("session mode = %q", session.Mode)
+	}
 
 	answer, err := client.Query(context.Background(), "tok-1", "出差住宿标准")
 	if err != nil {
@@ -132,6 +145,27 @@ func TestClientLoginAndQuery(t *testing.T) {
 	}
 	if answer.Answer != "每晚四百元" || len(answer.Contexts) != 1 || answer.Contexts[0].Text == "" {
 		t.Fatalf("answer = %+v", answer)
+	}
+}
+
+// Me 是 SSO 探测：控制面令牌能读到身份，才说明知识服务已接入统一登录。
+func TestClientMeProbesControlPlaneToken(t *testing.T) {
+	remote := fakeKnowledgeServer(t, "cp-token-1")
+	defer remote.Close()
+	client := NewClient(remote.URL)
+
+	user, err := client.Me(context.Background(), "cp-token-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.Username != "alice" || user.Role != "member" {
+		t.Fatalf("user = %+v", user)
+	}
+
+	_, err = client.Me(context.Background(), "stale-token")
+	remoteErr, ok := err.(*RemoteError)
+	if !ok || remoteErr.Status != http.StatusUnauthorized {
+		t.Fatalf("me error = %#v", err)
 	}
 }
 

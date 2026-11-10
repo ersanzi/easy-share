@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
+import { isLoopbackURL } from '../utils/net'
 import KnowledgeDocumentList from './KnowledgeDocumentList.vue'
 import KnowledgeReader from './KnowledgeReader.vue'
 import type {
@@ -25,7 +27,7 @@ interface ChatMessage {
   failed?: boolean
 }
 
-const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '' })
+const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '', mode: '' })
 const health = ref<KnowledgeHealth | null>(null)
 const statusLoading = ref(true)
 
@@ -76,6 +78,11 @@ const useSuggestion = (question: string) => {
 }
 
 const llmLabel = computed(() => health.value?.llm === 'configured' ? 'AI 生成已启用' : health.value?.llm === 'absent' ? '未配置 AI（仅检索）' : '')
+// 公司部署下本机地址一定是残留配置：标注出来，别让员工以为自己连着公司知识库
+const serverIsLoopback = computed(() => isLoopbackURL(status.value.serverUrl))
+// 统一登录：知识会话随客户端账号走，不提供「退出知识服务」（退出客户端账号即失效）
+const ssoSession = computed(() => status.value.mode === 'sso')
+const accountLoggedIn = computed(() => Boolean(app.currentUser.value.userName))
 
 const refreshStatus = async () => {
   try {
@@ -85,6 +92,12 @@ const refreshStatus = async () => {
   } finally {
     statusLoading.value = false
   }
+}
+
+// 控制面下发的地址变了 → 宿主已失效旧会话，立刻回登录表单并说明原因
+const onTargetChanged = () => {
+  loginError.value = '知识服务地址已由管理员更新，请重新登录'
+  void refreshStatus()
 }
 
 const probeHealth = async () => {
@@ -97,6 +110,14 @@ const probeHealth = async () => {
   } catch {
     health.value = null
   }
+}
+
+// 宿主用客户端账号自动登录知识服务（或随账号登出清掉会话）后广播此事件：
+// 无需员工再输密码，页面自己切到已登录态。
+const onSessionChanged = async () => {
+  await refreshStatus()
+  if (status.value.loggedIn) loginError.value = ''
+  await probeHealth()
 }
 
 // 已配置过服务器地址时回填登录表单
@@ -297,8 +318,12 @@ const openDocument = (doc: KnowledgeDocumentSummary) => {
 }
 
 onBeforeUnmount(clearDocumentPoll)
+onBeforeUnmount(() => EventsOff('knowledge:target-changed'))
+onBeforeUnmount(() => EventsOff('knowledge:session-changed'))
 
 const onMountedPrefill = async () => {
+  EventsOn('knowledge:target-changed', onTargetChanged)
+  EventsOn('knowledge:session-changed', onSessionChanged)
   await refreshStatus()
   await probeHealth()
   // 未配置过服务器时自动填好：服务地址来自登录后下发的服务拓扑（控制面登记，
@@ -337,6 +362,9 @@ onMounted(onMountedPrefill)
       <div class="card-header">
         <h2>连接公司知识服务器</h2>
       </div>
+      <p v-if="accountLoggedIn" class="knowledge-login-hint">
+        会先用客户端账号自动登录知识服务；仍要求输密码，可能是知识服务未接入统一登录，或客户端登录已过期（退出后重新登录即可）。
+      </p>
       <form class="knowledge-login-form" @submit.prevent="submitLogin">
         <div class="setting-row">
           <label class="setting-label" for="knowledgeServer">服务器地址</label>
@@ -386,9 +414,19 @@ onMounted(onMountedPrefill)
           <span class="knowledge-chat-server">{{ status.serverUrl }}</span>
         </div>
         <div class="knowledge-chat-badges">
+          <span
+            v-if="ssoSession"
+            class="knowledge-badge"
+            title="已随客户端账号自动登录；退出客户端账号后知识会话一并失效"
+          >统一登录</span>
+          <span
+            v-if="serverIsLoopback"
+            class="knowledge-badge"
+            title="当前连的是本机回环地址，公司部署下连不到知识服务：请联系管理员获取公司地址后重新登录"
+          >本机地址</span>
           <span v-if="health" class="knowledge-badge" :title="`${health.records} 个索引块`">{{ health.documents ?? '—' }} 份文档</span>
           <span v-if="llmLabel" class="knowledge-badge">{{ llmLabel }}</span>
-          <button class="text-button" type="button" @click="logout">退出登录</button>
+          <button v-if="!ssoSession" class="text-button" type="button" @click="logout">退出登录</button>
         </div>
       </div>
 

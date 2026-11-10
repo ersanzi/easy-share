@@ -2,11 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { useConfirm } from '../composables/useConfirm'
-import { QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminSharedMember, type Capacity, type KnowledgeStats, type ManagedUser, type Space } from '../types/core'
+import { ADMIN_SCOPE_LABELS, QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminMember, type AdminRole, type AdminSharedMember, type AuthUser, type Capacity, type FeatureFlags, type FileMemberRole, type KnowledgeStats, type ManagedUser, type SharedFileEntry, type Space } from '../types/core'
 
-type Tab = 'overview' | 'accounts' | 'spaces'
+type Tab = 'overview' | 'accounts' | 'spaces' | 'permissions'
 
 const tab = ref<Tab>('accounts')
+// 管理范围来自控制面：超管（RuoYi superadmin）看全部标签页；
+// 子管理员（任一管理范围档位）只有「权限」页，成员由服务端按范围档位裁剪。
+const currentUser = ref<AuthUser | null>(null)
+const isSuper = computed(() => currentUser.value?.isAdmin === true)
 const users = ref<ManagedUser[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -33,6 +37,76 @@ const sharedMembers = ref<AdminSharedMember[]>([])
 const depts = ref<AdminDept[]>([])
 const deptForm = ref<{ deptId: string; permission: string }>({ deptId: '', permission: 'read' })
 const spacesLoading = ref(false)
+
+// ═══ 文件访问角色（企业权限第三片）═══
+// 按 fileId 给账号/部门配四档角色；整组替换保存。
+// 护栏在服务端（不能修改自己的角色、仅 manage 档可授权），前端只做可用的编辑器。
+const sharedFiles = ref<SharedFileEntry[]>([])
+const memberFileId = ref('')
+const memberRows = ref<FileMemberRole[]>([])
+const memberLoading = ref(false)
+const memberBusy = ref(false)
+const memberAdd = ref<{ memberType: 'user' | 'dept'; memberId: string; role: FileMemberRole['role'] }>({
+  memberType: 'user', memberId: '', role: 'read',
+})
+const FILE_ROLE_LABELS: Record<FileMemberRole['role'], string> = {
+  manage: '可管理（含授权/删除）',
+  edit: '可编辑（无删除）',
+  download: '可查看下载',
+  read: '仅可查看',
+}
+
+const loadSharedFiles = async () => {
+  try { sharedFiles.value = (await core.sharedFileList()) ?? [] } catch (e) { fail(e) }
+}
+
+const memberFileName = computed(() =>
+  sharedFiles.value.find(f => f.fileId === memberFileId.value)?.name ?? '')
+
+// 成员行展示名：账号取昵称（回退登录名），部门取部门名；查不到按 ID 兜底
+const memberLabel = (row: FileMemberRole) => {
+  const name = row.memberType === 'user'
+    ? users.value.find(u => u.userId === row.memberId)?.nickName
+      || users.value.find(u => u.userId === row.memberId)?.userName
+    : depts.value.find(d => d.deptId === row.memberId)?.deptName
+  return name || `#${row.memberId}`
+}
+
+const pickMemberFile = async (fileId: string) => {
+  memberFileId.value = fileId
+  memberRows.value = []
+  if (!fileId) return
+  memberLoading.value = true
+  try { memberRows.value = (await core.fileMemberList(fileId)) ?? [] } catch (e) { fail(e) } finally { memberLoading.value = false }
+}
+
+const addMemberRow = () => {
+  if (!memberAdd.value.memberId) return
+  const dup = memberRows.value.some(m =>
+    m.memberType === memberAdd.value.memberType && m.memberId === memberAdd.value.memberId)
+  if (dup) { fail(new Error('该成员已有角色行，直接改档位即可')); return }
+  memberRows.value = [...memberRows.value, { ...memberAdd.value }]
+  memberAdd.value = { memberType: 'user', memberId: '', role: 'read' }
+}
+
+const removeMemberRow = (row: FileMemberRole) => {
+  memberRows.value = memberRows.value.filter(m =>
+    !(m.memberType === row.memberType && m.memberId === row.memberId))
+}
+
+const saveMemberRows = async () => {
+  if (!memberFileId.value) return
+  memberBusy.value = true
+  try {
+    await core.fileMemberReplace(memberFileId.value, memberRows.value)
+    notify(`已保存「${memberFileName.value}」的成员角色（${memberRows.value.length} 条）`)
+    await pickMemberFile(memberFileId.value)
+  } catch (e) {
+    fail(e)
+  } finally {
+    memberBusy.value = false
+  }
+}
 // 每个账号的配额输入框各自的草稿值（GB），键是 userId；共享空间用 'shared'。
 // 值可能是 number：Vue 的 v-model 对 <input type="number"> 会自动做数字转换，
 // 清空输入框时又会给回空串，所以两种类型都要接。
@@ -95,6 +169,8 @@ const loadOverview = async () => {
 
 const loadSpaces = async () => {
   spacesLoading.value = true
+  // 文件访问角色卡的文件列表并行刷（失败不阻塞空间页其余数据）
+  void loadSharedFiles()
   try {
     const [list, members, cap, deptList] = await Promise.all([
       core.adminListSpaces(),
@@ -414,7 +490,206 @@ const initial = (user: ManagedUser) => {
   return name ? Array.from(name)[0] : '?'
 }
 
-onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig(); void loadAiConfig(); void loadSpaces() })
+onMounted(async () => {
+  try { currentUser.value = await core.currentUser() } catch { currentUser.value = null }
+  if (isSuper.value) {
+    void load()
+    void loadRegisterSwitch()
+    void loadServiceConfig()
+    void loadAiConfig()
+    void loadSpaces()
+  } else {
+    // 子管理员只有权限矩阵；账号/空间接口在控制面按超管拒绝，不能一进来就去撞
+    tab.value = 'permissions'
+  }
+  // 权限矩阵按需加载：旧版控制面没有 /admin/members，超管停在账号页时不该先报一次错
+  if (tab.value === 'permissions') {
+    void loadPermissions()
+    void loadRoles()
+  }
+})
+// ═══ 权限：角色组 + 成员矩阵 ═══
+// 角色把五项开关打包给一批人，成员挂了角色就按角色裁决（服务端取并集），逐账号开关不再生效；
+// 没有角色的成员沿用逐账号矩阵，「缺行 = 全开」。子管理员只能看/改本部门成员的逐账号开关，
+// 角色本身跨部门，只有超管能增删改与分配。
+type FeatureKey = 'knowledge' | 'meeting' | 'drive' | 'shared' | 'plugin'
+const featureLabels: { key: FeatureKey; label: string }[] = [
+  { key: 'knowledge', label: '知识问答' },
+  { key: 'meeting', label: '会议听记' },
+  { key: 'drive', label: '网盘' },
+  { key: 'shared', label: '共享空间' },
+  { key: 'plugin', label: '插件中心' },
+]
+interface PermissionRow {
+  member: AdminMember
+  flags: FeatureFlags
+  dirty: boolean
+}
+const permissionRows = ref<PermissionRow[]>([])
+const permissionLoading = ref(false)
+const permissionBusy = ref('')
+const roles = ref<AdminRole[]>([])
+// 每个成员的角色勾选草稿（键 userId）；保存后才回写服务端
+const roleDraft = ref<Record<string, string[]>>({})
+const roleForm = ref<AdminRole | null>(null)
+const roleBusy = ref(false)
+
+// 管理范围档位：none 是普通权限组，其余档位授子管理员入口（成员范围由服务端裁剪）
+const scopeOptions = [
+  { value: 'none', label: '普通权限组' },
+  { value: 'dept', label: '子管理员 · 本部门' },
+  { value: 'dept_children', label: '子管理员 · 本部门及下级' },
+  { value: 'specified', label: '子管理员 · 指定部门' },
+  { value: 'all', label: '子管理员 · 全部成员' },
+] as const
+
+const emptyRole = (): AdminRole => ({
+  roleName: '', adminScope: 'none', scopeDeptIds: [],
+  knowledge: true, meeting: true, drive: true, shared: true, plugin: true,
+})
+
+// specified 档的部门勾选草稿；保存前至少要勾一个，否则不给提交
+const roleDeptEmpty = computed(() =>
+  roleForm.value?.adminScope === 'specified' && !(roleForm.value.scopeDeptIds ?? []).length)
+
+const toggleScopeDept = (deptId: string, checked: boolean) => {
+  if (!roleForm.value) return
+  const current = roleForm.value.scopeDeptIds ?? []
+  roleForm.value.scopeDeptIds = checked
+    ? Array.from(new Set([...current, deptId]))
+    : current.filter(id => id !== deptId)
+}
+
+const loadPermissions = async () => {
+  permissionLoading.value = true
+  try {
+    const list = (await core.adminPermissionMembers()) ?? []
+    permissionRows.value = list.map(member => ({
+      member,
+      flags: {
+        userId: member.userId,
+        knowledge: member.knowledge,
+        meeting: member.meeting,
+        drive: member.drive,
+        shared: member.shared,
+        plugin: member.plugin,
+      },
+      dirty: false,
+    }))
+    const drafts: Record<string, string[]> = {}
+    for (const member of list) drafts[member.userId] = [...(member.roleIds ?? [])]
+    roleDraft.value = drafts
+  } catch (e) {
+    fail(e)
+  } finally {
+    permissionLoading.value = false
+  }
+}
+
+const loadRoles = async () => {
+  if (!isSuper.value) return
+  try { roles.value = (await core.adminPermissionRoles()) ?? [] } catch (e) { fail(e) }
+}
+
+const openPermissions = () => {
+  tab.value = 'permissions'
+  void loadPermissions()
+  void loadRoles()
+  // 角色表单的「指定部门」勾选要用部门树；超管才看得到角色卡，提前拉好
+  if (isSuper.value && !depts.value.length) {
+    core.adminListDepts().then(list => { depts.value = list ?? [] }).catch(() => {})
+  }
+}
+
+const roleDriven = (row: PermissionRow) => (row.member.roleIds ?? []).length > 0
+
+const toggleFeature = (row: PermissionRow, key: FeatureKey) => {
+  if (roleDriven(row)) return
+  row.flags = { ...row.flags, [key]: !row.flags[key] }
+  row.dirty = true
+}
+
+const savePermissions = async (row: PermissionRow) => {
+  permissionBusy.value = row.member.userId
+  try {
+    await core.adminSavePermissions({ ...row.flags, userId: row.member.userId })
+    row.dirty = false
+    notify(`已保存 ${row.member.nickName || row.member.userName} 的功能权限`)
+  } catch (e) {
+    fail(e)
+  } finally {
+    permissionBusy.value = ''
+  }
+}
+
+const saveMemberRoles = async (row: PermissionRow) => {
+  permissionBusy.value = row.member.userId
+  try {
+    await core.adminAssignRoles(row.member.userId, roleDraft.value[row.member.userId] ?? [])
+    notify(`已更新 ${row.member.nickName || row.member.userName} 的角色`)
+    await loadPermissions()
+  } catch (e) {
+    fail(e)
+  } finally {
+    permissionBusy.value = ''
+  }
+}
+
+const toggleRoleDraft = (row: PermissionRow, roleId: string, checked: boolean) => {
+  const current = roleDraft.value[row.member.userId] ?? []
+  roleDraft.value[row.member.userId] = checked
+    ? Array.from(new Set([...current, roleId]))
+    : current.filter(id => id !== roleId)
+}
+
+const startRoleForm = (role?: AdminRole) => {
+  roleForm.value = role ? { ...role } : emptyRole()
+}
+
+const saveRole = async () => {
+  if (!roleForm.value) return
+  roleBusy.value = true
+  try {
+    const name = roleForm.value.roleName
+    // 范围部门列表只在 specified 档携带；其余档位清掉，避免上次编辑的残留误存
+    const draft = { ...roleForm.value }
+    if (draft.adminScope !== 'specified') {
+      delete draft.scopeDeptIds
+    }
+    await core.adminSavePermissionRole(draft)
+    roleForm.value = null
+    notify(`角色「${name}」已保存`)
+    await Promise.all([loadRoles(), loadPermissions()])
+  } catch (e) {
+    fail(e)
+  } finally {
+    roleBusy.value = false
+  }
+}
+
+const removeRole = async (role: AdminRole) => {
+  if (!role.roleId) return
+  const confirmed = await confirm({
+    title: '删除角色',
+    message: `删除角色「${role.roleName}」？只挂这一个角色的成员会保留当前权限（转为逐账号配置），不会被放大成全开。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
+  try {
+    await core.adminDeletePermissionRole(role.roleId)
+    notify(`角色「${role.roleName}」已删除`)
+    await Promise.all([loadRoles(), loadPermissions()])
+  } catch (e) {
+    fail(e)
+  }
+}
+
+const roleSummary = (role: AdminRole) => {
+  const enabled = featureLabels.filter(f => role[f.key]).map(f => f.label)
+  return enabled.length ? enabled.join(' · ') : '五项全关'
+}
+
 </script>
 
 <template>
@@ -423,24 +698,32 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig
       <div>
         <span class="section-label">管理</span>
         <h1>账号与空间</h1>
-        <p>开设账号、分配空间大小，控制共享空间的访问权限。</p>
+        <p>{{ isSuper ? '开设账号、分配空间大小，控制共享空间的访问权限。' : '管理本部门成员的功能权限。' }}</p>
       </div>
       <div class="admin-tabs" role="tablist">
         <button
+          v-if="isSuper"
           :class="['admin-tab', tab === 'overview' ? 'active' : '']"
           type="button" role="tab" :aria-selected="tab === 'overview'"
           @click="tab = 'overview'"
         >概览</button>
         <button
+          v-if="isSuper"
           :class="['admin-tab', tab === 'accounts' ? 'active' : '']"
           type="button" role="tab" :aria-selected="tab === 'accounts'"
           @click="tab = 'accounts'"
         >账号</button>
         <button
+          v-if="isSuper"
           :class="['admin-tab', tab === 'spaces' ? 'active' : '']"
           type="button" role="tab" :aria-selected="tab === 'spaces'"
           @click="tab = 'spaces'"
         >空间</button>
+        <button
+          :class="['admin-tab', tab === 'permissions' ? 'active' : '']"
+          type="button" role="tab" :aria-selected="tab === 'permissions'"
+          @click="openPermissions"
+        >权限</button>
       </div>
     </header>
 
@@ -725,6 +1008,96 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig
         </p>
       </section>
 
+      <!--
+        文件访问角色（企业权限第三片）。按 fileId 给账号/部门配四档角色，
+        服务端在下载/删除/改名/覆盖上传六处真实拦截；未配角色的文件保持默认行为。
+      -->
+      <section class="card">
+        <header class="card-header">
+          <div>
+            <span class="section-label">文件访问角色</span>
+            <h2>按文件给成员配权限</h2>
+          </div>
+          <div class="card-actions">
+            <button class="secondary-button compact" type="button" :disabled="memberLoading" @click="void loadSharedFiles()">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
+              刷新文件
+            </button>
+          </div>
+        </header>
+        <p class="setting-hint perm-hint">
+          四档：可管理（含授权/删除）&gt; 可编辑 &gt; 可查看下载 &gt; 仅可查看。
+          删除是可管理独占；未出现在下方列表的文件按默认规则生效（空间可写成员全权）。
+          服务端护栏：不能修改自己的角色。
+        </p>
+        <div class="role-field">
+          <span>选择文件</span>
+          <select :value="memberFileId" @change="void pickMemberFile(($event.target as HTMLSelectElement).value)">
+            <option value="">— 选择共享空间文件 —</option>
+            <option v-for="f in sharedFiles.filter(f => f.fileId && f.fileId !== '0')" :key="f.fileId" :value="f.fileId">
+              {{ f.name }}{{ f.uploadByName ? `（上传者 ${f.uploadByName}）` : '' }}
+            </option>
+          </select>
+        </div>
+        <template v-if="memberFileId">
+          <div v-if="memberLoading" class="admin-empty">正在读取成员角色…</div>
+          <div v-else-if="!memberRows.length" class="admin-empty">还没有显式成员角色，此文件按默认规则生效。</div>
+          <div v-else class="role-list">
+            <div v-for="row in memberRows" :key="row.memberType + row.memberId" class="role-row">
+              <div class="role-main">
+                <strong>{{ memberLabel(row) }}</strong>
+                <span class="role-tag">{{ row.memberType === 'user' ? '账号' : '部门' }}</span>
+                <span class="role-meta">{{ FILE_ROLE_LABELS[row.role] }}</span>
+              </div>
+              <div class="role-actions">
+                <select
+                  class="role-select" :value="row.role" :aria-label="`${memberLabel(row)} 的角色`"
+                  @change="row.role = ($event.target as HTMLSelectElement).value as FileMemberRole['role']"
+                >
+                  <option v-for="(label, value) in FILE_ROLE_LABELS" :key="value" :value="value">{{ label }}</option>
+                </select>
+                <button class="secondary-button compact" type="button" @click="removeMemberRow(row)">移除</button>
+              </div>
+            </div>
+          </div>
+          <div class="role-form">
+            <label class="role-field">
+              <span>主体类型</span>
+              <select v-model="memberAdd.memberType">
+                <option value="user">账号</option>
+                <option value="dept">部门</option>
+              </select>
+            </label>
+            <label class="role-field">
+              <span>成员</span>
+              <select v-model="memberAdd.memberId">
+                <option value="">— 选择 —</option>
+                <template v-if="memberAdd.memberType === 'user'">
+                  <option v-for="u in users.filter(u => u.userId !== currentUser?.userId)" :key="u.userId" :value="u.userId">
+                    {{ u.nickName || u.userName }}
+                  </option>
+                </template>
+                <template v-else>
+                  <option v-for="d in depts" :key="d.deptId" :value="d.deptId">{{ d.deptName }}</option>
+                </template>
+              </select>
+            </label>
+            <label class="role-field">
+              <span>角色</span>
+              <select v-model="memberAdd.role">
+                <option v-for="(label, value) in FILE_ROLE_LABELS" :key="value" :value="value">{{ label }}</option>
+              </select>
+            </label>
+            <div class="role-form-actions">
+              <button class="secondary-button compact" type="button" :disabled="!memberAdd.memberId" @click="addMemberRow">添加行</button>
+              <button class="primary-button compact" type="button" :disabled="memberBusy || !memberRows.length" @click="void saveMemberRows()">
+                {{ memberBusy ? '保存中…' : '保存成员角色' }}
+              </button>
+            </div>
+          </div>
+        </template>
+      </section>
+
       <section class="card">
         <header class="card-header">
           <div>
@@ -853,6 +1226,159 @@ onMounted(() => { void load(); void loadRegisterSwitch(); void loadServiceConfig
           <p class="setting-hint">
             部门授权对该部门全部成员生效；账号的显式授权与部门授权取宽（读写优先于只读）。
           </p>
+        </div>
+      </section>
+    </template>
+
+    <!-- ═══ 权限：角色组 + 成员矩阵 ═══ -->
+    <template v-if="tab === 'permissions'">
+      <section v-if="isSuper" class="card">
+        <header class="card-header">
+          <div>
+            <span class="section-label">权限角色</span>
+            <h2>一批人共用一套权限</h2>
+          </div>
+          <div class="card-actions">
+            <button class="secondary-button compact" type="button" @click="startRoleForm()">新建角色</button>
+          </div>
+        </header>
+        <p class="setting-hint perm-hint">
+          成员挂了角色就按角色裁决，多个角色取并集；已挂角色的成员不再看逐账号开关。
+          角色可设为「子管理员」：该成员能进入本页，按管理范围看到、修改范围内成员的功能权限
+          （本部门 / 含下级 / 指定部门 / 全部成员）。
+        </p>
+        <div v-if="roleForm" class="role-form">
+          <label class="role-field">
+            <span>角色名</span>
+            <input v-model="roleForm.roleName" type="text" maxlength="64" placeholder="如：车间主管、只读成员" />
+          </label>
+          <label class="role-field">
+            <span>管理范围</span>
+            <select v-model="roleForm.adminScope">
+              <option v-for="opt in scopeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </label>
+          <div v-if="roleForm.adminScope === 'specified'" class="role-field role-dept-field">
+            <span>指定部门（至少勾选一个）</span>
+            <div class="role-dept-list">
+              <label v-for="dept in depts" :key="dept.deptId">
+                <input
+                  type="checkbox" :value="dept.deptId"
+                  :checked="(roleForm.scopeDeptIds ?? []).includes(dept.deptId)"
+                  @change="toggleScopeDept(dept.deptId, ($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ dept.deptName }}</span>
+              </label>
+              <div v-if="!depts.length" class="admin-empty">部门列表为空或尚未加载</div>
+            </div>
+          </div>
+          <div class="role-flags">
+            <div v-for="f in featureLabels" :key="f.key" class="role-flag">
+              <button
+                :class="['admin-toggle', roleForm[f.key] ? 'on' : '']"
+                type="button" role="switch" :aria-checked="roleForm[f.key]"
+                :aria-label="`${f.label}：${roleForm[f.key] ? '开启' : '关闭'}`"
+                @click="roleForm[f.key] = !roleForm[f.key]"
+              ><i /></button>
+              <span>{{ f.label }}</span>
+            </div>
+          </div>
+          <div class="role-form-actions">
+            <button class="secondary-button compact" type="button" :disabled="roleBusy" @click="roleForm = null">取消</button>
+            <button
+              class="primary-button compact" type="button"
+              :disabled="roleBusy || !roleForm.roleName.trim() || roleDeptEmpty" @click="saveRole"
+            >
+              {{ roleBusy ? '保存中…' : '保存角色' }}
+            </button>
+          </div>
+        </div>
+        <div v-if="!roles.length" class="admin-empty">还没有角色。成员按下方逐账号开关生效。</div>
+        <div v-else class="role-list">
+          <div v-for="role in roles" :key="role.roleId" class="role-row">
+            <div class="role-main">
+              <strong>{{ role.roleName }}</strong>
+              <span v-if="role.adminScope !== 'none'" class="role-tag">{{ ADMIN_SCOPE_LABELS[role.adminScope] }}</span>
+              <span class="role-meta">{{ roleSummary(role) }} · {{ role.memberCount || 0 }} 人</span>
+            </div>
+            <div class="role-actions">
+              <button class="secondary-button compact" type="button" @click="startRoleForm(role)">编辑</button>
+              <button class="secondary-button compact" type="button" @click="removeRole(role)">删除</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card perm-card">
+        <header class="card-header">
+          <div>
+            <span class="section-label">成员权限</span>
+            <h2>{{ isSuper ? '每个成员能用哪些功能' : '本部门成员的功能权限' }}</h2>
+          </div>
+          <div class="card-actions">
+            <button class="secondary-button compact" type="button" :disabled="permissionLoading" @click="openPermissions">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
+              刷新
+            </button>
+          </div>
+        </header>
+        <p class="setting-hint perm-hint">
+          关闭后客户端隐藏入口，控制面与知识服务同时拒绝——不是只藏按钮。
+          关闭「网盘」时共享空间一并停用。挂了角色的成员由角色决定，开关在这里只读。
+        </p>
+        <div v-if="permissionLoading && !permissionRows.length" class="admin-empty">正在读取权限…</div>
+        <div v-else-if="!permissionRows.length" class="admin-empty">本范围内暂无成员。</div>
+        <div v-else class="perm-table">
+          <div class="perm-row perm-head" aria-hidden="true">
+            <span>成员</span>
+            <span>角色</span>
+            <span v-for="f in featureLabels" :key="f.key">{{ f.label }}</span>
+            <span></span>
+          </div>
+          <div v-for="row in permissionRows" :key="row.member.userId" class="perm-row">
+            <div class="perm-user">
+              <strong>
+                {{ row.member.nickName || row.member.userName }}
+                <span v-if="row.member.adminScope !== 'none'" class="role-tag">{{ ADMIN_SCOPE_LABELS[row.member.adminScope] }}</span>
+                <span v-if="row.member.status === '1'" class="role-tag muted">停用</span>
+              </strong>
+              <span>{{ row.member.userName }}<template v-if="row.member.deptName"> · {{ row.member.deptName }}</template></span>
+            </div>
+            <div class="perm-role-cell">
+              <details v-if="isSuper" class="perm-role-details">
+                <summary>{{ row.member.roleNames?.length ? row.member.roleNames.join('、') : '未分配' }}</summary>
+                <div class="perm-role-menu">
+                  <label v-for="role in roles" :key="role.roleId">
+                    <input
+                      type="checkbox" :value="role.roleId"
+                      :checked="(roleDraft[row.member.userId] ?? []).includes(role.roleId ?? '')"
+                      @change="toggleRoleDraft(row, role.roleId ?? '', ($event.target as HTMLInputElement).checked)"
+                    />
+                    <span>{{ role.roleName }}</span>
+                  </label>
+                  <button class="secondary-button compact" type="button" :disabled="permissionBusy === row.member.userId" @click="saveMemberRoles(row)">保存角色</button>
+                </div>
+              </details>
+              <span v-else class="perm-role-static">{{ row.member.roleNames?.length ? row.member.roleNames.join('、') : '未分配' }}</span>
+            </div>
+            <span v-for="f in featureLabels" :key="f.key" class="perm-cell">
+              <button
+                :class="['admin-toggle', row.flags[f.key] ? 'on' : '']"
+                type="button" role="switch" :aria-checked="row.flags[f.key]"
+                :aria-label="`${f.label}：${row.flags[f.key] ? '开启' : '关闭'}`"
+                :title="roleDriven(row) ? `由角色「${row.member.roleNames.join('、')}」决定` : (f.key === 'shared' && !row.flags.drive ? '网盘关闭时共享空间不可用' : '')"
+                :disabled="roleDriven(row) || permissionBusy === row.member.userId || (f.key === 'shared' && !row.flags.drive)"
+                @click="toggleFeature(row, f.key)"
+              ><i /></button>
+            </span>
+            <span class="perm-cell">
+              <button
+                class="secondary-button compact" type="button"
+                :disabled="roleDriven(row) || !row.dirty || permissionBusy === row.member.userId"
+                @click="savePermissions(row)"
+              >{{ permissionBusy === row.member.userId ? '保存中…' : roleDriven(row) ? '由角色决定' : row.dirty ? '保存' : '已保存' }}</button>
+            </span>
+          </div>
         </div>
       </section>
     </template>

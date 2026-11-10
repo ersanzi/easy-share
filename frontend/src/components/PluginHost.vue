@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // PluginHost：插件页容器。插件 UI 跑在 sandbox iframe（opaque origin）中，
 // 经 usePlugins 的 postMessage 桥调宿主能力。本组件只负责挂载与登记。
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { core } from '../services/core'
 import { usePlugins } from '../composables/usePlugins'
 import type { PluginInfo } from '../types/core'
 
@@ -9,10 +10,28 @@ const props = defineProps<{ info: PluginInfo }>()
 const plugin = usePlugins()
 
 const frame = ref<HTMLIFrameElement | null>(null)
-// 入口 URL：/plugins/{id}/{entry}；entry 缺省 index.html（目录访问也会回退）。
+// 插件页必须从 loopback HTTP 源加载：sandbox iframe 是 opaque origin，
+// 在 Wails 自定义源下只拿得到入口 HTML，样式与脚本子资源全丢（页面裸奔成纯文本）。
+const base = ref('')
+const ready = ref(false)
+// 入口 URL：{base}/plugins/{id}/{entry}；entry 缺省 index.html（目录访问也会回退）。
 // key 含版本号：插件原地更新后（目录已原子替换、响应 no-store）iframe 随 key 变化自动重载。
-const src = computed(() => `/plugins/${props.info.id}/${props.info.entry || 'index.html'}`)
+const src = computed(() => {
+  const root = base.value || ''
+  return `${root}/plugins/${props.info.id}/${props.info.entry || 'index.html'}`
+})
 const frameKey = computed(() => `${props.info.id}:${props.info.version}`)
+
+onMounted(async () => {
+  try {
+    base.value = await core.pluginHostBase()
+  } catch {
+    // 拿不到 loopback 源时退回相对路径：页面可能无样式，但不至于整块空白
+    base.value = ''
+  } finally {
+    ready.value = true
+  }
+})
 
 // 登记必须赶在插件脚本执行之前：iframe 的 @load 在页面脚本跑完之后才触发，
 // 而插件 app.js 初始化即发起能力调用，等 load 再登记，首批调用会被
@@ -35,6 +54,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="plugin-host">
     <iframe
+      v-if="ready"
       ref="frame"
       :key="frameKey"
       class="plugin-frame"

@@ -171,6 +171,17 @@ func (client *Client) KnowledgeLogin(ctx context.Context, serverURL, username, p
 	return result, err
 }
 
+// KnowledgeRegisterSSO 把控制面令牌登记为知识会话（免二次登录，权限按矩阵强制）。
+func (client *Client) KnowledgeRegisterSSO(ctx context.Context, serverURL, token string) (knowledge.StatusView, error) {
+	var result knowledge.StatusView
+	input := struct {
+		ServerURL string `json:"serverUrl"`
+		Token     string `json:"token"`
+	}{ServerURL: serverURL, Token: token}
+	err := client.request(ctx, http.MethodPost, "/api/knowledge/sso", input, &result)
+	return result, err
+}
+
 // KnowledgeLogout 清空本地会话。
 func (client *Client) KnowledgeLogout(ctx context.Context) error {
 	return client.request(ctx, http.MethodPost, "/api/knowledge/logout", nil, nil)

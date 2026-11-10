@@ -9,8 +9,18 @@ import {
   AdminGrantShared,
   AdminListSpaces,
   AdminListUsers,
+  AdminPermissionMembers,
+  AdminPermissionRoles,
+  AdminAssignRoles,
+  AdminDeletePermissionRole,
+  AdminSavePermissionRole,
+  FileMemberList,
+  FileMemberRemove,
+  FileMemberReplace,
+  SharedFileList,
   AdminRegisterEnabled,
   AdminResetPassword,
+  AdminSavePermissions,
   AdminSetPersonalQuota,
   AdminSetRegisterEnabled,
   AdminSetSharedQuota,
@@ -50,6 +60,7 @@ import {
   CloudUploadPaths,
   CurrentUser,
   DeleteTask,
+  ChangePassword,
   GetLogDirectory,
   GetSettings,
   GetSnapshot,
@@ -101,6 +112,7 @@ import {
   OpenUpdatesFolder,
   PluginInstallFromMarket,
   PluginInstallFromPath,
+  PluginHostBase,
   PluginInvoke,
   PluginList,
   PluginMarketList,
@@ -108,7 +120,9 @@ import {
   PluginSetDisabled,
   PluginUninstall,
   ProcessDroppedFiles,
+  RefreshProfile,
   RejectTransfer,
+  RemoveAvatar,
   ReportFrontendError,
   SaveSettings,
   SaveServiceConfig,
@@ -123,6 +137,8 @@ import {
   StartDrive,
   StartUpdateDownload,
   StopDrive,
+  UpdateNickName,
+  UploadAvatar,
 } from '../../wailsjs/go/main/App'
 import type {
   AuthUser,
@@ -133,6 +149,11 @@ import type {
   DroppedFiles,
   AdminDept,
   AdminSharedMember,
+  AdminMember,
+  AdminRole,
+  FileMemberRole,
+  SharedFileEntry,
+  FeatureFlags,
   KnowledgeStats,
   KnowledgeAnswer,
   KnowledgeDocumentList,
@@ -313,6 +334,27 @@ export const core = {
   login: (username: string, password: string) => Login(username, password) as Promise<AuthUser>,
   logout: Logout,
   currentUser: () => CurrentUser() as Promise<AuthUser>,
+  // 个人资料：昵称 / 头像 / 改密。昵称与密码走控制面标准个人中心，头像走 EasyShare 自己的存储。
+  updateNickName: (nickName: string) => UpdateNickName(nickName) as Promise<AuthUser>,
+  uploadAvatar: () => UploadAvatar() as Promise<AuthUser>,
+  removeAvatar: () => RemoveAvatar() as Promise<AuthUser>,
+  changePassword: (oldPassword: string, newPassword: string) =>
+    ChangePassword(oldPassword, newPassword) as Promise<void>,
+  refreshProfile: () => RefreshProfile() as Promise<AuthUser>,
+  // 功能权限矩阵：成员读自己的（/mine），管理员按范围读写成员与角色
+  adminPermissionMembers: () => AdminPermissionMembers() as Promise<AdminMember[]>,
+  adminSavePermissions: (flags: FeatureFlags) => AdminSavePermissions(flags as never),
+  adminPermissionRoles: () => AdminPermissionRoles() as Promise<AdminRole[]>,
+  adminSavePermissionRole: (role: AdminRole) => AdminSavePermissionRole(role as never),
+  adminDeletePermissionRole: (roleID: string) => AdminDeletePermissionRole(roleID),
+  adminAssignRoles: (userID: string, roleIDs: string[]) => AdminAssignRoles(userID, roleIDs),
+  // 文档级成员角色（企业权限第三片）：上传者/manage 档读写，控制面按四档梯子裁决
+  sharedFileList: () => SharedFileList() as Promise<SharedFileEntry[]>,
+  fileMemberList: (fileID: string) => FileMemberList(fileID) as Promise<FileMemberRole[]>,
+  fileMemberReplace: (fileID: string, members: FileMemberRole[]) =>
+    FileMemberReplace(fileID, members as never),
+  fileMemberRemove: (fileID: string, memberType: string, memberID: string) =>
+    FileMemberRemove(fileID, memberType, memberID),
   // 管理页（P3）：客户端内自绘，直接调控制面。鉴权在控制面，非管理员一律被拒。
   adminListUsers: (pageNum: number, pageSize: number) =>
     AdminListUsers(pageNum, pageSize) as Promise<ManagedUserPage>,
@@ -348,6 +390,8 @@ export const core = {
   openUpdatesFolder: OpenUpdatesFolder,
   // 插件系统（appplugin.go）：能力调用走动态通道，不随能力增减改绑定
   pluginList: () => PluginList() as Promise<PluginInfo[]>,
+  // 插件页 iframe 的静态资源源（loopback HTTP；见 appplugin.go PluginHostBase）
+  pluginHostBase: () => PluginHostBase() as Promise<string>,
   pluginInvoke: (pluginId: string, api: string, args: unknown) =>
     PluginInvoke(pluginId, api, JSON.stringify(args ?? {})) as Promise<PluginInvokeResult>,
   pluginInstallFromPath: (path: string) => PluginInstallFromPath(path) as Promise<PluginInfo>,

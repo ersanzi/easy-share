@@ -69,6 +69,7 @@ public class DriveController {
     private final SpaceService spaceService;
     private final SpaceUsageService usageService;
     private final DriveFileService fileService;
+    private final org.dromara.easyshare.drive.service.FileRoleService fileRoleService;
     private final DriveUploadService uploadService;
     private final DriveMoveService moveService;
     private final org.dromara.easyshare.drive.service.DriveChangeLogService changeLogService;
@@ -117,7 +118,7 @@ public class DriveController {
         // 过滤在唯一列举出口做，网盘页/挂载盘/快搜文件路全部自动生效
         if (EsSpace.TYPE_SHARED.equals(space)) {
             objects = fileService.filterSharedVisible(objects,
-                listing.activeByPath(), spaceService.deptIdOf(userId), userId);
+                listing.activeByPath(), userId);
         }
         // 上传者昵称一次 IN 查询批量取（不在流里逐行查库）。
         // 行不存在（未登记的存量对象）时 createdAt / uploadByName 均为 null，
@@ -215,7 +216,7 @@ public class DriveController {
             List<DriveObject> objects = listing.objects();
             if (EsSpace.TYPE_SHARED.equals(space)) {
                 objects = fileService.filterSharedVisible(objects,
-                    listing.activeByPath(), spaceService.deptIdOf(userId), userId);
+                    listing.activeByPath(), userId);
             }
             Map<String, EsFile> activeRows = listing.activeByPath();
             Map<Long, String> uploaderNames = uploaderNamesOf(activeRows);
@@ -268,6 +269,13 @@ public class DriveController {
         String prefix = EsSpace.TYPE_SHARED.equals(space)
             ? spaceService.checkSharedWritable(userId, size)
             : spaceService.checkPersonalWritable(userId, size);
+        // 覆盖已有文件 = 「上传新版」动作：共享空间按文档级角色拦（edit 起步；
+        // 新路径无行不拦，建新文件走空间级写权限）。未登记行不拦与列表口径一致。
+        if (EsSpace.TYPE_SHARED.equals(space)) {
+            fileRoleService.assertEditable(
+                fileService.selectActiveByPath(space, ownerId,
+                    DriveKeys.normalizeRelative(body.path())), userId);
+        }
         // 签发即视为将写入：作废缓存，下一次校验重新聚合真实用量
         usageService.invalidate(prefix);
         // 覆盖前留档：客户端直传会在「拿 URL」与「登记」之间覆盖对象，
@@ -339,6 +347,12 @@ public class DriveController {
         boolean isDir = body.path() != null && body.path().endsWith("/");
         String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(),
             isDir ? body.path().replaceAll("/+$", "") : body.path());
+        // 删除是 manage 独占（企业权限第三片，对齐钉钉）：共享空间已登记文件按文档级
+        // 角色拦；未登记行（目录标记/幽灵行，查不到 active 行）沿用空间级写权限口径。
+        if (shared) {
+            fileRoleService.assertManage(
+                fileService.selectActiveByPath(body.space(), ownerId, path), userId);
+        }
         if (isDir && body.fileId() == null && Boolean.TRUE.equals(body.recursive())) {
             // 递归删：先软删子树里的每个文件行（对象保留、可还原），再清掉整棵
             // 目录标记。顺序不能反——反了中途失败会留下「标记没了但文件还在」的孤儿。
@@ -397,6 +411,12 @@ public class DriveController {
         String to = DriveKeys.normalizeRelative(body.to());
         if (from.equals(to)) {
             return R.ok(new MoveVo(to));
+        }
+        // 改名/移动 = 编辑动作（企业权限第三片）：已登记行按文档级角色拦（edit 起步；
+        // 目录标记等未登记行不拦，沿用空间级写权限口径）
+        if (shared) {
+            fileRoleService.assertEditable(
+                fileService.selectActiveByPath(body.space(), ownerId, from), userId);
         }
         // 行改 → 复制 → 删源，失败时补偿（顺序理由与补偿细节见 DriveMoveService）
         moveService.move(body.space(), ownerId, prefix, from, to);
@@ -473,6 +493,7 @@ public class DriveController {
             : DriveKeys.userPrefix(userId);
         Long ownerId = ownerIdOf(body.space(), userId);
         DriveFileService.PurgeResult purged = fileService.purgeFromRecycle(body.space(), ownerId, body.fileId());
+        // 成员角色行已随 purgeFromRecycle 摘行清理，无需在此重复
         // KI-7：只有当该路径没有 active 行在用时才删对象。
         // 对象键由路径派生（DriveKeys.keyAt），而用户可能「删完又重新上传了同名文件」——
         // 那个键此刻属于新文件，删了就会丢掉用户当前在用的内容。
@@ -523,8 +544,16 @@ public class DriveController {
     public R<SessionVo> uploadCreate(@Validated @RequestBody PutBo body) {
         Long userId = LoginHelper.getUserId();
         long size = body.size() == null ? 0L : body.size();
-        EsUploadSession session = uploadService.create(body.space(),
-            ownerIdOf(body.space(), userId), userId, body.path(), size, body.expectedVersion(),
+        String space = body.space();
+        Long ownerId = ownerIdOf(space, userId);
+        // 与 presignPut 同口径：覆盖已有文件 = 「上传新版」动作，共享空间按文档级角色拦
+        if (EsSpace.TYPE_SHARED.equals(space)) {
+            fileRoleService.assertEditable(
+                fileService.selectActiveByPath(space, ownerId,
+                    DriveKeys.normalizeRelative(body.path())), userId);
+        }
+        EsUploadSession session = uploadService.create(space,
+            ownerId, userId, body.path(), size, body.expectedVersion(),
             body.contentMd5());
         return R.ok(new SessionVo(session.getSessionId(), session.getUploadId(),
             session.getPartSize()));

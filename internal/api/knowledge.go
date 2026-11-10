@@ -91,6 +91,63 @@ func (server *Server) knowledgeLogin(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, server.knowledge.Status())
 }
 
+// knowledgeRegisterSSO 接收桌面端登录后下发的控制面令牌，把它登记为知识会话。
+// 只有远端 /auth/me 认这张令牌才落会话：知识服务没接 SSO（旧部署 / 未配置
+// CONTROL_PLANE_URL）时这里失败，知识页回落到手动登录，不影响客户端账号登录本身。
+// 令牌沿用控制面有效期，知识服务按它解析出的 features 强制功能权限。
+func (server *Server) knowledgeRegisterSSO(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	var input struct {
+		ServerURL string `json:"serverUrl"`
+		Token     string `json:"token"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "invalid JSON"})
+		return
+	}
+	if !knowledge.ValidServerURL(input.ServerURL) {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_server_url", Message: "服务器地址无效，应形如 http://192.168.1.10:8000"})
+		return
+	}
+	token := strings.TrimSpace(input.Token)
+	if token == "" {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_credentials", Message: "缺少客户端账号令牌"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
+	defer cancel()
+	user, err := knowledge.NewClient(input.ServerURL).Me(ctx, token)
+	if err != nil {
+		var remote *knowledge.RemoteError
+		switch {
+		case errors.As(err, &remote) && remote.Status == http.StatusUnauthorized:
+			// 知识服务不认这张令牌：统一登录没启用，或控制面会话已失效。
+			// 不覆盖本机已有的手动登录会话，用户仍可用知识账号口令进来。
+			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_sso_rejected", Message: "知识服务未接受客户端账号，请手动登录知识服务"})
+		default:
+			log.Printf("knowledge sso probe: %v", err)
+			writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "knowledge_sso_unavailable", Message: "无法确认知识服务已接入统一登录，请手动登录知识服务"})
+		}
+		return
+	}
+	session := knowledge.Session{
+		ServerURL: input.ServerURL,
+		Token:     token,
+		Username:  user.Username,
+		Role:      user.Role,
+		Mode:      knowledge.ModeSSO,
+	}
+	if err := server.knowledge.SignIn(session); err != nil {
+		log.Printf("knowledge sso persist: %v", err)
+		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "knowledge_persist_failed", Message: "统一登录成功但保存会话失败"})
+		return
+	}
+	log.Printf("knowledge sso ok: user=%s server=%s", session.Username, session.ServerURL)
+	writeJSON(writer, http.StatusOK, server.knowledge.Status())
+}
+
 // knowledgeLogout 清空会话。
 func (server *Server) knowledgeLogout(writer http.ResponseWriter, _ *http.Request) {
 	if server.knowledgeUnavailable(writer) {

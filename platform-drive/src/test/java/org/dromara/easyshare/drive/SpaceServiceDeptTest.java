@@ -8,6 +8,7 @@ import org.dromara.easyshare.drive.mapper.EsSpaceMapper;
 import org.dromara.easyshare.drive.mapper.EsSpaceMemberMapper;
 import org.dromara.easyshare.drive.mapper.SysDeptRowMapper;
 import org.dromara.easyshare.drive.mapper.SysUserDeptMapper;
+import org.dromara.easyshare.drive.service.FeaturePermissionService;
 import org.dromara.easyshare.drive.service.SpaceService;
 import org.dromara.easyshare.drive.service.SpaceUsageService;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -41,8 +43,11 @@ class SpaceServiceDeptTest {
         CapacityService capacityService = mock(CapacityService.class);
         userMapper = mock(SysUserDeptMapper.class);
         SysDeptRowMapper deptMapper = mock(SysDeptRowMapper.class);
+        // 功能开关默认全开：本测试类只关心空间授权合并，权限矩阵另有用例覆盖
+        FeaturePermissionService permission = mock(FeaturePermissionService.class);
+        when(permission.sharedFeatureEnabled(anyLong())).thenReturn(true);
         service = new SpaceService(spaceMapper, memberMapper, usageService, capacityService,
-            userMapper, deptMapper);
+            userMapper, deptMapper, permission);
     }
 
     private static EsSpaceMember member(String type, long memberId, String permission) {

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
+import { isLoopbackURL } from '../utils/net'
 import type { KnowledgeStatus, MeetingChatTurn, MeetingRecord, MeetingTodo, MeetingVoiceprint } from '../types/core'
 import { decodeAudioFileToWav } from '../services/recorder'
 import { meetingSession } from '../services/meetingSession'
@@ -16,7 +18,7 @@ const emit = defineEmits<{ (e: 'goto-knowledge'): void }>()
 const app = useEasyShare()
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
-const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '' })
+const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '', mode: '' })
 const statusLoading = ref(true)
 
 const meetings = ref<MeetingRecord[]>([])
@@ -76,6 +78,14 @@ const refreshStatus = async () => {
   }
 }
 
+// 本机回环地址在员工机器上必是残留配置：听记数据在服务端，连本机等于连不上
+const serverIsLoopback = computed(() => isLoopbackURL(status.value.serverUrl))
+
+const onTargetChanged = () => {
+  meetingSession.notify('知识服务地址已由管理员更新，请重新登录', 'error')
+  void refreshStatus()
+}
+
 // 连接失败时给能执行的下一步，而不是只抛一条 "无法连接知识服务器"
 const serverError = ref('')
 const serverErrorKind = ref<'network' | 'auth' | 'asr'>('network')
@@ -117,6 +127,12 @@ const retryConnect = async () => {
   } finally {
     retrying.value = false
   }
+}
+
+// 宿主用客户端账号自动登录知识服务（或随账号登出清掉会话）后广播此事件
+const onKnowledgeSessionChanged = async () => {
+  await refreshStatus()
+  if (status.value.loggedIn) await refreshList()
 }
 
 const guardedStart = async () => {
@@ -1125,6 +1141,8 @@ const onDetailKeydown = (event: KeyboardEvent) => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onDetailKeydown)
+  EventsOn('knowledge:target-changed', onTargetChanged)
+  EventsOn('knowledge:session-changed', onKnowledgeSessionChanged)
   await refreshStatus()
   if (status.value.loggedIn) {
     await refreshList()
@@ -1139,6 +1157,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onDetailKeydown)
+  EventsOff('knowledge:target-changed')
+  EventsOff('knowledge:session-changed')
   // 只收页面自己的轮询、音频 URL 与本地计时器；录音在 meetingSession 单例里，切页不中断
   stopPolling()
   releaseAudio()
@@ -1167,7 +1187,10 @@ onBeforeUnmount(() => {
     <!-- 未登录知识服务：听记数据在服务端，必须登录 -->
     <div v-if="!statusLoading && !status.loggedIn" class="card knowledge-login-card">
       <div class="card-header"><h2>需要先登录知识服务</h2></div>
-      <p class="meeting-hint">会议录音与纪要保存在公司知识服务器上，请先登录后使用。</p>
+      <p class="meeting-hint">
+        会议录音与纪要保存在公司知识服务器上。客户端账号登录后会自动接入；若一直停在这里，
+        请到「知识」页确认服务器地址或用知识账号登录。
+      </p>
       <button class="primary-button" type="button" @click="emit('goto-knowledge')">去「知识」页登录</button>
     </div>
 
@@ -1177,7 +1200,9 @@ onBeforeUnmount(() => {
         <div class="meeting-server-error-copy">
           <strong>暂时连不上知识服务</strong>
           <span>{{ serverError }}</span>
-          <span v-if="status.serverUrl" class="meeting-hint">当前地址：{{ status.serverUrl }}</span>
+          <span v-if="status.serverUrl" class="meeting-hint">
+            当前地址：{{ status.serverUrl }}<template v-if="serverIsLoopback">（本机地址，连不到公司知识服务——请到「知识」页改用公司地址重新登录）</template>
+          </span>
         </div>
         <button v-if="serverErrorKind === 'auth'" class="primary-button" type="button" @click="emit('goto-knowledge')">去「知识」页登录</button>
         <button v-else class="primary-button" type="button" :disabled="retrying" @click="retryConnect">

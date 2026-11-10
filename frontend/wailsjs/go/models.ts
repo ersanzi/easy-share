@@ -1,5 +1,73 @@
 export namespace account {
 	
+	export class AdminMember {
+	    userId: string;
+	    userName: string;
+	    nickName: string;
+	    deptId?: string;
+	    deptName: string;
+	    status: string;
+	    knowledge: boolean;
+	    meeting: boolean;
+	    drive: boolean;
+	    shared: boolean;
+	    plugin: boolean;
+	    roleIds: string[];
+	    roleNames: string[];
+	    adminScope: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.userName = source["userName"];
+	        this.nickName = source["nickName"];
+	        this.deptId = source["deptId"];
+	        this.deptName = source["deptName"];
+	        this.status = source["status"];
+	        this.knowledge = source["knowledge"];
+	        this.meeting = source["meeting"];
+	        this.drive = source["drive"];
+	        this.shared = source["shared"];
+	        this.plugin = source["plugin"];
+	        this.roleIds = source["roleIds"];
+	        this.roleNames = source["roleNames"];
+	        this.adminScope = source["adminScope"];
+	    }
+	}
+	export class AdminRole {
+	    roleId?: string;
+	    adminScope: string;
+	    scopeDeptIds?: string[];
+	    roleName: string;
+	    knowledge: boolean;
+	    meeting: boolean;
+	    drive: boolean;
+	    shared: boolean;
+	    plugin: boolean;
+	    memberCount?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminRole(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.roleId = source["roleId"];
+	        this.adminScope = source["adminScope"];
+	        this.scopeDeptIds = source["scopeDeptIds"];
+	        this.roleName = source["roleName"];
+	        this.knowledge = source["knowledge"];
+	        this.meeting = source["meeting"];
+	        this.drive = source["drive"];
+	        this.shared = source["shared"];
+	        this.plugin = source["plugin"];
+	        this.memberCount = source["memberCount"];
+	    }
+	}
 	export class AiConfig {
 	    llmBaseUrl: string;
 	    llmModel: string;
@@ -48,6 +116,28 @@ export namespace account {
 	        this.committedBytes = source["committedBytes"];
 	        this.usedBytes = source["usedBytes"];
 	        this.unlimitedCount = source["unlimitedCount"];
+	    }
+	}
+	export class FeatureFlags {
+	    userId?: string;
+	    knowledge: boolean;
+	    meeting: boolean;
+	    drive: boolean;
+	    shared: boolean;
+	    plugin: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FeatureFlags(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.userId = source["userId"];
+	        this.knowledge = source["knowledge"];
+	        this.meeting = source["meeting"];
+	        this.drive = source["drive"];
+	        this.shared = source["shared"];
+	        this.plugin = source["plugin"];
 	    }
 	}
 	export class ManagedUser {
@@ -360,6 +450,22 @@ export namespace discovery {
 
 export namespace drive {
 	
+	export class FileMemberRole {
+	    memberType: string;
+	    memberId: string;
+	    role: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMemberRole(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memberType = source["memberType"];
+	        this.memberId = source["memberId"];
+	        this.role = source["role"];
+	    }
+	}
 	export class RecycleEntryView {
 	    fileId: string;
 	    path: string;
@@ -1359,6 +1465,7 @@ export namespace knowledge {
 	    serverUrl: string;
 	    username: string;
 	    role: string;
+	    mode: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StatusView(source);
@@ -1371,6 +1478,7 @@ export namespace knowledge {
 	        this.serverUrl = source["serverUrl"];
 	        this.username = source["username"];
 	        this.role = source["role"];
+	        this.mode = source["mode"];
 	    }
 	}
 
@@ -1412,10 +1520,13 @@ export namespace main {
 	}
 	export class AuthUser {
 	    loggedIn: boolean;
+	    userId: string;
 	    userName: string;
 	    nickName: string;
 	    avatar: string;
 	    isAdmin: boolean;
+	    adminScope: string;
+	    features: account.FeatureFlags;
 	
 	    static createFrom(source: any = {}) {
 	        return new AuthUser(source);
@@ -1424,11 +1535,32 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.loggedIn = source["loggedIn"];
+	        this.userId = source["userId"];
 	        this.userName = source["userName"];
 	        this.nickName = source["nickName"];
 	        this.avatar = source["avatar"];
 	        this.isAdmin = source["isAdmin"];
+	        this.adminScope = source["adminScope"];
+	        this.features = this.convertValues(source["features"], account.FeatureFlags);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class FilesDroppedEvent {
 	    files: string[];
@@ -1463,6 +1595,7 @@ export namespace main {
 	export class ServiceEndpoints {
 	    knowledgeUrl: string;
 	    knowledgeUrlSource: string;
+	    knowledgeUrlAuthoritative: boolean;
 	    platformBaseUrl: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1473,6 +1606,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.knowledgeUrl = source["knowledgeUrl"];
 	        this.knowledgeUrlSource = source["knowledgeUrlSource"];
+	        this.knowledgeUrlAuthoritative = source["knowledgeUrlAuthoritative"];
 	        this.platformBaseUrl = source["platformBaseUrl"];
 	    }
 	}
@@ -1490,6 +1624,26 @@ export namespace main {
 	        this.deviceName = source["deviceName"];
 	        this.receiveDir = source["receiveDir"];
 	        this.webdavRoot = source["webdavRoot"];
+	    }
+	}
+	export class SharedFileVo {
+	    key: string;
+	    name: string;
+	    size: number;
+	    uploadByName: string;
+	    fileId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SharedFileVo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.uploadByName = source["uploadByName"];
+	        this.fileId = source["fileId"];
 	    }
 	}
 	export class UpdateAssetInfo {

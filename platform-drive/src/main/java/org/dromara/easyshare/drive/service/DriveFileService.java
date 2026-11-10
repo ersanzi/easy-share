@@ -44,6 +44,7 @@ public class DriveFileService {
 
     private final EsFileMapper fileMapper;
     private final DriveChangeLogService changeLog;
+    private final FileRoleService fileRoleService;
 
     /**
      * **只校验、不登记**：确认调用方看到的版本与服务端当前版本一致。
@@ -524,6 +525,8 @@ public class DriveFileService {
             .eq(EsFile::getFilePath, row.getFilePath())
             .ne(EsFile::getFileId, row.getFileId()));
         fileMapper.deleteById(row.getFileId());
+        // 文档级成员角色随行清理，防孤儿行（共享空间文件可能带 es_file_member 行）
+        fileRoleService.purgeWithFile(row.getFileId());
         changeLog.record(spaceType, ownerId, EsFileChangeLog.EVENT_PURGED, null,
             row.getFileId(), null, null);
         return new PurgeResult(row, !referencedByOthers);
@@ -565,12 +568,13 @@ public class DriveFileService {
         if (row == null) {
             throw new ServiceException("文件不存在或未登记目录层");
         }
-        // 操作者校验：个人空间=owner 本人；共享空间=上传者本人（上传者总能管理自己的文件）
-        boolean allowed = EsSpace.TYPE_PERSONAL.equals(spaceType)
-            ? ownerId.equals(row.getOwnerId())
-            : operatorId != null && operatorId.equals(row.getUploadBy());
-        if (!allowed) {
-            throw new ServiceException("只有文件的上传者可以调整可见范围");
+        // 操作者校验：个人空间=owner 本人；共享空间=上传者或 manage 档（企业权限第三片）
+        if (EsSpace.TYPE_PERSONAL.equals(spaceType)) {
+            if (!ownerId.equals(row.getOwnerId())) {
+                throw new ServiceException("只有文件的上传者可以调整可见范围");
+            }
+        } else {
+            fileRoleService.assertVisibilityManageable(row, operatorId);
         }
         row.setVisibleDepts(serializeDepts(deptIds));
         fileMapper.updateById(row);
@@ -578,42 +582,15 @@ public class DriveFileService {
     }
 
     /**
-     * 共享列表可见性过滤：visible_depts 为空的行全体可见；非空时仅
-     * 用户所属部门命中或上传者本人可见（上传者总能看到自己传的文件）。
+     * 共享列表可见性过滤：委托文档级成员角色的裁决（上传者/成员行/visible_depts/空间默认
+     * 四级梯子，见 {@link FileRoleService#ladder}）；未登记的行按可见处理。
      *
-     * @param uploaderOf path → 上传者（供"自己可见"判断；查询不到按 0 处理）
+     * @param viewerUserId 查看者账号 ID
      */
     public List<DriveObject> filterSharedVisible(List<DriveObject> objects,
                                                  Map<String, EsFile> rowsByPath,
-                                                 Long viewerDeptId, Long viewerUserId) {
-        List<DriveObject> visible = new ArrayList<>(objects.size());
-        for (DriveObject object : objects) {
-            EsFile row = rowsByPath.get(object.path());
-            if (sharedRowVisible(row, viewerDeptId, viewerUserId)) {
-                visible.add(object);
-            }
-        }
-        return visible;
-    }
-
-    /**
-     * 共享空间单行可见性判据（列表过滤与下载授权共用同一份口径）。
-     *
-     * <p><b>两处必须共用</b>：列表负责「看不见」，下载接口负责「拿不到」。
-     * 若只有列表过滤而下载不查，知道路径的人仍能直接签出 URL 拿走受限文件——
-     * 「看不见」不等于「拿不到」。这是数据面授权，不是展示细节。
-     *
-     * @param row 目录行；null（未登记）按可见处理，与列表口径一致
-     */
-    public static boolean sharedRowVisible(EsFile row, Long viewerDeptId, Long viewerUserId) {
-        if (row == null || row.getVisibleDepts() == null || row.getVisibleDepts().isBlank()) {
-            return true;
-        }
-        // 上传者本人恒可见
-        if (viewerUserId != null && Objects.equals(row.getUploadBy(), viewerUserId)) {
-            return true;
-        }
-        return viewerDeptId != null && deptListContains(row.getVisibleDepts(), viewerDeptId);
+                                                 Long viewerUserId) {
+        return fileRoleService.filterSharedVisible(objects, rowsByPath, viewerUserId);
     }
 
     /**
@@ -640,12 +617,11 @@ public class DriveFileService {
     public void assertDownloadable(String spaceType, Long ownerId, String path,
                                    Long viewerDeptId, Long viewerUserId) {
         String normalized = DriveKeys.normalizeRelative(path);
-        // ① 有 active 行：直接按它判可见性
+        // ① 有 active 行：按文档级成员角色判（read 档不能下载，不可见直接拒——列表与签发共用一份裁决）
         EsFile active = selectActiveByPath(spaceType, ownerId, normalized);
         if (active != null) {
-            if (EsSpace.TYPE_SHARED.equals(spaceType)
-                && !sharedRowVisible(active, viewerDeptId, viewerUserId)) {
-                throw new ServiceException("文件不存在或无权访问");
+            if (EsSpace.TYPE_SHARED.equals(spaceType)) {
+                fileRoleService.assertDownloadable(active, viewerUserId);
             }
             return;
         }
@@ -772,8 +748,11 @@ public class DriveFileService {
     /**
      * 按路径查 active 行（唯一索引已降为部分索引 WHERE state='active'，
      * 同一路径在回收站里可并存多行，故这里必须带 state 条件）。
+     * <p>
+     * 企业权限第三片起控制器也需要按路径取行做文档级角色拦截（删除/改名/覆盖上传），
+     * 故从 private 放宽为 public——查询语义不变。
      */
-    private EsFile selectActiveByPath(String spaceType, Long ownerId, String path) {
+    public EsFile selectActiveByPath(String spaceType, Long ownerId, String path) {
         return fileMapper.selectOne(new LambdaQueryWrapper<EsFile>()
             .eq(EsFile::getSpaceType, spaceType)
             .eq(EsFile::getOwnerId, ownerId)

@@ -112,6 +112,7 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/config/reload", server.auth(http.HandlerFunc(server.reloadConfig)))
 	mux.Handle("GET /api/knowledge/status", server.auth(http.HandlerFunc(server.knowledgeStatus)))
 	mux.Handle("POST /api/knowledge/login", server.auth(http.HandlerFunc(server.knowledgeLogin)))
+	mux.Handle("POST /api/knowledge/sso", server.auth(http.HandlerFunc(server.knowledgeRegisterSSO)))
 	mux.Handle("POST /api/knowledge/logout", server.auth(http.HandlerFunc(server.knowledgeLogout)))
 	mux.Handle("POST /api/knowledge/health", server.auth(http.HandlerFunc(server.knowledgeHealth)))
 	mux.Handle("POST /api/knowledge/query", server.auth(http.HandlerFunc(server.knowledgeQuery)))

@@ -795,3 +795,51 @@ func (c *Client) SetFileVisibilityByRef(ctx context.Context, token, space, path 
 	}
 	return c.SetFileVisibility(ctx, token, space, path, ids)
 }
+
+// FileMemberRole 一条文档级成员角色行（企业权限第三片）。MemberID 是雪花 ID，
+// 与部门 ID 同理必须按字符串透传（KI-22）；Role 取 manage/edit/download/read。
+type FileMemberRole struct {
+	MemberType string `json:"memberType"`
+	MemberID   string `json:"memberId"`
+	Role       string `json:"role"`
+}
+
+// FileMembers 取某文件的成员角色行。读取与替换都由控制面按 manage 档裁决；
+// 未授权者调用直接收到服务端错误，客户端不做本地判断。
+func (c *Client) FileMembers(ctx context.Context, token string, fileID int64) ([]FileMemberRole, error) {
+	var members []FileMemberRole
+	path := "/easyshare/file-member/" + strconv.FormatInt(fileID, 10) + "/members"
+	if err := c.call(ctx, http.MethodGet, path, token, nil, &members); err != nil {
+		return nil, fmt.Errorf("读取文件成员角色失败：%w", err)
+	}
+	return members, nil
+}
+
+// ReplaceFileMembers 整组替换某文件的成员角色行（控制面会保留授权者自己的行）。
+func (c *Client) ReplaceFileMembers(ctx context.Context, token string, fileID int64, members []FileMemberRole) error {
+	if members == nil {
+		members = []FileMemberRole{}
+	}
+	body, err := json.Marshal(members)
+	if err != nil {
+		return err
+	}
+	path := "/easyshare/file-member/" + strconv.FormatInt(fileID, 10) + "/members"
+	if err := c.call(ctx, http.MethodPut, path, token, body, nil); err != nil {
+		return fmt.Errorf("保存文件成员角色失败：%w", err)
+	}
+	return nil
+}
+
+// RemoveFileMember 删除单条成员角色行（不能删自己的行，控制面强制）。
+func (c *Client) RemoveFileMember(ctx context.Context, token string, fileID int64, memberType, memberID string) error {
+	id, err := ParseFileID(memberID)
+	if err != nil {
+		return fmt.Errorf("成员 ID 无效：%w", err)
+	}
+	path := fmt.Sprintf("/easyshare/file-member/%d/members/%s/%d", fileID, memberType, id)
+	if err := c.call(ctx, http.MethodDelete, path, token, nil, nil); err != nil {
+		return fmt.Errorf("移除文件成员角色失败：%w", err)
+	}
+	return nil
+}

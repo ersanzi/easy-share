@@ -73,7 +73,8 @@ $easyshareSql = @("easyshare-space.sql", "easyshare-file.sql", "easyshare-file-v
     "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql",
     "easyshare-content-hash.sql", "easyshare-incremental-list.sql",
     "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql",
-    "easyshare-client-session.sql")
+    "easyshare-client-session.sql", "easyshare-user-permission.sql",
+    "easyshare-user-profile.sql", "easyshare-permission-role.sql", "easyshare-file-member.sql")
 foreach ($f in $easyshareSql) {
     $p = Join-Path $repoRoot "deploy\ruoyi-db\$f"
     if (Test-Path $p) { $sqlSources += $p } else { Write-Host "    跳过不存在的 $f" -ForegroundColor DarkGray }

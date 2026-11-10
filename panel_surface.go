@@ -36,17 +36,22 @@ const (
 // 之所以不复用 Wails AssetServer——它的虚拟主机只在主窗口 WebView2 内可达，
 // 独立面板窗口够不到；而插件页引用 /plugins/_sdk/eshare.js、/clipboard-files/*.png
 // 等绝对路径，复用同一 mux 换个 listener 全部兼容，插件零改动。
+// startPanelServer 幂等：监听已在则直接返回，多线程同时首次调用也只起一个。
 func startPanelServer(a *App) {
+	a.panelServerMu.Lock()
+	defer a.panelServerMu.Unlock()
+	if a.panelListener != nil {
+		return
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		a.logger.Printf("panel server: %v", err)
 		return
 	}
 	a.panelListener = ln
-	a.panelURL = fmt.Sprintf("http://127.0.0.1:%d/plugins/%s/index.html?panel=1",
-		ln.Addr().(*net.TCPAddr).Port, panelPluginID)
-	a.searchURL = fmt.Sprintf("http://127.0.0.1:%d/search?panel=1",
-		ln.Addr().(*net.TCPAddr).Port)
+	a.panelBase = fmt.Sprintf("http://127.0.0.1:%d", ln.Addr().(*net.TCPAddr).Port)
+	a.panelURL = fmt.Sprintf("%s/plugins/%s/index.html?panel=1", a.panelBase, panelPluginID)
+	a.searchURL = fmt.Sprintf("%s/search?panel=1", a.panelBase)
 	go func() {
 		if err := http.Serve(ln, a.AssetHandler()); err != nil && err != http.ErrServerClosed {
 			a.logger.Printf("panel server: %v", err)
@@ -55,11 +60,9 @@ func startPanelServer(a *App) {
 	a.logger.Printf("panel server ready: %s", a.panelURL)
 }
 
-// ensurePanelServer 面板 loopback 静态服务按需拉起（剪切板面板与搜索表面共用）。
+// ensurePanelServer 面板 loopback 静态服务按需拉起（剪切板面板、搜索表面与插件页共用）。
 func ensurePanelServer(a *App) {
-	if a.panelListener == nil {
-		startPanelServer(a)
-	}
+	startPanelServer(a)
 }
 
 // syncClipboardSurface 让「剪切板录制 + 快捷面板」与剪切板插件的在场状态对齐：

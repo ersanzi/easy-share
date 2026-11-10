@@ -110,30 +110,45 @@ def test_sso_dept_syncs_but_local_role_preserved(tmp_path) -> None:
 
 
 class _RuoYiStub(BaseHTTPRequestHandler):
-    """最小 RuoYi /system/user/getInfo 桩：记录请求头，按 mode 应答。"""
+    """最小 RuoYi 桩：getInfo 与功能权限两个端点，记录请求头，按 mode 应答。"""
 
-    mode = "ok"  # ok / unauthorized / bad_code
+    mode = "ok"  # ok / unauthorized / bad_code / no_permission_api
+    received: list[dict] = []
 
     def do_GET(self) -> None:  # noqa: N802——http.server 命名约定
-        _RuoYiStub.received = {
+        _RuoYiStub.received.append({
             "path": self.path,
             "auth": self.headers.get("Authorization"),
             "clientid": self.headers.get("clientid"),
-        }
+        })
         if _RuoYiStub.mode == "unauthorized":
             self.send_response(401)
             self.end_headers()
             return
-        code = 200 if _RuoYiStub.mode == "ok" else 500
-        body = json.dumps({
-            "code": code,
-            "msg": "ok" if code == 200 else "err",
-            "data": {
-                "user": {"userId": "1", "userName": "wang", "nickName": "小王", "deptId": "103"},
-                "roles": ["superadmin"],
-                "permissions": [],
-            },
-        }).encode("utf-8")
+        if self.path == "/easyshare/permission/mine":
+            if _RuoYiStub.mode == "no_permission_api":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps({
+                "code": 200,
+                "msg": "ok",
+                "data": {
+                    "userId": 1, "knowledge": False, "meeting": True,
+                    "drive": True, "shared": True, "plugin": True,
+                },
+            }).encode("utf-8")
+        else:
+            code = 200 if _RuoYiStub.mode != "bad_code" else 500
+            body = json.dumps({
+                "code": code,
+                "msg": "ok" if code == 200 else "err",
+                "data": {
+                    "user": {"userId": "1", "userName": "wang", "nickName": "小王", "deptId": "103"},
+                    "roles": ["superadmin"],
+                    "permissions": [],
+                },
+            }).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -149,23 +164,110 @@ def test_introspect_sends_headers_and_parses_ruoyi_wrapper(tmp_path) -> None:
     server = HTTPServer(("127.0.0.1", 0), _RuoYiStub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    _RuoYiStub.mode = "ok"
+    _RuoYiStub.received = []
     try:
         users = UserStore(str(tmp_path / "auth.db"))
         sso = ControlPlaneSSO(
             f"http://127.0.0.1:{server.server_port}", client_id="cid-123", users=users
         )
         info = sso._introspect("real-token")
-        assert _RuoYiStub.received == {
-            "path": "/system/user/getInfo",
-            "auth": "Bearer real-token",
-            "clientid": "cid-123",
+        # 身份与功能权限各回查一次，头一致
+        assert [item["path"] for item in _RuoYiStub.received] == [
+            "/system/user/getInfo", "/easyshare/permission/mine",
+        ]
+        assert all(item["auth"] == "Bearer real-token" for item in _RuoYiStub.received)
+        assert all(item["clientid"] == "cid-123" for item in _RuoYiStub.received)
+        assert info == {
+            "username": "wang",
+            "is_admin": True,
+            "dept": "103",
+            "features": {
+                "knowledge": False, "meeting": True,
+                "drive": True, "shared": True, "plugin": True,
+            },
         }
-        assert info == {"username": "wang", "is_admin": True, "dept": "103"}
 
         _RuoYiStub.mode = "unauthorized"
         assert sso._introspect("real-token") is None
         _RuoYiStub.mode = "bad_code"
         assert sso._introspect("real-token") is None
     finally:
+        _RuoYiStub.mode = "ok"
         server.shutdown()
         server.server_close()
+
+
+def test_permission_endpoint_missing_falls_open(tmp_path) -> None:
+    """控制面还没升级到带权限端点：身份有效即放行，不把所有人挡在门外。"""
+    from app.auth.store import UserStore
+
+    server = HTTPServer(("127.0.0.1", 0), _RuoYiStub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _RuoYiStub.mode = "no_permission_api"
+    try:
+        users = UserStore(str(tmp_path / "auth.db"))
+        sso = ControlPlaneSSO(
+            f"http://127.0.0.1:{server.server_port}", client_id="cid-123", users=users
+        )
+        info = sso._introspect("real-token")
+        assert info is not None
+        assert info["features"] == {
+            "knowledge": True, "meeting": True, "drive": True,
+            "shared": True, "plugin": True,
+        }
+    finally:
+        _RuoYiStub.mode = "ok"
+        server.shutdown()
+        server.server_close()
+
+
+def test_disabled_feature_blocks_knowledge_only(tmp_path) -> None:
+    app, services = _sso_app(tmp_path)
+    _stub_introspect(services, {
+        "username": "wang", "is_admin": False, "dept": "103",
+        "features": {"knowledge": False, "meeting": True, "drive": True,
+                     "shared": True, "plugin": True},
+    })
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer ctrl-token-off"}
+        blocked = client.post(
+            "/documents/process",
+            json={"file_id": "f1", "version_id": "v1", "object_key": "source/policy.txt"},
+            headers=headers,
+        )
+        assert blocked.status_code == 403
+        assert "管理员" in blocked.json()["detail"]
+
+        # 同一令牌的其它功能不受牵连：会议入口与 /auth/me 照常（测试环境会议存储不可用，只要求不是 403）
+        assert client.get("/auth/me", headers=headers).status_code == 200
+        assert client.get("/meetings", headers=headers).status_code != 403
+
+
+def test_meeting_feature_disabled_blocks_meetings(tmp_path) -> None:
+    app, services = _sso_app(tmp_path)
+    _stub_introspect(services, {
+        "username": "wang", "is_admin": False, "dept": "103",
+        "features": {"knowledge": True, "meeting": False, "drive": True,
+                     "shared": True, "plugin": True},
+    })
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer ctrl-token-meeting-off"}
+        assert client.get("/meetings", headers=headers).status_code == 403
+        assert client.get("/query", headers=headers).status_code != 403
+
+
+def test_local_token_not_governed_by_matrix(tmp_path) -> None:
+    """本地账号（不经控制面）没有 features，功能矩阵不管它——行为与引入前一致。"""
+    app, services = _sso_app(tmp_path)
+    with TestClient(app) as client:
+        client.post("/auth/bootstrap", json={"username": "boss", "password": "secret-pass-1"})
+        login = client.post("/auth/login", json={"username": "boss", "password": "secret-pass-1"})
+        token = login.json()["token"]
+        response = client.post(
+            "/documents/process",
+            json={"file_id": "f1", "version_id": "v1", "object_key": "source/policy.txt"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 202

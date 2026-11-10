@@ -40,4 +40,10 @@ public class SysUserDept {
     private String userName;
 
     private String nickName;
+
+    /** 0 正常、1 停用（权限管理页要显示停用成员，不能只在登录时才拦） */
+    private String status;
+
+    /** 0 存在、2 删除（RuoYi 逻辑删除，查询时要显式过滤） */
+    private String delFlag;
 }

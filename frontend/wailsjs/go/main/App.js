@@ -18,12 +18,20 @@ export function AdminAiConfigSave(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['AdminAiConfigSave'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function AdminAssignRoles(arg1, arg2) {
+  return window['go']['main']['App']['AdminAssignRoles'](arg1, arg2);
+}
+
 export function AdminCapacity() {
   return window['go']['main']['App']['AdminCapacity']();
 }
 
 export function AdminCreateUser(arg1) {
   return window['go']['main']['App']['AdminCreateUser'](arg1);
+}
+
+export function AdminDeletePermissionRole(arg1) {
+  return window['go']['main']['App']['AdminDeletePermissionRole'](arg1);
 }
 
 export function AdminDeleteUser(arg1) {
@@ -50,12 +58,28 @@ export function AdminListUsers(arg1, arg2) {
   return window['go']['main']['App']['AdminListUsers'](arg1, arg2);
 }
 
+export function AdminPermissionMembers() {
+  return window['go']['main']['App']['AdminPermissionMembers']();
+}
+
+export function AdminPermissionRoles() {
+  return window['go']['main']['App']['AdminPermissionRoles']();
+}
+
 export function AdminRegisterEnabled() {
   return window['go']['main']['App']['AdminRegisterEnabled']();
 }
 
 export function AdminResetPassword(arg1, arg2) {
   return window['go']['main']['App']['AdminResetPassword'](arg1, arg2);
+}
+
+export function AdminSavePermissionRole(arg1) {
+  return window['go']['main']['App']['AdminSavePermissionRole'](arg1);
+}
+
+export function AdminSavePermissions(arg1) {
+  return window['go']['main']['App']['AdminSavePermissions'](arg1);
 }
 
 export function AdminSetPersonalQuota(arg1, arg2) {
@@ -92,6 +116,10 @@ export function AssetHandler() {
 
 export function CfapiMountPath() {
   return window['go']['main']['App']['CfapiMountPath']();
+}
+
+export function ChangePassword(arg1, arg2) {
+  return window['go']['main']['App']['ChangePassword'](arg1, arg2);
 }
 
 export function CheckUpdate() {
@@ -212,6 +240,18 @@ export function CurrentUser() {
 
 export function DeleteTask(arg1) {
   return window['go']['main']['App']['DeleteTask'](arg1);
+}
+
+export function FileMemberList(arg1) {
+  return window['go']['main']['App']['FileMemberList'](arg1);
+}
+
+export function FileMemberRemove(arg1, arg2, arg3) {
+  return window['go']['main']['App']['FileMemberRemove'](arg1, arg2, arg3);
+}
+
+export function FileMemberReplace(arg1, arg2) {
+  return window['go']['main']['App']['FileMemberReplace'](arg1, arg2);
 }
 
 export function GetLogDirectory() {
@@ -422,6 +462,10 @@ export function OpenUpdatesFolder() {
   return window['go']['main']['App']['OpenUpdatesFolder']();
 }
 
+export function PluginHostBase() {
+  return window['go']['main']['App']['PluginHostBase']();
+}
+
 export function PluginInstallFromMarket(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['PluginInstallFromMarket'](arg1, arg2, arg3, arg4);
 }
@@ -458,8 +502,16 @@ export function ProcessDroppedFiles(arg1) {
   return window['go']['main']['App']['ProcessDroppedFiles'](arg1);
 }
 
+export function RefreshProfile() {
+  return window['go']['main']['App']['RefreshProfile']();
+}
+
 export function RejectTransfer(arg1) {
   return window['go']['main']['App']['RejectTransfer'](arg1);
+}
+
+export function RemoveAvatar() {
+  return window['go']['main']['App']['RemoveAvatar']();
 }
 
 export function ReportFrontendError(arg1, arg2) {
@@ -510,6 +562,10 @@ export function SetFileVisibility(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetFileVisibility'](arg1, arg2, arg3);
 }
 
+export function SharedFileList() {
+  return window['go']['main']['App']['SharedFileList']();
+}
+
 export function ShowInFolder(arg1) {
   return window['go']['main']['App']['ShowInFolder'](arg1);
 }
@@ -532,4 +588,12 @@ export function Startup(arg1) {
 
 export function StopDrive() {
   return window['go']['main']['App']['StopDrive']();
+}
+
+export function UpdateNickName(arg1) {
+  return window['go']['main']['App']['UpdateNickName'](arg1);
+}
+
+export function UploadAvatar() {
+  return window['go']['main']['App']['UploadAvatar']();
 }

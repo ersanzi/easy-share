@@ -15,10 +15,17 @@ RuoYi-Vue-Plus 的令牌由 Sa-Token + Redis 管理（不透明随机串，非�
 
 本地账号/口令登录完全不受影响：中间件先查本地令牌，未命中才走本模块——
 本地令牌与控制面令牌是不同随机空间，不存在歧义。
+
+功能权限（2026-10-27 企业化整改第二轮）：身份验过后再取一次
+`GET /easyshare/permission/mine`，把五项能力开关并入用户 dict 的 `features`，
+由中间件按路由前缀拒绝。取权限这一步**失败即全开**（旧版控制面没有这个端点、
+或瞬时故障）：身份已经验过，为一次附加查询把所有人挡在门外，代价远大于收益；
+真出问题时日志里会有告警，不静默。
 """
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import threading
 import time
@@ -28,6 +35,15 @@ from app.auth.store import UserStore
 
 _CACHE_TTL_SECONDS = 60.0
 _CACHE_MAX_ENTRIES = 512
+
+_FEATURES = ("knowledge", "meeting", "drive", "shared", "plugin")
+
+_log = logging.getLogger(__name__)
+
+
+def all_features_enabled() -> dict[str, bool]:
+    """五项全开（缺省口径：没有权限信息来源时不收权）。"""
+    return dict.fromkeys(_FEATURES, True)
 
 
 class ControlPlaneSSO:
@@ -59,6 +75,8 @@ class ControlPlaneSSO:
         if info is None:
             return None
         user = self._ensure_local_user(info)
+        # features 只随本次解析结果走，不回写本地档案：档案是身份，权限是控制面的活
+        user = {**user, "features": info.get("features") or all_features_enabled()}
         self._cache_put(token, user)
         return user
 
@@ -86,7 +104,26 @@ class ControlPlaneSSO:
             "username": username,
             "is_admin": "superadmin" in roles or "*:*:*" in permissions,
             "dept": str(user.get("deptId") or "").strip(),
+            "features": self._feature_flags(token),
         }
+
+    def _feature_flags(self, token: str) -> dict[str, bool]:
+        """取功能权限；端点不可用（旧版控制面 / 瞬时故障）按全开并告警。"""
+        request = urllib.request.Request(f"{self.base_url}/easyshare/permission/mine")
+        request.add_header("Authorization", f"Bearer {token}")
+        request.add_header("clientid", self.client_id)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as resp:
+                payload = json.loads(resp.read())
+        except (OSError, ValueError):
+            _log.warning("控制面功能权限不可用，本轮按全开放行：%s", self.base_url)
+            return all_features_enabled()
+        if payload.get("code") != 200:
+            _log.warning("控制面功能权限返回 code=%s，本轮按全开放行", payload.get("code"))
+            return all_features_enabled()
+        data = payload.get("data") or {}
+        # 缺字段按开处理：控制面还没升级到带这个字段时，行为与升级前一致
+        return {name: data.get(name) is not False for name in _FEATURES}
 
     def _ensure_local_user(self, info: dict) -> dict:
         username, dept = info["username"], info["dept"]

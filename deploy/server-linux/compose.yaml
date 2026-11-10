@@ -34,7 +34,11 @@ services:
   redis:
     image: redis:7
     container_name: easyshare-ruoyi-redis
-    command: ["redis-server", "--requirepass", "ruoyi123"]
+    # appendonly：Sa-Token 会话存这里，无持久化时容器/服务器一重启全员被登出
+    # （2026-10-25 补；桌面端长寿令牌依赖会话跨重启存活）
+    command: ["redis-server", "--requirepass", "ruoyi123", "--appendonly", "yes"]
+    volumes:
+      - ruoyi-redis-data:/data
     ports:
       # 仅本机，同上（控制面走 redis:6379）
       - "127.0.0.1:6380:6379"
@@ -122,5 +126,6 @@ services:
 
 volumes:
   ruoyi-pg-data:
+  ruoyi-redis-data:
   rustfs-data:
   rustfs-logs:

@@ -123,6 +123,7 @@ func (service *Service) Status() StatusView {
 		ServerURL:  service.session.ServerURL,
 		Username:   service.session.Username,
 		Role:       service.session.Role,
+		Mode:       service.session.Mode,
 	}
 }
 

@@ -50,7 +50,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/discovery` | UDP 设备广播与在线列表 |
 | `internal/transfer` | TCP 流式发送/接收、文件夹 zip 管线、速度计算 |
 | `internal/drive` | WebDAV 服务 + 控制面云盘客户端（预签名 URL 上传/下载/列表，`client.go`/`upload.go`） |
-| `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3）；会话落盘用户级 `account-session.json`（0600，不含密码），启动恢复并校验，401 时清空退回登录页 |
+| `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3）、成员功能权限/权限角色与个人资料（`permission.go`/`profile.go`，2026-10-27）；会话落盘用户级 `account-session.json`（0600，不含密码），启动恢复并校验，401 时清空退回登录页 |
 | `internal/spacedav` | 空间 WebDAV 文件系统（P4 挂载的服务层）：建在 `internal/drive` 客户端之上，每个操作经控制面，配额与共享授权对资源管理器同样生效 |
 | `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
 | `spacemount.go` | 桌面端空间挂载（P4：登录后挂「此电脑」个人/共享盘、换账号重挂）与浮窗拖放目标 |
@@ -110,7 +110,8 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/drive/stop` | 停止 WebDAV 共享 |
 | `POST` | `/api/config/reload` | 热加载配置 |
 | `GET` | `/api/knowledge/status` | 知识服务登录态（本地，无网络探测） |
-| `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话） |
+| `POST` | `/api/knowledge/login` | 登录知识服务（代理远端 `/auth/login`，成功后 Core 落盘会话，`mode=password`） |
+| `POST` | `/api/knowledge/sso` | 用控制面令牌登记知识会话（先探测远端 `/auth/me`，成功才落盘，`mode=sso`；失败不覆盖手动会话） |
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档数/索引块数/LLM 状态；`documents` 与 `records` 分开） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
@@ -169,6 +170,8 @@ Authorization: Bearer <apiToken>
 
 「客户端只预知控制面一个地址，其余服务地址登录后下发」的租户服务发现（`ServiceConfigController.java`，客户端 `internal/account/serviceconfig.go` + App 绑定 `ServiceEndpoints`/`SaveServiceConfig`）。存储复用 RuoYi `sys_config`（键 `drive.service.knowledge.url`，**零 DDL**），读写在模块内闭环（不经 RuoYi 配置缓存，口径自洽）。当前下发项：知识服务地址。客户端未登录/未登记时回退**同主机推导**（控制面 `:8090` → 知识服务 `:8000`，「知识」页自动填好，员工免手填）；管理页「服务配置」卡片登记（superadmin）。
 
+**地址对账与统一登录**（`App.reconcileKnowledgeSession` / `App.syncKnowledgeAccess`，2026-10-26 起，2026-10-27 补 SSO）：账号登录成功、启动恢复会话、管理员保存服务配置后各跑一次。登记值是权威源，与会话里的 `knowledge.json.serverUrl` 不一致就失效旧会话（令牌属于旧服务，静默改写地址复用旧令牌只会拿到 401）；未登记时**只纠正明显错误**——控制面非回环、本机会话却指向回环，用推导值兜底；控制面本身是回环（本地联调）则不干预。对账返回应使用的地址，随后 Core 用控制面令牌调知识服务 `GET /auth/me` 探测，成功才把会话切为 `mode=sso`（员工不再二次输入知识账号口令，功能权限矩阵因此在桌面端真实生效）；探测失败保留原手动会话，知识页回落到本地账号登录。前端侧：知识页给回环会话打「本机地址」标记、给 SSO 会话打「统一登录」标记，两页订阅 `knowledge:target-changed` 与 `knowledge:session-changed` 刷新登录态。
+
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
 | `GET` | `/easyshare/service/config` | 登录 | 下发服务配置（未登记项空串，客户端回退推导） |
@@ -178,11 +181,42 @@ Authorization: Bearer <apiToken>
 
 **AI 配置热生效链路（2026-10-12）**：管理页「AI 能力」卡片 → 控制面 sys_config（权威）→ 服务密钥头 `X-Service-Secret` 推送 → 知识服务写 `data/runtime_config.json` 覆盖层（优先于 .env，重启仍在）→ 原地重建 LLM 消费组件（RAG Generator/MultiHop/ContextualBuilder/听记 Summarizer）与 ASR 开关。知识服务推送端点固定收 camelCase（pydantic alias）。**坑：Java 推送客户端必须钉死 HTTP/1.1**——JDK HttpClient 默认 HTTP/2 语义对明文地址带 h2c 升级头，uvicorn/h11 回 422（排障实录见 `iterations/2026-10-12-AI能力配置化.md`）。
 
+## 4b-3. 成员功能权限与个人资料（2026-10-27 起）
+
+企业化整改第二轮：成员能自助改昵称/头像/密码，超管按人配置五项功能开关。第三轮（2026-10-27）补上角色/权限组与子管理员。DDL 见 `deploy/ruoyi-db/easyshare-user-permission.sql`（`es_user_permission`）、`easyshare-user-profile.sql`（`es_user_profile`）与 `easyshare-permission-role.sql`（`es_permission_role` / `es_user_role`），均幂等并纳入 `scripts/ship-control-plane.ps1` 的 `$easyshareSql` 每次重放。迭代记录见 [`iterations/2026-10-27-桌面端企业化整改-第二轮.md`](iterations/2026-10-27-桌面端企业化整改-第二轮.md) 与 [`iterations/2026-10-27-企业权限角色与子管理员.md`](iterations/2026-10-27-企业权限角色与子管理员.md)。
+
+**权限模型（角色优先，逐账号兜底）**：三层依次裁决——① 账号挂了角色（`es_user_role`）时，五项开关取所挂角色的**并集**，逐账号行不再生效；② 没有角色时读逐账号行（`es_user_permission`）；③ 也没有行则五项全开（存量账号零迁移）。裁决规则唯一实现在 `FeaturePermissionService.effective`，`/mine`、管理页成员列表与实际拦截共用。角色表 `es_permission_role` 除五项开关外带 `admin_scope`：`none` 普通权限组、`dept` 子管理员（可进管理页，但只看到、只修改本部门成员）。drive 关闭时 shared 一并失效，角色并集与逐账号行同此口径。管理接口本身（`/easyshare/permission/*`、`/system/user/*`）不受矩阵管辖，管理员关掉自己的某项仍能回管理页改回来。
+
+**子管理员范围**：`PermissionRoleService.adminScopeOf` 判超管 → all，挂了 dept 角色且本人有部门 → dept，其余 none；`canManage` 对 dept 只认 `sys_user.dept_id` 精确相等（下级部门递归留给数据权限片）。没有部门的账号拿不到 dept 范围——范围无法界定时不放开管理入口。角色定义与分配跨部门，全部要求 `superadmin`；子管理员只能改本部门成员的逐账号开关，目标挂了角色时服务端拒绝（角色优先，写逐账号行不会生效）。删除角色时，只挂该角色的成员会先落一行逐账号快照，避免「删角色 = 五项全开」。
+
+**强制落地**：网盘由 `DriveFeatureInterceptor` 按路径覆盖 `/easyshare/drive/**`（未登录放行给 `@SaCheckLogin` 回 401，避免把「没登录」误导成「没权限」，新增端点自动受管）；共享空间在 `SpaceService` 的 `sharedPermissionOf`/`checkSharedWritable`/`checkSharedReadable` 收口，`SpaceController.mine()` 在 drive 关闭时返回空列表；知识服务见第 11 节「功能权限拦截」。
+
+| 方法 | 路径 | 鉴权 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/easyshare/permission/mine` | 登录 | 自己的五项开关 + `adminScope` + 角色名（缺行按全开；SSO 与桌面端据此隐藏入口） |
+| `GET` | `/easyshare/permission/admin/members` | 超管或 dept 子管理员 | 管理页成员矩阵：身份 + 生效权限 + 角色，按操作者范围裁剪 |
+| `GET` | `/easyshare/permission/admin/list` | superadmin | 全部**显式配置行**（旧版桌面端兼容；新客户端改读 `/admin/members`） |
+| `PUT` | `/easyshare/permission/admin` | 超管或 dept 子管理员 | 保存某账号的逐账号五项开关（子管理员限本部门；目标挂角色时拒绝） |
+| `GET` | `/easyshare/permission/admin/roles` | superadmin | 全部权限角色及成员数 |
+| `PUT` | `/easyshare/permission/admin/roles` | superadmin | 新建或更新角色（`roleId` 空=新建，角色名全局唯一） |
+| `DELETE` | `/easyshare/permission/admin/roles/{roleId}` | superadmin | 删除角色（单角色成员落逐账号快照后解绑） |
+| `PUT` | `/easyshare/permission/admin/members/{userId}/roles` | superadmin | 整组替换成员角色（空列表=回到逐账号配置） |
+| `GET` | `/easyshare/profile/mine` | 登录 | 自己的头像地址（相对控制面；空串=未设置） |
+| `POST` | `/easyshare/profile/avatar` | 登录 | 上传头像（multipart `file`，≤2MB，文件头嗅探 MIME，拒绝 SVG） |
+| `DELETE` | `/easyshare/profile/avatar` | 登录 | 清除头像（客户端回落昵称首字） |
+| `GET` | `/easyshare/profile/avatars/{userId}` | **匿名** | 读头像字节，7 天缓存 + ETag；`<img>` 发不了 Authorization 故放开，需随地址带 `?v=` 版本避免换图后看旧图 |
+
+昵称与密码**不走**本模块：RuoYi 标准个人中心 `/system/user/profile`、`/system/user/profile/updatePwd` 已允许任何登录用户改自己。头像不用 `sys_user.avatar` + `sys_oss` 的原因：标准上传接口要求 `system:oss:upload` 权限（普通成员没有），且控制面只配了 EasyShare 自己的 RustFS。
+
+**桌面端权限态**：`AuthUser` 增加 `userId`/`features`/`adminScope`（`account.FeatureFlags`、all/dept/none，空串=未知）。`App.syncAccountProfile` 在登录成功、启动恢复会话、后台校验刷新三处拉取 `MyPermission`（features + adminScope + roles）与头像地址；拉取失败 fail-open 为五项全开、`adminScope` 留空（入口沿用 `isAdmin`，旧控制面行为不变），真正拦截在服务端。登出清空；管理员改权限/角色后立即 `RefreshProfile()`；`auth:user-updated` 事件驱动前端重取。新增绑定：`UpdateNickName`/`ChangePassword`/`UploadAvatar`/`RemoveAvatar`/`RefreshProfile`/`AdminPermissionMembers`/`AdminPermissionRoles`/`AdminSavePermissionRole`/`AdminDeletePermissionRole`/`AdminAssignRoles`/`AdminSavePermissions`。前端只做入口显隐（`App.vue` 的 `canAdmin`/`sectionVisible`/`sectionHome`、设置页卡片、管理页「权限」Tab）——**藏按钮不是鉴权**。管理页里角色管理与角色分配仅超管可用，子管理员只看到本部门成员的矩阵。
+
+**已知边界**：插件商城保持匿名（`/easyshare/plugins`），plugin 开关只有客户端入口显隐；桌面知识会话已于 2026-10-27 改走控制面 SSO（见 §8a），knowledge / meeting 两项在桌面端服务端闭环。子管理员范围暂为精确部门（无下级递归），数据权限范围与文档级成员角色分别留待后续切片。
+
 ## 4c. 插件系统与商城接口（2026-08-31 起）
 
 **插件形态**：Web 插件包（zip：`manifest.json` + HTML/JS/CSS），UI 跑在桌面端前端 `<iframe sandbox="allow-scripts">`（opaque origin），经 postMessage RPC 调用宿主能力；公共 SDK 由宿主统一 serve（`/plugins/_sdk/eshare.js`）。**剪切板为首发普通插件**（2026-09-01 起，可卸载可禁用；此前为内置不可卸载，用户明确「插件即可安装可卸载」后改造）：源码在插件工程 `plugins/clipboard/`，主仓 `//go:embed all:plugins/clipboard` 直读，经 `SeedPlugin` 做**首次运行种子**——落成普通插件（登记 builtin=false），之后更新走商城流程（含权限确认），卸载后不复活（`plugins-seeded.json` 标记）；录制服务与快捷面板随插件在场状态启停（卸载即停记录、销毁面板、释放热键）。宿主侧监听在 `internal/clipboard`（Windows `AddClipboardFormatListener` + message-only 窗口；macOS NSPasteboard changeCount 800ms 轮询，2026-09-01 起；文本/图片(DIBV5/TIFF→PNG)/文件路径，hash 去重、来源进程/应用名、Windows 侧排除密码管理器标记格式）。
 
-**运行时边界**：插件能力调用走唯一动态通道 `PluginInvoke(pluginId, api, argsJSON)`（`appplugin.go`），Go 侧能力注册表（`internal/plugin/registry.go`）按 manifest `permissions` 鉴权——新增能力不改 Wails 绑定。首发能力：`storage.*`（按插件隔离 KV）、`clipboard.history/delete/clear/write/settings`、`clipboard.events`（变更推送）、`notification.show`、`drive.upload`（文本上传个人空间，走统一任务通道）。能力另含 `clipboard.stats`（分类计数，2026-09-01）。静态资源由 Wails AssetServer fallback Handler serve（`/plugins/{id}/...` 映射 `%LOCALAPPDATA%\EasyShare\plugins\{id}\`；`/clipboard-files/` 给剪切板图片）。**快捷面板**（2026-09-01，`panel_surface.go` + 平台实现 `panel_windows.go`/`panel_darwin.go`）：全局热键（Win+V，被占则依次回退 Win+Shift+V / Ctrl+Shift+V / Alt+V；macOS ⌘⇧V）唤起独立小窗（Win32+WebView2 / NSPanel+WKWebView），加载同一插件页 `?panel=1` 紧凑形态；面板静态资源走桌面端进程临时 loopback 监听（`127.0.0.1:0`，复用同一 asset mux，仅回环）；SDK 经原生通道（WebView2 postMessage 字符串 / WKWebView script handler）走同一 `PluginInvoke` 鉴权路径；**面板内成功的 clipboard.write = 选中条目：收起面板并把焦点切回唤起前窗口合成 Ctrl+V / ⌘V 粘贴**（macOS 合成按键需辅助功能授权，未授权降级仅复制）；失焦、Esc（`eshare.window.dismiss()`）或再按热键收起。安装：SHA256 校验 → 解压临时目录（zip-slip 防护）→ 原子换入 → `plugins.json` 登记；包上限 50MB。
+**运行时边界**：插件能力调用走唯一动态通道 `PluginInvoke(pluginId, api, argsJSON)`（`appplugin.go`），Go 侧能力注册表（`internal/plugin/registry.go`）按 manifest `permissions` 鉴权——新增能力不改 Wails 绑定。首发能力：`storage.*`（按插件隔离 KV）、`clipboard.history/delete/clear/write/settings`、`clipboard.events`（变更推送）、`notification.show`、`drive.upload`（文本上传个人空间，走统一任务通道）。能力另含 `clipboard.stats`（分类计数，2026-09-01）。静态资源由同一 `assetMux` serve（`/plugins/{id}/...` 映射 `%LOCALAPPDATA%\EasyShare\plugins\{id}\`；`/clipboard-files/` 给剪切板图片），两个入口：Wails AssetServer fallback Handler，以及面板与插件页共用的进程内 loopback 监听。**插件页 iframe 一律从 loopback 源加载**（`PluginHostBase` 下发基址，2026-10-26 起）：sandbox iframe 是 opaque origin，在 `wails.localhost` 下只拿得到入口 HTML，`style.css` / `app.js` / SDK 等子资源全部失败，页面会裸奔成一列纯文本。**快捷面板**（2026-09-01，`panel_surface.go` + 平台实现 `panel_windows.go`/`panel_darwin.go`）：全局热键（Win+V，被占则依次回退 Win+Shift+V / Ctrl+Shift+V / Alt+V；macOS ⌘⇧V）唤起独立小窗（Win32+WebView2 / NSPanel+WKWebView），加载同一插件页 `?panel=1` 紧凑形态；面板静态资源走桌面端进程临时 loopback 监听（`127.0.0.1:0`，复用同一 asset mux，仅回环）；SDK 经原生通道（WebView2 postMessage 字符串 / WKWebView script handler）走同一 `PluginInvoke` 鉴权路径；**面板内成功的 clipboard.write = 选中条目：收起面板并把焦点切回唤起前窗口合成 Ctrl+V / ⌘V 粘贴**（macOS 合成按键需辅助功能授权，未授权降级仅复制）；失焦、Esc（`eshare.window.dismiss()`）或再按热键收起。安装：SHA256 校验 → 解压临时目录（zip-slip 防护）→ 原子换入 → `plugins.json` 登记；包上限 50MB。
 
 **商城（官方自营）**：插件/版本/资产放 PG（`es_plugin` / `es_plugin_release` / `es_plugin_release_asset`），zip 本体存 RustFS `plugins/{pluginId}/{version}/`，发布走与在线升级相同的两段式预签名直传。发布入口两条：单插件带版本说明用 `scripts/publish-plugin.ps1`，补齐全部官方插件用 `scripts/publish-official-plugins.ps1`（自动发现 `plugins/` 下含 manifest.json 的目录，排除 `template`）。后者挂在 `scripts/ship-control-plane.ps1` 探活之后（`-SkipMarketSeed` 可跳），保证**新装用户的商城不空**——清单只列「有已发布 zip 资产」的版本，纯 SQL 种子无效，字节必须在对象存储里。
 
@@ -262,7 +296,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - 传输任务：运行中为内存状态；终态（completed/rejected/failed）持久化为 JSON 文件。
 - 网盘文件存储在 RustFS（S3 兼容），凭据只在控制面（`deploy/rustfs/.env` → RuoYi 进程环境），客户端经预签名 URL 直传，不暴露给前端。
 - peers 是内存状态，Core 退出后丢失。
-- 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
+- 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。`mode` 区分手动登录（password）与随客户端账号的统一登录（sso），登出客户端账号只清后者。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
 - 插件系统（桌面端进程，见 §4c）：登记表 `plugins.json`、插件包 `plugins/{id}/`、插件私有 KV `plugins-data/{id}.json`（均在 config.json 同目录）；剪切板历史 `clipboard/history.jsonl`（追加写 + 环形截断默认 1000 条）与图片 `clipboard/files/{sha256}.png`（默认 200MB LRU），设置在 `clipboard/settings.json`。
 
 ## 8. 云盘与对象存储
@@ -277,6 +311,7 @@ desktop eventStream (Go 协程，指数退避重连)
 ## 8a. 知识网关（桌面端 ↔ 知识服务）
 
 - `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答/会议听记，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
+- **统一登录免登（2026-10-27）**：客户端账号登录后，桌面壳把控制面令牌交给 Core（`POST /api/knowledge/sso`）；Core 先调知识服务 `GET /auth/me` 探测，成功才落 `mode=sso` 会话，失败保留手动登录通道。登出客户端账号或启动校验遇 401 时只清 SSO 会话，手动知识账号不受影响。注册与清理由 `App.knowledgeSyncMu` 串行化，注册成功后二次校验账号令牌，避免已登出的账号把知识会话留活。会话令牌沿用控制面有效期，知识服务按它解析的 features 强制功能权限。
 - 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
 - **会议听记大文件通道（2026-10-12）**：音频上传/回放不经 Wails 绑定（绑定是 JSON 通道，塞不下上百 MB），前端同源 `fetch /kapi/meetings/*` → 桌面进程 `pluginAssetMiddleware` 接管（`appmeetings.go`；dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截）→ desktop.Client 流式转发 → Core 上述 meetings 路由 → 知识服务 `/meetings`。列表/详情/管理/归档走常规 Wails 绑定。
 - **听记实时上屏（2026-10-13，刻意不用 WebSocket）**：录音时按 600ms 定长分片（16kHz 单声道 s16le = 19200 字节）经 Wails 绑定（base64）→ Core → 知识服务 `POST /meetings/{id}/stream`，**请求即回当前字幕快照**——推流方向是采集端主动供数，请求-响应天然带背压，避开 WebView 跨源与 apiToken 不能进前端两件事。稳态单片往返实测 176ms（RTF 0.303）。流式会话只活在知识服务内存（闲置 30min 回收），**实时文本是预览**：停止后整段离线重跑（同一条记录，`transcribe` 带 `meeting_id` 复用）给出终态分段/标点/说话人。听记页挂载即调 `stream/warm`，否则首片承担约 70s 的模型冷加载。
@@ -317,6 +352,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - `/lab` 本地实验台（仅回环）：上传观察八阶段处理 + 检索问答（引用溯源 clean.md）
 - MCP Server（可选，`pip install mcp` 后 `python -m app.mcp_server`）：stdio 薄桥转发 `/query` 与 `/health`，任何 AI 工具（Claude Code/Cursor/OA 助手）可检索企业知识
 - 账号与登录（薄控制面 2a，`AUTH_ENABLED` 默认关闭）：SQLite 用户库 + PBKDF2，`/auth/bootstrap`（首管理员）/`/auth/login`（Bearer 令牌）/`/auth/users`（管理员）；启用后 `/documents`、`/query`、`/ingest`、`/lab/api/uploads` 需令牌（GET 支持 `?token=`），`/auth`、`/health`、`/lab`、`/debug` 白名单；/lab 内置登录条。**控制面 SSO（2026-10-11）**：`CONTROL_PLANE_URL` 配置后，auth 中间件对本地未命中的令牌回查控制面 `/system/user/getInfo` 验票（introspection + 60s 缓存，`app/auth/sso.py`，请求头/解析同 Go 客户端一套），有效即放行并 JIT 建本地档案（role 按控制面 superadmin/*:*:* 判定、dept 取 deptId 跟随同步；已有本地人保留 role）——同事一套控制面账号通行桌面端与知识服务，本地口令登录保留（WPS/浏览器与 admin 备用通道）
+- **功能权限拦截（2026-10-27）**：SSO 验票同时调 `GET /easyshare/permission/mine` 取五项开关，并入 user dict 的 `features`（`ControlPlaneSSO._feature_flags`）；auth 中间件按 `_FEATURE_PREFIXES` 拦截——`/documents`、`/query`、`/ingest`、`/lab/api/uploads` 归 knowledge，`/meetings` 归 meeting，命中且 `features` 存在（即身份来自控制面 SSO）时关闭项回 403。本地账号的 user dict 没有 `features`，不受矩阵管辖，行为与引入前一致。权限端点不可用时**按全开并告警**（fail-open）：身份已经验过，为一次附加查询把所有人挡在门外代价更大。桌面端自 2026-10-27 起由 Core 用控制面令牌注册 SSO 会话（见 §8a），矩阵对桌面同样强制；本地账号登录保留给 WPS 加载项、浏览器驾驶舱与 admin 备用通道
 - 权限感知检索（2b/2c，2026-09-01）：文档归属 `owner`（用户名）贯通 `processing_jobs` 表、任务响应、manifest 与索引 chunk metadata；入库归属以**令牌用户为准**（lab 上传谁传归谁；`/documents/process` 带令牌时忽略请求显式 owner，防伪造；watcher 监听目录与无令牌调用落 None=共享）；`/query` 服务端按令牌计算可见集——owner 为 None/缺失的文档共享给所有人（存量数据天然共享），非空仅本人与 admin 可见，与请求显式 `doc_ids` 求交集（空交集短路返回无结果，不进检索层）；未登录不过滤（行为不变）；可见集数据源为向量库 `doc_owners()`（JSON/Milvus 双实现）；Core 知识网关已透传 Bearer 令牌，桌面端/WPS 问答链路零改动生效；`/debug/query` 驾驶舱不做权限过滤（回环管理员视角）
 - 生产检索编排（2026-09-01）：`/query` 由 `QueryOrchestrator`（`app/rag/orchestrator.py`）按 `QUERY_STRATEGY` 调度——`vector`（旧单路，embedding 故障自动降级 BM25）/ `hybrid`（默认；向量+BM25 RRF 融合）/ `hybrid_rerank`（融合池 ×3 后 Cross-Encoder 精排，未配置 rerank 等价 hybrid）/ `multi_hop`（分轮混合+LLM 充分性裁判，需 LLM，未配置自动降级 hybrid_rerank，响应 `degraded` 字段说明）；部署级配置不暴露给终端用户，非法值启动即报错；响应新增 `strategy`（实际执行策略）字段；生产查询/生成事件落 `QueryLog`（逐句忠实度仅驾驶舱审计计算，生产传 None）；向量库双后端实现 `count()`/`snapshot_records()` 协议供 BM25 懒构建与健康度聚合（修复 Milvus 后端无 `records` 属性导致的崩溃）
 - 目录监听自动入库（`WATCH_DIRS` 分号分隔，默认关闭）：轮询扫描（SMB 共享盘可靠）+ mtime 稳定性窗口 + 内容哈希版本去重 + 失败自动重试；与 lab 上传同链路（storage → job → pipeline）

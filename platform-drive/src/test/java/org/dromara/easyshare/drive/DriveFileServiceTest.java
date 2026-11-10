@@ -6,6 +6,7 @@ import org.dromara.easyshare.drive.domain.EsFileChangeLog;
 import org.dromara.easyshare.drive.mapper.EsFileMapper;
 import org.dromara.easyshare.drive.service.DriveChangeLogService;
 import org.dromara.easyshare.drive.service.DriveFileService;
+import org.dromara.easyshare.drive.service.FileRoleService;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -42,6 +44,7 @@ class DriveFileServiceTest {
 
     private EsFileMapper mapper;
     private DriveChangeLogService changeLog;
+    private FileRoleService fileRoleService;
     private DriveFileService service;
 
     @BeforeAll
@@ -66,7 +69,9 @@ class DriveFileServiceTest {
     void setUp() {
         mapper = mock(EsFileMapper.class);
         changeLog = mock(DriveChangeLogService.class);
-        service = new DriveFileService(mapper, changeLog);
+        // 文档级角色裁决在 FileRoleService（见 FileRoleServiceTest）；这里只测目录层行为
+        fileRoleService = mock(FileRoleService.class);
+        service = new DriveFileService(mapper, changeLog, fileRoleService);
     }
 
     private static EsFile row(long fileId, String path) {
@@ -365,7 +370,8 @@ class DriveFileServiceTest {
 
 @Test
 void setVisibilityChecksOperatorOwnership() {
-    // 共享空间目录行：owner=0、uploadBy=2（上传者本人可设，他人被拒）
+    // 共享空间目录行：owner=0、uploadBy=2（上传者本人可设；非上传者走 manage 档裁决，
+    // 裁决语义在 FileRoleServiceTest，这里验证委托链路）
     EsFile sharedRow = new EsFile();
     sharedRow.setFileId(31L);
     sharedRow.setSpaceType(EsFile.TYPE_SHARED);
@@ -375,6 +381,8 @@ void setVisibilityChecksOperatorOwnership() {
     sharedRow.setFileName("x.pdf");
     sharedRow.setFileSize(1L);
     when(mapper.selectOne(any())).thenReturn(sharedRow, sharedRow);
+    doThrow(new ServiceException("只有可管理权限的成员可以执行此操作"))
+        .when(fileRoleService).assertVisibilityManageable(any(), eq(3L));
 
     assertEquals("3,7", service.setRegisteredVisibleDepts(
         EsFile.TYPE_SHARED, 0L, 2L, "docs/x.pdf", java.util.List.of(3L, 7L)));
@@ -383,28 +391,7 @@ void setVisibilityChecksOperatorOwnership() {
     ServiceException ex = assertThrows(ServiceException.class,
         () -> service.setRegisteredVisibleDepts(
             EsFile.TYPE_SHARED, 0L, 3L, "docs/x.pdf", java.util.List.of()));
-    assertEquals("只有文件的上传者可以调整可见范围", ex.getMessage());
-}
-
-@Test
-void sharedVisibilityFilterHidesFromOtherDepartments() {
-    EsFile limited = new EsFile();
-    limited.setSpaceType(EsFile.TYPE_SHARED);
-    limited.setOwnerId(0L);
-    limited.setUploadBy(2L);
-    limited.setFilePath("secret.pdf");
-    limited.setFileName("secret.pdf");
-    limited.setVisibleDepts("3,7");
-
-    List<DriveObject> objects = List.of(
-        new DriveObject("open.txt", 1L, java.time.Instant.now()),
-        new DriveObject("secret.pdf", 2L, java.time.Instant.now()));
-    java.util.Map<String, EsFile> rows = java.util.Map.of("secret.pdf", limited);
-
-    // 部门 3（命中）可见两行；部门 8 只见 open.txt；上传者本人恒可见
-    assertEquals(2, service.filterSharedVisible(objects, rows, 3L, 9L).size());
-    assertEquals(1, service.filterSharedVisible(objects, rows, 8L, 9L).size());
-    assertEquals(2, service.filterSharedVisible(objects, rows, 8L, 2L).size());
+    assertEquals("只有可管理权限的成员可以执行此操作", ex.getMessage());
 }
 
 // ── 回收站 + 版本（P1）─────────────────────────────────────
@@ -799,9 +786,9 @@ void assertDownloadableAllowsActivePath() {
 }
 
 @Test
-void assertDownloadableRejectsSharedFileHiddenFromViewerDept() {
-    // 共享空间文档级可见性：visible_depts 只放开部门 3、7。
-    // 部门 8 的用户即便知道路径，也不能签出下载 URL。
+void assertDownloadableDelegatesSharedFileToRoleLadder() {
+    // 共享空间下载授权走文档级角色裁决（四档梯子语义见 FileRoleServiceTest）；
+    // 这里验证委托链路：裁决拒绝会把拒绝带回给签发端点，未拒绝则放行。
     EsFile limited = new EsFile();
     limited.setFileId(31L);
     limited.setSpaceType(EsFile.TYPE_SHARED);
@@ -812,14 +799,14 @@ void assertDownloadableRejectsSharedFileHiddenFromViewerDept() {
     limited.setVisibleDepts("3,7");
     limited.setState(EsFile.STATE_ACTIVE);
     when(mapper.selectOne(any())).thenReturn(limited);
+    doThrow(new ServiceException("当前权限仅可在线预览，不能下载"))
+        .when(fileRoleService).assertDownloadable(limited, 9L);
 
-    // 部门 8、非上传者 → 拒绝
-    assertThrows(ServiceException.class, () -> service.assertDownloadable(
+    // 裁决拒绝（read 档/不可见）→ 签发端点同步拒绝
+    ServiceException ex = assertThrows(ServiceException.class, () -> service.assertDownloadable(
         EsFile.TYPE_SHARED, 0L, "secret.pdf", 8L, 9L));
-
-    // 部门 3 命中 → 放行
-    service.assertDownloadable(EsFile.TYPE_SHARED, 0L, "secret.pdf", 3L, 9L);
-    // 上传者本人恒可见 → 放行
+    assertEquals("当前权限仅可在线预览，不能下载", ex.getMessage());
+    // 未被裁决拒绝的查看者（上传者本人）→ 放行
     service.assertDownloadable(EsFile.TYPE_SHARED, 0L, "secret.pdf", 8L, 2L);
 }
 

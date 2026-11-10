@@ -36,7 +36,12 @@ type User struct {
 	UserID   string `json:"userId"`
 	UserName string `json:"userName"`
 	NickName string `json:"nickName"`
-	Avatar   string `json:"avatar"`
+	// Avatar 是 sys_user.avatar，RuoYi 口径为一个 OSS ID（不是 URL）。
+	// 桌面端在读取会话时会用 AvatarURL（若有）或 EasyShare 自己的头像地址覆盖它，
+	// 前端拿到的永远是可直接渲染的地址。
+	Avatar string `json:"avatar"`
+	// AvatarURL 是 RuoYi 把 OSS ID 换成访问地址后的结果；没配 OSS 时为空。
+	AvatarURL string `json:"avatarUrl"`
 }
 
 // Session 是一次登录的结果：令牌 + 用户信息 + 角色/权限。JWT 由桌面端保管，用于后续请求。

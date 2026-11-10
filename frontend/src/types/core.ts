@@ -172,12 +172,16 @@ export interface KnowledgeStatus {
   serverUrl: string
   username: string
   role: string
+  /** password=知识账号口令手动登录；sso=随客户端账号自动登录（统一登录）；空=未登录 */
+  mode: 'password' | 'sso' | ''
 }
 
 /** 登录后下发的服务拓扑：registry=控制面登记，derived=同主机推导 */
 export interface ServiceEndpoints {
   knowledgeUrl: string
   knowledgeUrlSource: 'registry' | 'derived'
+  /** 地址来自控制面登记时为 true：它是唯一权威源，本机会话与它不一致会被失效重登 */
+  knowledgeUrlAuthoritative: boolean
   platformBaseUrl: string
 }
 
@@ -490,14 +494,100 @@ export interface CoreSnapshot {
   tasks: TransferTask[]
 }
 
+// 成员功能权限（控制面 es_user_permission 一一对应）。
+// 只决定入口显隐；真正拦截在控制面与知识服务，前端隐藏不是鉴权。
+export interface FeatureFlags {
+  userId?: string
+  knowledge: boolean
+  meeting: boolean
+  drive: boolean
+  shared: boolean
+  plugin: boolean
+}
+
+// 管理页成员矩阵的一行：五项开关是**生效值**（角色并集 / 逐账号行 / 缺行全开）。
+// roleIds 非空时开关只读——要改就改角色，与服务端「角色优先」的裁决一致。
+export interface AdminMember {
+  userId: string
+  userName: string
+  nickName: string
+  deptId?: string
+  deptName: string
+  // "0" 正常、"1" 停用（沿用控制面口径）
+  status: string
+  knowledge: boolean
+  meeting: boolean
+  drive: boolean
+  shared: boolean
+  plugin: boolean
+  roleIds: string[]
+  roleNames: string[]
+  // all=全部成员；dept=本部门；dept_children=本部门及下级；specified=指定部门；none=普通成员
+  adminScope: 'all' | 'dept' | 'dept_children' | 'specified' | 'none'
+}
+
+// 管理范围档位（AdminRole.adminScope / AdminMember.adminScope / AuthUser.adminScope 共用值域）。
+export type AdminScopeLevel = 'all' | 'dept' | 'dept_children' | 'specified' | 'none'
+
+// 管理页徽标文案：档位 → 一句话说明。
+export const ADMIN_SCOPE_LABELS: Record<AdminScopeLevel, string> = {
+  all: '子管理员 · 全部成员',
+  dept: '子管理员 · 本部门',
+  dept_children: '子管理员 · 含下级部门',
+  specified: '子管理员 · 指定部门',
+  none: '普通成员',
+}
+
+// 权限角色（权限组）：五项开关 + 管理范围。
+export interface AdminRole {
+  roleId?: string
+  roleName: string
+  // none=普通权限组；其余档位=子管理员（成员能进管理页，按档位裁剪可见成员）
+  adminScope: AdminScopeLevel
+  // specified 档的指定部门 ID 列表；其余档位为空
+  scopeDeptIds?: string[]
+  knowledge: boolean
+  meeting: boolean
+  drive: boolean
+  shared: boolean
+  plugin: boolean
+  // 管理页列表展示用，保存时不必回传
+  memberCount?: number
+}
+
+// 文档级成员角色行（企业权限第三片）：一个主体对一份共享空间文件的显式角色。
+// memberId 是雪花 ID，按字符串透传（KI-22：number 会撞值）。
+export interface FileMemberRole {
+  memberType: 'user' | 'dept'
+  memberId: string
+  // manage=可管理（含授权/删除） / edit=可编辑（无删除） / download=可查看下载 / read=仅可查看
+  role: 'manage' | 'edit' | 'download' | 'read'
+}
+
+// 共享空间文件条目（管理页「文件访问角色」卡选文件用）。
+// fileId 是雪花 ID 字符串（KI-21：cloud.File 的 number 形式经 JS 往返会撞值，不能用）。
+export interface SharedFileEntry {
+  key: string
+  name: string
+  size: number
+  uploadByName: string
+  fileId: string
+}
+
 // 账号控制面（RuoYi）登录态。token 只在桌面端进程保管，不下发前端。
 export interface AuthUser {
   loggedIn: boolean
+  userId: string
   userName: string
   nickName: string
   avatar: string
   // isAdmin 只控制「管理」入口显隐，不是鉴权：后台接口自己按 Sa-Token 角色拒绝。
   isAdmin: boolean
+  // adminScope 来自 /easyshare/permission/mine：任一子管理员档位只开放权限矩阵；
+  // 空串=未知（旧版控制面或拉取失败），入口沿用 isAdmin 口径。
+  adminScope: AdminScopeLevel | ''
+  // features 同理：关掉的入口不显示，服务端仍按真实配置拦截。
+  features: FeatureFlags
 }
 
 // 管理页的账号行。userId 是雪花 ID，必须按字符串透传——超出 JS 安全整数范围。

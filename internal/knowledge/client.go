@@ -15,6 +15,13 @@ import (
 	"time"
 )
 
+// 会话来源：password=知识服务本地账号；sso=控制面令牌（桌面端登录后下发）。
+// SSO 会话不要求用户再输一次知识账号口令，功能权限由知识服务按控制面矩阵强制。
+const (
+	ModePassword = "password"
+	ModeSSO      = "sso"
+)
+
 // Session 一次登录会话。ServerURL 为空表示未配置，Token 为空表示未登录。
 type Session struct {
 	ServerURL string `json:"serverUrl"`
@@ -22,6 +29,7 @@ type Session struct {
 	Username  string `json:"username"`
 	Role      string `json:"role"`
 	ExpiresAt string `json:"expiresAt"`
+	Mode      string `json:"mode,omitempty"`
 }
 
 // StatusView 面向前端的登录态视图，永不包含令牌。
@@ -31,6 +39,7 @@ type StatusView struct {
 	ServerURL  string `json:"serverUrl"`
 	Username   string `json:"username"`
 	Role       string `json:"role"`
+	Mode       string `json:"mode"`
 }
 
 // User 远端身份（登录响应中的用户部分）。
@@ -307,7 +316,16 @@ func (client *Client) Login(ctx context.Context, username, password string) (Ses
 		Username:  response.Username,
 		Role:      response.Role,
 		ExpiresAt: response.ExpiresAt,
+		Mode:      ModePassword,
 	}, nil
+}
+
+// Me 用给定令牌读取远端身份。SSO 场景下令牌是控制面令牌：
+// 返回 200 说明知识服务已经接入统一登录，可以免二次输入知识账号口令。
+func (client *Client) Me(ctx context.Context, token string) (User, error) {
+	var user User
+	err := client.call(ctx, http.MethodGet, "/auth/me", token, nil, &user)
+	return user, err
 }
 
 // Query 携带令牌发起检索问答。

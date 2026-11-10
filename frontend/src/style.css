@@ -365,6 +365,103 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round
 }
 .admin-toggle.on i { transform: translateX(18px); }
 
+/* 功能权限矩阵：一行一账号，角色列 + 五列开关 + 保存。列宽固定，开关才能上下对齐 */
+.perm-hint { margin: 0 19px 12px; }
+.perm-table { display: grid; margin: 0 19px 10px; }
+.perm-row {
+  display: grid; grid-template-columns: minmax(150px, 1fr) minmax(104px, .85fr) repeat(5, 56px) 76px;
+  align-items: center; gap: 6px; padding: 8px 0;
+  border-bottom: 1px solid rgba(var(--line-rgb),.07);
+}
+.perm-row:last-child { border-bottom: 0; }
+.perm-head {
+  padding: 6px 0; color: var(--muted); font-size: 11px; font-weight: 600;
+  border-bottom: 1px solid rgba(var(--line-rgb),.14);
+}
+.perm-user { display: grid; gap: 1px; min-width: 0; }
+.perm-user strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.perm-user span { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.perm-cell { display: flex; align-items: center; }
+
+/* 角色组：一批人共用一套开关；「子管理员」额外拿到本部门的管理范围 */
+.role-form {
+  display: grid; grid-template-columns: minmax(150px, 1fr) 190px; gap: 12px 14px;
+  margin: 0 19px 14px; padding: 14px 15px;
+  background: var(--soft-bg); border: 1px solid rgba(var(--line-rgb),.1); border-radius: var(--r-lg);
+}
+.role-field { display: grid; gap: 5px; }
+.role-field > span { color: var(--muted); font-size: 11px; font-weight: 600; }
+.role-field input, .role-field select {
+  width: 100%; padding: 7px 10px; color: var(--text); font-size: 13px;
+  background: var(--bg); border: 1px solid rgba(var(--line-rgb),.18); border-radius: var(--r-lg);
+  outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.role-field input:focus, .role-field select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(var(--blue-rgb),.15); }
+.role-flags { display: flex; flex-wrap: wrap; grid-column: 1 / -1; gap: 8px 18px; }
+.role-flag { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.role-flag .admin-toggle { width: 38px; height: 22px; }
+.role-flag .admin-toggle i { width: 18px; height: 18px; }
+.role-flag .admin-toggle.on i { transform: translateX(16px); }
+.role-form-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; }
+
+/* 指定部门勾选列表：角色范围选「指定部门」时出现，占满表单一行 */
+.role-dept-field { grid-column: 1 / -1; }
+.role-dept-list {
+  display: grid; max-height: 180px; overflow-y: auto; gap: 7px; padding: 10px;
+  background: var(--bg); border: 1px solid rgba(var(--line-rgb),.18); border-radius: var(--r-lg);
+}
+.role-dept-list label { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+.role-dept-list label input { accent-color: var(--blue); }
+.role-dept-list .admin-empty { margin: 0; }
+
+/* 文件访问角色卡：成员行内档位切换下拉 */
+.role-select {
+  padding: 6px 10px; color: var(--text); font-size: 12px;
+  background: var(--bg); border: 1px solid rgba(var(--line-rgb),.18); border-radius: var(--r-lg);
+  outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.role-select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(var(--blue-rgb),.15); }
+
+.role-list { display: grid; margin: 0 19px 14px; }
+.role-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 0; border-bottom: 1px solid rgba(var(--line-rgb),.07);
+}
+.role-row:last-child { border-bottom: 0; }
+.role-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.role-main strong { font-size: 13px; }
+.role-tag {
+  padding: 2px 7px; color: var(--blue-dark); background: var(--blue-light);
+  border-radius: 20px; font-size: 10px; font-weight: 600; white-space: nowrap;
+}
+.role-tag.muted { color: var(--muted); background: var(--soft-bg); }
+.role-meta { color: var(--muted); font-size: 11px; }
+.role-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+
+/* 成员矩阵的角色列：超级管理员展开勾选，子管理员只看静态名单 */
+.card.perm-card { overflow: visible; }
+.perm-role-cell { min-width: 0; }
+.perm-role-details { position: relative; }
+.perm-role-details summary {
+  display: block; overflow: hidden; color: var(--muted); cursor: pointer;
+  font-size: 12px; text-overflow: ellipsis; white-space: nowrap; list-style: none;
+}
+.perm-role-details summary::-webkit-details-marker { display: none; }
+.perm-role-details[open] summary { color: var(--blue-dark); }
+.perm-role-menu {
+  position: absolute; z-index: 20; top: calc(100% + 6px); left: 0;
+  display: grid; gap: 7px; min-width: 172px; padding: 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-lg); box-shadow: var(--sh-lg);
+}
+.perm-role-menu label { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+.perm-role-menu label input { accent-color: var(--blue); }
+.perm-role-menu .secondary-button { margin-top: 2px; }
+.perm-role-static {
+  display: block; overflow: hidden; color: var(--muted); font-size: 12px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* 容量总览：承诺 vs 物理，超配时要显眼 */
 .capacity-card { padding: 15px 19px; }
 .capacity-row { display: flex; flex-wrap: wrap; gap: 22px; }
@@ -803,10 +900,16 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
   display: grid; place-items: center; width: 40px; height: 40px; flex: 0 0 auto;
   color: white; background: var(--blue); border-radius: 50%;
   font-size: 16px; font-weight: 600;
+  overflow: hidden;
 }
+.settings-account-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .settings-account-meta { display: grid; gap: 2px; min-width: 0; flex: 1; }
 .settings-account-meta strong { font-size: 13px; }
 .settings-account-meta .setting-hint { margin: 0; }
+.profile-actions { display: flex; align-items: center; gap: 10px; }
+.password-form { display: grid; gap: 8px; max-width: 320px; }
+.profile-feedback { margin-top: 10px; }
+.profile-notice { margin: 10px 0 0; color: var(--green-text); font-size: 12px; }
 .setting-label { display: block; font-size: 13px; font-weight: 600; color: var(--text); }
 .setting-hint { max-width: 540px; margin: 3px 0 10px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 .setting-input {
@@ -1743,6 +1846,7 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
 .knowledge-panel { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
 
 .knowledge-login-card { max-width: 460px; }
+.knowledge-login-hint { margin: 0; padding: 0 18px 10px; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .knowledge-login-form { display: flex; flex-direction: column; gap: 14px; padding: 4px 18px 18px; }
 .knowledge-login-submit { margin-top: 4px; min-height: 34px; }
 
@@ -2012,8 +2116,10 @@ button:focus-visible, a:focus-visible { outline: 3px solid rgba(var(--blue-rgb),
   color: #fff;
   font-size: 12px;
   font-weight: 600;
+  overflow: hidden;
   transition: filter 0.12s;
 }
+.account-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .account-avatar:hover { filter: brightness(1.08); }
 .account-avatar:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .account-name {

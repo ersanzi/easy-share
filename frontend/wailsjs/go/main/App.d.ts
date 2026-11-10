@@ -19,9 +19,13 @@ export function AdminAiConfigGet():Promise<account.AiConfig>;
 
 export function AdminAiConfigSave(arg1:string,arg2:string,arg3:string,arg4:any,arg5:any):Promise<account.AiConfig>;
 
+export function AdminAssignRoles(arg1:string,arg2:Array<string>):Promise<void>;
+
 export function AdminCapacity():Promise<account.Capacity>;
 
 export function AdminCreateUser(arg1:account.NewUser):Promise<void>;
+
+export function AdminDeletePermissionRole(arg1:string):Promise<void>;
 
 export function AdminDeleteUser(arg1:string):Promise<void>;
 
@@ -35,9 +39,17 @@ export function AdminListSpaces():Promise<Array<account.Space>>;
 
 export function AdminListUsers(arg1:number,arg2:number):Promise<account.UserPage>;
 
+export function AdminPermissionMembers():Promise<Array<account.AdminMember>>;
+
+export function AdminPermissionRoles():Promise<Array<account.AdminRole>>;
+
 export function AdminRegisterEnabled():Promise<boolean>;
 
 export function AdminResetPassword(arg1:string,arg2:string):Promise<void>;
+
+export function AdminSavePermissionRole(arg1:account.AdminRole):Promise<void>;
+
+export function AdminSavePermissions(arg1:account.FeatureFlags):Promise<void>;
 
 export function AdminSetPersonalQuota(arg1:string,arg2:number):Promise<void>;
 
@@ -56,6 +68,8 @@ export function ApplyUpdate():Promise<void>;
 export function AssetHandler():Promise<http.Handler>;
 
 export function CfapiMountPath():Promise<string>;
+
+export function ChangePassword(arg1:string,arg2:string):Promise<void>;
 
 export function CheckUpdate():Promise<main.UpdateCheckResult>;
 
@@ -116,6 +130,12 @@ export function CloudVersions(arg1:string):Promise<Array<drive.VersionEntry>>;
 export function CurrentUser():Promise<main.AuthUser>;
 
 export function DeleteTask(arg1:string):Promise<void>;
+
+export function FileMemberList(arg1:string):Promise<Array<drive.FileMemberRole>>;
+
+export function FileMemberRemove(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function FileMemberReplace(arg1:string,arg2:Array<drive.FileMemberRole>):Promise<void>;
 
 export function GetLogDirectory():Promise<string>;
 
@@ -221,6 +241,8 @@ export function OpenReceiveFolder():Promise<void>;
 
 export function OpenUpdatesFolder():Promise<void>;
 
+export function PluginHostBase():Promise<string>;
+
 export function PluginInstallFromMarket(arg1:string,arg2:string,arg3:number,arg4:Array<string>):Promise<plugin.Info>;
 
 export function PluginInstallFromPath(arg1:string):Promise<plugin.Info>;
@@ -239,7 +261,11 @@ export function PluginUninstall(arg1:string):Promise<void>;
 
 export function ProcessDroppedFiles(arg1:Array<string>):Promise<main.FilesDroppedEvent>;
 
+export function RefreshProfile():Promise<main.AuthUser>;
+
 export function RejectTransfer(arg1:string):Promise<void>;
+
+export function RemoveAvatar():Promise<main.AuthUser>;
 
 export function ReportFrontendError(arg1:string,arg2:string):Promise<void>;
 
@@ -265,6 +291,8 @@ export function SetDropSpace(arg1:string):Promise<void>;
 
 export function SetFileVisibility(arg1:string,arg2:string,arg3:Array<string>):Promise<void>;
 
+export function SharedFileList():Promise<Array<main.SharedFileVo>>;
+
 export function ShowInFolder(arg1:string):Promise<void>;
 
 export function ShutdownAll():Promise<void>;
@@ -276,3 +304,7 @@ export function StartUpdateDownload():Promise<void>;
 export function Startup(arg1:context.Context):Promise<void>;
 
 export function StopDrive():Promise<void>;
+
+export function UpdateNickName(arg1:string):Promise<main.AuthUser>;
+
+export function UploadAvatar():Promise<main.AuthUser>;

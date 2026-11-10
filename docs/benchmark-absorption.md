@@ -12,7 +12,7 @@
 >
 > 状态口径：**已落地** = 有实现且有生产调用方；**部分** = 实现了但只覆盖子集或未接产品；
 > **未做** = 全仓搜不到；**判定不做** = 看过证据后主动否掉，理由必须写出来。
-> 最后更新：2026-10-18
+> 最后更新：2026-11-05（第 22/25 行：qingnse64 新构建取证，证伪「状态位→图标」映射，见 [`intelligence/2026-11-05-qingnse-icon-handler-reverse.md`](intelligence/2026-11-05-qingnse-icon-handler-reverse.md)）
 
 ## 一、网盘（钉盘同步引擎 + WPS 云盘桌面形态）
 
@@ -39,9 +39,10 @@
 | 19 | 配额与策略要落到本地看得懂 | 钉盘 §9 行11 | `platform-drive/src/main/java/org/dromara/easyshare/drive/service/CapacityService.java` | 部分 | 有配额软校验与前端提示；无单文件上限、无 NTFS ACL 下发 |
 | 20 | 编辑锁防止两人同时改 | 钉盘 §9 行8 | — | 未做 | 全仓零命中（`edit_lock`/`tryGetEditLock`/`lock_expire_time`） |
 | 21 | 元数据扩展用 KV 承载，不改表 | WPS §10 行13 | — | 未做 | 加列要改表；`extraInfo` 只作为取证引文存在 |
-| 22 | 自定义状态位承载业务状态 | WPS §3.4、§625 取值清单 | — | 判定不做 | 本机 SDK 头 `cfapi.h` 无任何 CustomState 接口，WPS 走的是未文档化入口；且「哪个状态画哪个图标」的映射取证时自认未拿到。没有映射表就照抄未文档接口属于猜 |
+| 22 | 自定义状态位承载业务状态 | WPS §3.4、§625 取值清单；qingnse 取证 §1 | — | 判定不做 | 本机 SDK 头 `cfapi.h` 无任何 CustomState 接口，WPS 走的是未文档化入口；2026-11-05 取证已证「状态位→图标」映射**不存在**——Explorer 图标走扩展名关联 + IconHandler，业务态不画独立覆盖图标，更无照抄理由 |
 | 23 | 本地元数据表双向绑定 NTFS 身份 | WPS §5 | — | 判定不做 | 只读挂载不会发生本地改名/移动，这张表是给双向同步用的；身份翻转经核实是原地更新（`internal/cfapi/tree_windows.go` · `updateExisting`），不需要表 |
 | 24 | 双向同步（本地改动传回云端） | 钉盘 §2；WPS §3.5 | — | 未做（切片 5b 另立项） | 现在整片置只读位，写入被明确拒绝而不是静默丢失（实测见 `internal/cfmount/README.md`） |
+| 25 | 在线文档态用双重扩展名表达，图标靠 IconHandler 关联真实类型 | qingnse 取证 §2（`docs/intelligence/2026-11-05-qingnse-icon-handler-reverse.md`） | — | 判定不做（短期） | WPS：`名称.真实ext.wpsonline` + `HKCR\wpsonline\shellex\IconHandler`（`KWpsDrvieIconHandler`）剥壳取真实扩展名查系统图标；我们占位符保持真实文件名，加后缀改用户可见命名，产品上不可接受；「UI 侧识别特殊节点用 FileIdentity 魔数（`COMPANY_ROOT_FILE_ID`）」可留作将来 Shell 侧协议 |
 
 ## 二、界面（WPS KD 设计体系 + 钉钉逐像素实测）
 

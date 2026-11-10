@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -53,6 +54,46 @@ func DeriveKnowledgeURL(platformBaseURL string) string {
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+// IsLoopbackURL 判断地址是否指向本机回环（localhost / 127.0.0.0/8 / [::1]）。
+// 用于区分「员工机器上残留的本机联调地址」与企业服务器地址。
+func IsLoopbackURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// SameServerURL 比较两个服务地址是否指向同一服务（忽略主机大小写、默认端口与末尾斜杠）。
+func SameServerURL(left, right string) bool {
+	a, okA := normalizeServerURL(left)
+	b, okB := normalizeServerURL(right)
+	return okA && okB && a == b
+}
+
+func normalizeServerURL(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	host := strings.ToLower(parsed.Hostname())
+	port := parsed.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	hostport := host
+	if port != "" {
+		hostport = net.JoinHostPort(host, port)
+	}
+	return scheme + "://" + hostport + strings.TrimRight(parsed.Path, "/"), true
 }
 
 // --- AI 能力配置（管理端配置化；超管读写，密钥掩码回显，见 AiConfigController） ---

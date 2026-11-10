@@ -62,6 +62,15 @@ type App struct {
 	// 账号控制面（RuoYi）会话。token 只保管在桌面端进程，不下发前端。
 	accountMu      sync.RWMutex
 	accountSession *account.Session
+	// features 是控制面下发的成员功能权限，只影响入口显隐；真正的拦截在控制面与知识服务。
+	// 与 accountSession 同生命周期：登录时拉取、校验会话时刷新、登出清空。
+	features account.FeatureFlags
+	// adminScope 是控制面下发的管理范围档位（all/dept/dept_children/specified/none，空=未知）。
+	// 子管理员只需要「管理」入口与权限矩阵，账号/空间等超管页仍不开放。
+	adminScope string
+	// knowledgeSyncMu 串行化「按账号同步知识会话」与「登出清理」：两者都要跨进程改
+	// knowledge.json，交错执行会让已登出的账号把知识会话重新登回去。
+	knowledgeSyncMu sync.Mutex
 	// trayUserCh 把登录态推给托盘悬浮窗（模式同 trayStatusCh）。
 	trayUserCh chan AuthUser
 	// mounts 管「此电脑」里两个云端空间的 WebDAV 端点与条目，见 spacemount.go。
@@ -92,8 +101,12 @@ type App struct {
 
 	// 快捷面板（剪切板插件 ?panel=1 形态的宿主窗口，见 panel_surface.go 与平台实现）。
 	// panelEmit 由平台窗口就绪后注入：向面板页推送事件（clipboard:changed、panel:shown）。
+	panelServerMu sync.Mutex
 	panelListener net.Listener
 	panelURL      string
+	// panelBase 面板静态服务的源（http://127.0.0.1:<随机端口>）。主窗口插件页 iframe 也用它：
+	// sandbox iframe 在 Wails 自定义源下拿不到子资源，页面会退化成裸 HTML（见 PluginHostBase）。
+	panelBase string
 	// searchURL 全局搜索表面（第二面板窗口，与剪切板面板共用了同一 loopback 静态服务）
 	searchURL string
 	// searchEmit 搜索面板的 Eval 通道（异步回投搜索结果；窗口就绪后注入）
@@ -106,12 +119,21 @@ type App struct {
 // AuthUser 是下发给前端的登录态（不含 token）。
 //
 // IsAdmin 只决定「管理」入口是否显示，不承担鉴权——后台接口自己按 Sa-Token 角色拒绝。
+// 同理，Features 只控制功能入口显隐，真正的拦截在控制面与知识服务。
 type AuthUser struct {
 	LoggedIn bool   `json:"loggedIn"`
+	UserID   string `json:"userId"`
 	UserName string `json:"userName"`
 	NickName string `json:"nickName"`
 	Avatar   string `json:"avatar"`
 	IsAdmin  bool   `json:"isAdmin"`
+	// AdminScope 是控制面下发的管理范围档位：all=全部成员、dept=本部门、
+	// dept_children=本部门及下级、specified=指定部门、none=普通成员、
+	// 空=未知（旧版控制面或本次拉取失败，入口沿用 isAdmin 口径）。
+	AdminScope string `json:"adminScope"`
+	// Features 是控制面下发的成员功能权限。未登录时全关；
+	// 旧版控制面没有权限接口时回落全开——不隐藏入口，服务端仍会按真实配置拦。
+	Features account.FeatureFlags `json:"features"`
 }
 
 func NewApp() *App {
@@ -385,13 +407,20 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 	}
 	a.accountMu.Lock()
 	a.accountSession = session
+	a.features = account.AllFeatures()
+	a.adminScope = ""
 	a.accountMu.Unlock()
+	// 权限与头像要登录后才知道；拉不到就按全开 + 现有头像显示，入口不因抖动消失。
+	a.syncAccountProfile(ctx, client, session)
 	a.saveAccountSession(session)
 	a.logger.Printf("user logged in: %s", session.User.UserName)
 	a.publishTrayUser()
 	// 按该账号实际拥有的空间挂「此电脑」条目。异步：挂载要回控制面读空间，
 	// 不该把登录这一步拖慢，登录成功与否也不取决于它。
 	go a.refreshSpaceMounts()
+	// 登录后才知道租户服务拓扑：先按控制面校正本机知识会话地址，再用控制面令牌
+	// 自动登录知识服务（SSO）——员工不再二次输入知识账号口令。
+	go a.syncKnowledgeAccess()
 	return a.CurrentUser(), nil
 }
 
@@ -401,6 +430,8 @@ func (a *App) Logout() {
 	session := a.accountSession
 	a.accountMu.Unlock()
 	a.clearAccountSession()
+	// 统一登录得来的知识会话随账号一起失效；用户手动登录的知识会话保留，不动用户自己的配置。
+	a.clearKnowledgeSSO()
 	// 先卸盘再通知控制面：会话已清空，挂着的盘此刻已经不可用，留着只会让用户点进去报错
 	a.unmountAllSpaces()
 	if session == nil {
@@ -438,6 +469,8 @@ func (a *App) saveAccountSession(session *account.Session) {
 func (a *App) clearAccountSession() {
 	a.accountMu.Lock()
 	a.accountSession = nil
+	a.features = account.FeatureFlags{}
+	a.adminScope = ""
 	a.accountMu.Unlock()
 	path := a.accountSessionPath()
 	if path == "" {
@@ -470,11 +503,15 @@ func (a *App) restoreAccountSession() {
 	}
 	a.accountMu.Lock()
 	a.accountSession = session
+	// 落盘会话不含权限快照：恢复时先按全开显示，等下面异步校验拿到真实配置再收口。
+	a.features = account.AllFeatures()
+	a.adminScope = ""
 	a.accountMu.Unlock()
 	a.logger.Printf("restored account session for %s", session.User.UserName)
 	a.publishTrayUser()
 	go a.refreshSpaceMounts()
 	go a.validateAccountSession()
+	go a.syncKnowledgeAccess()
 }
 
 func (a *App) validateAccountSession() {
@@ -491,8 +528,12 @@ func (a *App) validateAccountSession() {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	fresh, err := account.New(base).SessionInfo(ctx, session.Token)
+	client := account.New(base)
+	fresh, err := client.SessionInfo(ctx, session.Token)
 	if err == nil {
+		// 头像地址与功能权限不在 getInfo 里（前者是我们自己的存储，后者是 EasyShare 的矩阵），
+		// 同一次校验顺手拉齐；失败保留全开，入口不因一次抖动消失。
+		a.syncAccountProfile(ctx, client, fresh)
 		a.accountMu.Lock()
 		if a.accountSession != nil && a.accountSession.Token == session.Token {
 			a.accountSession.User = fresh.User
@@ -504,12 +545,14 @@ func (a *App) validateAccountSession() {
 		if current != nil {
 			a.saveAccountSession(current)
 		}
-		a.publishTrayUser()
+		a.notifyAccountChanged()
 		return
 	}
 	if errors.Is(err, account.ErrUnauthorized) {
 		a.logger.Printf("restored account session rejected: %v", err)
 		a.clearAccountSession()
+		// 账号已失效，统一登录的知识会话不能再留着（否则下一个登录的人会看到上一个账号的知识库）。
+		a.clearKnowledgeSSO()
 		a.unmountAllSpaces()
 		a.publishTrayUser()
 		if a.ctx != nil {
@@ -527,7 +570,10 @@ func (a *App) validateAccountSession() {
 type ServiceEndpoints struct {
 	KnowledgeURL       string `json:"knowledgeUrl"`
 	KnowledgeURLSource string `json:"knowledgeUrlSource"`
-	PlatformBaseURL    string `json:"platformBaseUrl"`
+	// KnowledgeURLAuthoritative 为 true 表示地址来自控制面登记，是员工机器的唯一权威源，
+	// 本机知识会话与它不一致时必须失效重登（见 reconcileKnowledgeSession）。
+	KnowledgeURLAuthoritative bool   `json:"knowledgeUrlAuthoritative"`
+	PlatformBaseURL           string `json:"platformBaseUrl"`
 }
 
 // ServiceEndpoints 给「知识」页等提供登录后的服务地址。控制面拉取失败不阻塞：
@@ -550,8 +596,126 @@ func (a *App) ServiceEndpoints() ServiceEndpoints {
 	if cfg, err := account.New(base).ServiceConfig(ctx, session.Token); err == nil && cfg != nil && cfg.KnowledgeURL != "" {
 		endpoints.KnowledgeURL = cfg.KnowledgeURL
 		endpoints.KnowledgeURLSource = "registry"
+		endpoints.KnowledgeURLAuthoritative = true
 	}
 	return endpoints
+}
+
+// reconcileKnowledgeSession 用控制面下发的地址校正本机知识会话，免得员工机器长期停在
+// 自己填过的地址（典型是开发留下的 127.0.0.1:8000）上而不自知。规则：
+//   - 控制面登记了地址：一律以登记值为准；
+//   - 未登记：仅当「控制面不是回环、而本机会话指向回环」时用同主机推导值纠正；
+//   - 其余情况不打扰（控制面本身就是回环 = 本地联调）。
+//
+// 地址一变就失效会话：令牌属于旧服务，静默改写地址后复用旧令牌只会换来一串 401。
+// 只在账号控制面已登录时调用——未登录既读不到登记值，也不该动用户本机的联调配置。
+//
+// 返回对账后应当使用的知识服务地址（空串=控制面没给出可用地址）；调用方接着在该
+// 地址上登记 SSO 会话。会话本身仍有效时返回会话当前地址，不去无谓地换服务器。
+func (a *App) reconcileKnowledgeSession() string {
+	a.accountMu.RLock()
+	hasAccount := a.accountSession != nil
+	a.accountMu.RUnlock()
+	if !hasAccount {
+		return ""
+	}
+	endpoints := a.ServiceEndpoints()
+	target := endpoints.KnowledgeURL
+	if target == "" {
+		return ""
+	}
+	status, err := a.KnowledgeStatus()
+	if err != nil || !status.LoggedIn || status.ServerURL == "" {
+		return target
+	}
+	if account.SameServerURL(status.ServerURL, target) {
+		return status.ServerURL
+	}
+	if !endpoints.KnowledgeURLAuthoritative {
+		if account.IsLoopbackURL(endpoints.PlatformBaseURL) || !account.IsLoopbackURL(status.ServerURL) {
+			return status.ServerURL
+		}
+	}
+	if err := a.KnowledgeLogout(); err != nil {
+		// 旧会话清不掉不阻断后续注册：注册成功会整体覆盖它。
+		a.logger.Printf("reconcile knowledge session: %v", err)
+		return target
+	}
+	a.logger.Printf("knowledge session target changed: %s -> %s (旧令牌已失效)", status.ServerURL, target)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "knowledge:target-changed", map[string]string{
+			"previous": status.ServerURL,
+			"target":   target,
+		})
+	}
+	return target
+}
+
+// syncKnowledgeAccess 账号登录/恢复后把知识会话切到统一登录（SSO）：先按控制面拓扑
+// 对账地址，再用控制面令牌向知识服务换会话。成功后同一地址上的手动会话被 SSO 接管，
+// 员工不再二次输入知识账号口令，功能权限矩阵也才在知识服务端真正生效
+// （令牌解析不出控制面身份时按本地账号处理，不受矩阵管辖）。
+func (a *App) syncKnowledgeAccess() {
+	a.knowledgeSyncMu.Lock()
+	defer a.knowledgeSyncMu.Unlock()
+	a.registerKnowledgeSSO(a.reconcileKnowledgeSession())
+}
+
+// registerKnowledgeSSO 用当前账号令牌登记知识会话。知识服务没接统一登录（旧部署、
+// 未配置控制面）时这里探测失败：不覆盖已有的手动登录会话，知识页回落到手动登录。
+func (a *App) registerKnowledgeSSO(serverURL string) {
+	serverURL = strings.TrimSpace(serverURL)
+	if serverURL == "" {
+		return
+	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" {
+		return
+	}
+	client, err := a.coreClient()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	status, err := client.KnowledgeRegisterSSO(ctx, serverURL, session.Token)
+	if err != nil {
+		a.logger.Printf("knowledge sso register (%s): %v", serverURL, err)
+		return
+	}
+	// 探测期间账号可能已登出或换人：这张令牌已不代表当前账号，撤销刚登记的会话。
+	a.accountMu.RLock()
+	current := a.accountSession
+	a.accountMu.RUnlock()
+	if current == nil || current.Token != session.Token {
+		if err := a.KnowledgeLogout(); err != nil {
+			a.logger.Printf("revoke stale knowledge sso: %v", err)
+		}
+		return
+	}
+	a.logger.Printf("knowledge sso ready: user=%s server=%s", status.Username, status.ServerURL)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "knowledge:session-changed")
+	}
+}
+
+// clearKnowledgeSSO 只清统一登录得来的知识会话；用户手动登录的知识账号保持不动。
+func (a *App) clearKnowledgeSSO() {
+	a.knowledgeSyncMu.Lock()
+	defer a.knowledgeSyncMu.Unlock()
+	status, err := a.KnowledgeStatus()
+	if err != nil || !status.LoggedIn || status.Mode != knowledge.ModeSSO {
+		return
+	}
+	if err := a.KnowledgeLogout(); err != nil {
+		a.logger.Printf("clear knowledge sso: %v", err)
+		return
+	}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "knowledge:session-changed")
+	}
 }
 
 // SaveServiceConfig 管理员登记知识服务地址（空串=清除）。权限裁决在控制面。
@@ -577,6 +741,8 @@ func (a *App) SaveServiceConfig(knowledgeURL string) error {
 		a.reportError("save service config", err)
 		return err
 	}
+	// 管理员改完拓扑后本机立即跟随，不然还要等下次启动才对账。
+	go a.syncKnowledgeAccess()
 	return nil
 }
 
@@ -665,12 +831,312 @@ func (a *App) currentUserLocked() AuthUser {
 	}
 	u := a.accountSession.User
 	return AuthUser{
-		LoggedIn: true,
-		UserName: u.UserName,
-		NickName: u.NickName,
-		Avatar:   u.Avatar,
-		IsAdmin:  a.accountSession.IsAdmin(),
+		LoggedIn:   true,
+		UserID:     u.UserID,
+		UserName:   u.UserName,
+		NickName:   u.NickName,
+		Avatar:     u.Avatar,
+		IsAdmin:    a.accountSession.IsAdmin(),
+		AdminScope: a.adminScope,
+		Features:   a.features,
 	}
+}
+
+// notifyAccountChanged 让托盘与前端一起拿最新的账号态（昵称/头像/权限）。
+func (a *App) notifyAccountChanged() {
+	a.publishTrayUser()
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "auth:user-updated")
+	}
+}
+
+// syncAccountProfile 拉取功能权限与头像地址，写回会话与 App.features。
+// 读不到时保持「五项全开 + 会话里已有的头像」：入口显隐只是可用性提示，
+// 真正的拦截在控制面与知识服务，不该因为一次网络抖动就把入口全藏起来。
+func (a *App) syncAccountProfile(ctx context.Context, client *account.Client, session *account.Session) {
+	flags := account.AllFeatures()
+	scope := ""
+	if got, err := client.MyPermission(ctx, session.Token); err == nil && got != nil {
+		flags = got.FeatureFlags
+		scope = got.AdminScope
+	} else if err != nil {
+		a.logger.Printf("read feature permissions (keep all enabled): %v", err)
+	}
+	avatar := session.User.AvatarURL
+	if path, err := client.ProfileAvatarURL(ctx, session.Token); err == nil {
+		if path != "" {
+			avatar = absoluteAccountURL(a.config.PlatformBaseURL, path)
+		}
+	} else {
+		a.logger.Printf("read account avatar (keep %q): %v", avatar, err)
+	}
+	a.accountMu.Lock()
+	// 拉取期间可能已登出或换号：只在令牌仍是同一会话时写回。
+	if a.accountSession != nil && a.accountSession.Token == session.Token {
+		session.User.Avatar = avatar
+		a.features = flags
+		// 拉取失败时保持空串（未知），前端沿用 isAdmin 口径；不能误判成 none 把管理入口关掉。
+		a.adminScope = scope
+	}
+	a.accountMu.Unlock()
+}
+
+// absoluteAccountURL 把控制面返回的相对地址补成可直接渲染的绝对地址。
+func absoluteAccountURL(base, path string) string {
+	if path == "" || strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
+// accountClient 取当前登录会话的控制面客户端（不要求管理员）。
+func (a *App) accountClient() (*account.Client, *account.Session, error) {
+	base := strings.TrimSpace(a.config.PlatformBaseURL)
+	if base == "" {
+		return nil, nil, fmt.Errorf("未配置账号服务地址")
+	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
+	if session == nil || session.Token == "" {
+		return nil, nil, fmt.Errorf("请先登录")
+	}
+	return account.New(base), session, nil
+}
+
+// updateSessionAvatar 仅在仍是同一会话时写回头像地址并落盘。
+func (a *App) updateSessionAvatar(session *account.Session, avatar string) {
+	a.accountMu.Lock()
+	if a.accountSession != nil && a.accountSession.Token == session.Token {
+		a.accountSession.User.Avatar = avatar
+	}
+	current := a.accountSession
+	a.accountMu.Unlock()
+	if current != nil {
+		a.saveAccountSession(current)
+	}
+}
+
+// UpdateNickName 修改自己的昵称，返回更新后的登录态。
+func (a *App) UpdateNickName(nickName string) (AuthUser, error) {
+	client, session, err := a.accountClient()
+	if err != nil {
+		return AuthUser{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.UpdateNickName(ctx, session.Token, nickName); err != nil {
+		a.reportError("update nickname", err)
+		return AuthUser{}, err
+	}
+	a.accountMu.Lock()
+	if a.accountSession != nil && a.accountSession.Token == session.Token {
+		a.accountSession.User.NickName = strings.TrimSpace(nickName)
+	}
+	current := a.accountSession
+	a.accountMu.Unlock()
+	if current != nil {
+		a.saveAccountSession(current)
+	}
+	a.notifyAccountChanged()
+	return a.CurrentUser(), nil
+}
+
+// ChangePassword 修改自己的登录口令。
+func (a *App) ChangePassword(oldPassword, newPassword string) error {
+	client, session, err := a.accountClient()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err = client.ChangePassword(ctx, session.Token, oldPassword, newPassword)
+	if err == nil {
+		a.logger.Printf("password changed for %s", session.User.UserName)
+	}
+	a.reportError("change password", err)
+	return err
+}
+
+// UploadAvatar 弹系统文件选择框，把选中的图片上传为头像。
+// 取消选择时原样返回当前登录态，不当作错误。
+func (a *App) UploadAvatar() (AuthUser, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择头像图片",
+		Filters: []runtime.FileFilter{{
+			DisplayName: "图片 (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp)",
+			Pattern:     "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp",
+		}},
+	})
+	if err != nil {
+		return AuthUser{}, err
+	}
+	if strings.TrimSpace(path) == "" {
+		return a.CurrentUser(), nil
+	}
+	client, session, err := a.accountClient()
+	if err != nil {
+		return AuthUser{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	avatar, err := client.UploadAvatar(ctx, session.Token, path)
+	if err != nil {
+		a.reportError("upload avatar", err)
+		return AuthUser{}, err
+	}
+	a.updateSessionAvatar(session, absoluteAccountURL(a.config.PlatformBaseURL, avatar))
+	a.notifyAccountChanged()
+	return a.CurrentUser(), nil
+}
+
+// RemoveAvatar 清除自己的头像，前端回落到昵称首字。
+func (a *App) RemoveAvatar() (AuthUser, error) {
+	client, session, err := a.accountClient()
+	if err != nil {
+		return AuthUser{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.RemoveAvatar(ctx, session.Token); err != nil {
+		a.reportError("remove avatar", err)
+		return AuthUser{}, err
+	}
+	a.updateSessionAvatar(session, "")
+	a.notifyAccountChanged()
+	return a.CurrentUser(), nil
+}
+
+// RefreshProfile 重新向控制面读取账号资料与功能权限（管理端改了配置后前端可主动刷新）。
+func (a *App) RefreshProfile() (AuthUser, error) {
+	client, session, err := a.accountClient()
+	if err != nil {
+		return AuthUser{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	fresh, err := client.SessionInfo(ctx, session.Token)
+	if err != nil {
+		a.reportError("refresh profile", err)
+		return AuthUser{}, err
+	}
+	a.syncAccountProfile(ctx, client, fresh)
+	a.accountMu.Lock()
+	if a.accountSession != nil && a.accountSession.Token == session.Token {
+		a.accountSession.User = fresh.User
+		a.accountSession.Roles = fresh.Roles
+		a.accountSession.Permissions = fresh.Permissions
+	}
+	current := a.accountSession
+	a.accountMu.Unlock()
+	if current != nil {
+		a.saveAccountSession(current)
+	}
+	a.notifyAccountChanged()
+	return a.CurrentUser(), nil
+}
+
+// AdminPermissionMembers 管理页成员矩阵：生效权限 + 所属角色。
+// 子管理员只拿到本部门成员（范围由控制面裁剪）。
+func (a *App) AdminPermissionMembers() ([]account.AdminMember, error) {
+	client, token, err := a.permissionAdminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	members, err := client.AdminPermissionMembers(ctx, token)
+	a.reportError("admin list permission members", err)
+	return members, err
+}
+
+// AdminPermissionRoles 全部权限角色（仅超管）。
+func (a *App) AdminPermissionRoles() ([]account.AdminRole, error) {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	roles, err := client.AdminPermissionRoles(ctx, token)
+	a.reportError("admin list permission roles", err)
+	return roles, err
+}
+
+// AdminSavePermissionRole 新建或更新权限角色（仅超管）。
+func (a *App) AdminSavePermissionRole(role account.AdminRole) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.AdminSavePermissionRole(ctx, token, role); err != nil {
+		a.reportError("admin save permission role", err)
+		return err
+	}
+	a.refreshOwnPermission()
+	return nil
+}
+
+// AdminDeletePermissionRole 删除权限角色（仅超管）。
+func (a *App) AdminDeletePermissionRole(roleID string) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.AdminDeletePermissionRole(ctx, token, roleID); err != nil {
+		a.reportError("admin delete permission role", err)
+		return err
+	}
+	a.refreshOwnPermission()
+	return nil
+}
+
+// AdminAssignRoles 整组替换某成员的角色（仅超管）；空列表 = 回到逐账号配置。
+func (a *App) AdminAssignRoles(userID string, roleIDs []string) error {
+	client, token, err := a.adminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.AdminAssignRoles(ctx, token, userID, roleIDs); err != nil {
+		a.reportError("admin assign roles", err)
+		return err
+	}
+	a.refreshOwnPermission()
+	return nil
+}
+
+// refreshOwnPermission 在角色变更后刷新自己的生效权限（管理员可能把角色挂到自己头上）。
+func (a *App) refreshOwnPermission() {
+	if _, err := a.RefreshProfile(); err != nil {
+		a.logger.Printf("refresh own permissions after role change: %v", err)
+	}
+}
+
+// AdminSavePermissions 保存某账号的权限矩阵。改到自己头上时同步刷新入口显隐。
+func (a *App) AdminSavePermissions(flags account.FeatureFlags) error {
+	client, token, err := a.permissionAdminSession()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.AdminSavePermissions(ctx, token, flags); err != nil {
+		a.reportError("admin save permissions", err)
+		return err
+	}
+	a.accountMu.RLock()
+	self := a.accountSession != nil && a.accountSession.User.UserID == flags.UserID
+	a.accountMu.RUnlock()
+	if self {
+		a.refreshOwnPermission()
+	}
+	return nil
 }
 
 // --- 管理页（P3）：客户端内自绘的账号与空间管理 ---
@@ -681,20 +1147,47 @@ func (a *App) currentUserLocked() AuthUser {
 
 // adminSession 取当前会话，要求已登录且为管理员。返回控制面客户端与 token。
 func (a *App) adminSession() (*account.Client, string, error) {
+	client, token, session, err := a.accountAdminSession()
+	if err != nil {
+		return nil, "", err
+	}
+	if !session.IsAdmin() {
+		return nil, "", fmt.Errorf("当前账号没有管理权限")
+	}
+	return client, token, nil
+}
+
+// permissionAdminSession 供权限矩阵使用：超管与子管理员（任一管理范围档位）都放行。
+//
+// 这里只是入口提示，真正的范围裁剪在控制面：子管理员调 /admin/members 只拿范围内部门，
+// 写范围外成员的权限会被服务端拒。账号/空间等超管页仍走 adminSession。
+func (a *App) permissionAdminSession() (*account.Client, string, error) {
+	client, token, session, err := a.accountAdminSession()
+	if err != nil {
+		return nil, "", err
+	}
+	a.accountMu.RLock()
+	scope := a.adminScope
+	a.accountMu.RUnlock()
+	if !session.IsAdmin() && !account.HasAdminEntry(scope) {
+		return nil, "", fmt.Errorf("当前账号没有管理权限")
+	}
+	return client, token, nil
+}
+
+// accountAdminSession 是两种管理会话共同的取会话逻辑。
+func (a *App) accountAdminSession() (*account.Client, string, *account.Session, error) {
 	base := strings.TrimSpace(a.config.PlatformBaseURL)
 	if base == "" {
-		return nil, "", fmt.Errorf("未配置账号服务地址")
+		return nil, "", nil, fmt.Errorf("未配置账号服务地址")
 	}
 	a.accountMu.RLock()
 	session := a.accountSession
 	a.accountMu.RUnlock()
 	if session == nil || session.Token == "" {
-		return nil, "", fmt.Errorf("请先登录")
+		return nil, "", nil, fmt.Errorf("请先登录")
 	}
-	if !session.IsAdmin() {
-		return nil, "", fmt.Errorf("当前账号没有管理权限")
-	}
-	return account.New(base), session.Token, nil
+	return account.New(base), session.Token, session, nil
 }
 
 // AdminListUsers 分页取账号列表。
@@ -960,6 +1453,65 @@ func (a *App) SetFileVisibility(space, path string, deptIDs []string) error {
 	return nil
 }
 
+// FileMemberList 取共享空间文件的成员角色行（企业权限第三片）。
+// 只回执控制面按 manage 档裁决后的结果；未授权者直接收到服务端错误。
+// fileID 按十进制字符串透传（雪花 ID，KI-22）。
+func (a *App) FileMemberList(fileID string) ([]drive.FileMemberRole, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return nil, fmt.Errorf("文件 ID 无效：%w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	members, err := client.FileMembers(ctx, token, id)
+	a.reportError("file member list", err)
+	return members, err
+}
+
+// FileMemberReplace 整组替换共享空间文件的成员角色行；memberId 字符串透传雪花 ID。
+func (a *App) FileMemberReplace(fileID string, members []drive.FileMemberRole) error {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return fmt.Errorf("文件 ID 无效：%w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.ReplaceFileMembers(ctx, token, id, members); err != nil {
+		a.reportError("file member replace", err)
+		return err
+	}
+	a.logger.Printf("file members replaced: file=%s count=%d", fileID, len(members))
+	return nil
+}
+
+// FileMemberRemove 删除单条成员角色行（不能删自己的行，控制面强制）。
+func (a *App) FileMemberRemove(fileID, memberType, memberID string) error {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return fmt.Errorf("文件 ID 无效：%w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := client.RemoveFileMember(ctx, token, id, memberType, memberID); err != nil {
+		a.reportError("file member remove", err)
+		return err
+	}
+	a.logger.Printf("file member removed: file=%s %s %s", fileID, memberType, memberID)
+	return nil
+}
+
 // AdminKnowledgeStats 管理员汇总页：知识服务聚合统计（查询/盲区/生成质量/文档规模）。
 func (a *App) AdminKnowledgeStats(days int) (knowledge.KnowledgeStats, error) {
 	core, err := a.coreClient()
@@ -1210,8 +1762,44 @@ func (a *App) CloudList() ([]cloud.File, error) {
 	return files, nil
 }
 
+// SharedFileVo 共享空间文件条目（管理页「文件访问角色」卡的数据源）。
+// fileId 是雪花 ID，**必须按字符串下发**（KI-21：cloud.File 的 number 形式
+// fileId 经 JS number 往返会撞值，不能用）。
+type SharedFileVo struct {
+	Key          string `json:"key"`
+	Name         string `json:"name"`
+	Size         int64  `json:"size"`
+	UploadByName string `json:"uploadByName"`
+	FileID       string `json:"fileId"`
+}
+
+// SharedFileList 列举共享空间对象（含目录标记），带 fileId（字符串）与上传者。
+// 供管理页「文件访问角色」卡选文件用：成员角色按 fileId 定位，路径不行
+// （改名/移动会换路径，fileId 稳定）。可见性由控制面按四档梯子裁剪。
+func (a *App) SharedFileList() ([]SharedFileVo, error) {
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	objects, err := client.ObjectsWithDirs(a.ctx, token, drive.SpaceShared)
+	if err != nil {
+		a.reportError("shared file list", err)
+		return nil, err
+	}
+	files := make([]SharedFileVo, 0, len(objects))
+	for _, object := range objects {
+		files = append(files, SharedFileVo{
+			Key:          object.Path,
+			Name:         filepath.Base(strings.TrimRight(object.Path, "/")),
+			Size:         object.Size,
+			UploadByName: object.UploadByName,
+			FileID:       strconv.FormatInt(object.FileId.Int64(), 10),
+		})
+	}
+	return files, nil
+}
+
 // CloudPreview 返回文件的安全预览能力。
-//
 // 图片/PDF 交给 WebView2 直接加载控制面签发的预签名 URL；文本内容由本进程限量读入后内联。
 // SVG 等可含主动内容的类型在 DetectPreviewKind 里已归为 unsupported，不会拿到 URL。
 func (a *App) CloudPreview(key string) (cloud.Preview, error) {

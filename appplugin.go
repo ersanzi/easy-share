@@ -374,6 +374,17 @@ func (a *App) PluginList() []plugin.Info {
 	return a.pluginManager.List()
 }
 
+// PluginHostBase 返回插件页 iframe 的静态资源源（http://127.0.0.1:<port>，与快捷面板共用）。
+// 插件页不能走 Wails 自定义源：sandbox iframe 是 opaque origin，浏览器在 wails.localhost
+// 下只拿得到入口 HTML，style.css / app.js / SDK 等子资源全部失败（插件页裸奔成一列纯文本）。
+// 换成 loopback HTTP 源后同一份 sandbox iframe 正常加载，且 dev 与生产走同一条路径。
+func (a *App) PluginHostBase() string {
+	ensurePanelServer(a)
+	a.panelServerMu.Lock()
+	defer a.panelServerMu.Unlock()
+	return a.panelBase
+}
+
 // PluginInvoke 插件能力调用的唯一动态通道。
 func (a *App) PluginInvoke(pluginID, api, argsJSON string) PluginInvokeResult {
 	if a.pluginManager == nil || a.pluginRegistry == nil {

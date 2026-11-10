@@ -23,6 +23,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 # AUTH_ENABLED=true 时要求登录的业务前缀；/auth、/health、/docs、/lab、/debug（回环守卫）不受令牌保护
 _PROTECTED_PREFIXES = ("/documents", "/query", "/ingest", "/lab/api/uploads", "/meetings")
 
+# 控制面功能权限矩阵对这些前缀生效：知识问答（knowledge）、会议听记（meeting）。
+# 只在令牌解析出了控制面身份时生效——本地账号的档案在本地，不受矩阵管辖（行为与引入前一致）。
+_FEATURE_PREFIXES = (
+    ("/documents", "knowledge"),
+    ("/query", "knowledge"),
+    ("/ingest", "knowledge"),
+    ("/lab/api/uploads", "knowledge"),
+    ("/meetings", "meeting"),
+)
+
+
+def _required_feature(path: str) -> str | None:
+    for prefix, feature in _FEATURE_PREFIXES:
+        if path.startswith(prefix):
+            return feature
+    return None
+
 
 def create_app(services: AppServices | None = None) -> FastAPI:
     resolved_services = services or build_services()
@@ -71,6 +88,14 @@ def create_app(services: AppServices | None = None) -> FastAPI:
             and not hasattr(request.state, "user")
         ):
             return JSONResponse({"detail": "未登录或令牌无效"}, status_code=401)
+        user = getattr(request.state, "user", None)
+        feature = _required_feature(request.url.path)
+        # features 缺失 = 本地账号（不是控制面身份），不受矩阵管辖，放行
+        if feature and user is not None and user.get("features") is not None:
+            if not user["features"].get(feature, True):
+                return JSONResponse(
+                    {"detail": "该功能已被管理员关闭，请联系管理员"}, status_code=403
+                )
         return await call_next(request)
 
     @application.get("/")

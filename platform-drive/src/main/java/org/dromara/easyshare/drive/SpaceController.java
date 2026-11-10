@@ -46,6 +46,7 @@ public class SpaceController {
     private final DriveProperties properties;
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper userDeptMapper;
     private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper deptRowMapper;
+    private final org.dromara.easyshare.drive.service.FeaturePermissionService featurePermission;
 
     /**
      * 当前登录账号可见的空间：个人空间 + 有权限时的共享空间。
@@ -55,6 +56,10 @@ public class SpaceController {
     @GetMapping("/mine")
     public R<List<SpaceVo>> mine() {
         Long userId = LoginHelper.getUserId();
+        // 网盘功能关闭：连空间元数据都不给，挂载盘 / WebDAV 拿到空列表即无法工作
+        if (!featurePermission.enabled(userId, org.dromara.easyshare.drive.service.FeaturePermissionService.DRIVE)) {
+            return R.ok(List.of());
+        }
         List<SpaceVo> result = new ArrayList<>();
 
         EsSpace personal = spaceService.findPersonal(userId);

@@ -45,8 +45,20 @@ func knowledgeTestRemote(t *testing.T) *httptest.Server {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(map[string]any{"token": "tok-1", "username": "alice", "role": "member", "expires_at": "2026-12-31T00:00:00Z"})
 	})
+	mux.HandleFunc("GET /auth/me", func(writer http.ResponseWriter, request *http.Request) {
+		// 只有控制面令牌 cp-token-1 能换到身份；模拟知识服务已接入 SSO。
+		if request.Header.Get("Authorization") != "Bearer cp-token-1" {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(writer).Encode(map[string]string{"detail": "未登录或令牌无效"})
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"username": "alice", "role": "member", "dept": "10"})
+	})
 	mux.HandleFunc("POST /query", func(writer http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Authorization") != "Bearer tok-1" {
+		auth := request.Header.Get("Authorization")
+		if auth != "Bearer tok-1" && auth != "Bearer cp-token-1" {
 			writer.Header().Set("Content-Type", "application/json")
 			writer.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(writer).Encode(map[string]string{"detail": "未登录或令牌无效"})
@@ -146,6 +158,31 @@ func TestKnowledgeGatewayFlow(t *testing.T) {
 	}
 	if status := service.Status(); status.LoggedIn {
 		t.Fatalf("status after logout = %+v", status)
+	}
+}
+
+func TestKnowledgeSSORegistration(t *testing.T) {
+	core, remote, service := newKnowledgeTestServer(t)
+
+	// 知识服务不认这张令牌（未接 SSO / 令牌失效）→ 401，且不覆盖已有会话
+	code, payload := knowledgeRequest(t, http.MethodPost, core.URL+"/api/knowledge/sso", "secret",
+		map[string]string{"serverUrl": remote.URL, "token": "stale"})
+	if code != http.StatusUnauthorized || payload["code"] != "knowledge_sso_rejected" {
+		t.Fatalf("rejected sso = %d %v", code, payload)
+	}
+	if service.Status().LoggedIn {
+		t.Fatalf("rejected sso must not sign in: %+v", service.Status())
+	}
+
+	// 控制面令牌被接受 → 会话进入 sso 模式，后续问答沿用同一令牌
+	code, payload = knowledgeRequest(t, http.MethodPost, core.URL+"/api/knowledge/sso", "secret",
+		map[string]string{"serverUrl": remote.URL, "token": "cp-token-1"})
+	if code != http.StatusOK || payload["loggedIn"] != true || payload["mode"] != knowledge.ModeSSO || payload["username"] != "alice" {
+		t.Fatalf("sso = %d %v", code, payload)
+	}
+	code, payload = knowledgeRequest(t, http.MethodPost, core.URL+"/api/knowledge/query", "secret", map[string]string{"question": "出差住宿标准"})
+	if code != http.StatusOK || payload["answer"] != "每晚四百元" {
+		t.Fatalf("query after sso = %d %v", code, payload)
 	}
 }
 

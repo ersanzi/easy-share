@@ -1,14 +1,18 @@
 # REA 逆向工具链备忘
 
 > 本机 REA 的安装、可用性判据、耗时基线，以及**大目标（10 MB 级）取证通路**。**排障优先查本文**，不要每次重新 `rea doctor` 考古。
-> 最后核实：2026-10-16（Windows 10/11 x64，REA 6.4.0 + Ghidra 12.1.4 + JDK 21）
+> 最后核实：2026-11-05（Windows 11 x64，REA **6.8.0** + Ghidra 12.1.4 + JDK 21；2026-10-16 为 6.4.0）
 >
 > ⚠️ **先看 §8**：若目标 > 2 MB 且需要多轮定向挖掘，不要直接用 REA 硬跑（每次 10–15 min 且可能撞 330 s 超时）；
 > 先按 §8.3 建持久化 Ghidra 工程，把地址与函数定准，再用 REA 对少数函数出正式 Evidence。
 
+## 0. 版本升级记录
+
+- **2026-11-05：6.4.0 → 6.8.0**。安装形态是**本地 node_modules + shim**（不是 pipx、也不是 npm 全局）：shim `C:\Users\lishi\.local\bin\rea.cmd` 用便携 Node（`C:\Users\lishi\tools\node24`）调 `C:\Users\lishi\tools\rea\node_modules\rea-agents\scripts\rea.mjs`。升级用 `cd /c/Users/lishi/tools/rea && npm install rea-agents@latest`（npm 直连慢，建议放后台跑几分钟）。升级后按 §2 判据跑一次真实分析：`where.exe`（64 KB）decompile entry 出证 `ev_ed517cf5f830adcf404921283a245c38d44c5e3418e15373e6d42435e6f4675a`，行为与 6.4.0 一致，无破坏性变更。
+
 ## 1. 本机可用配置
 
-REA 装于 `C:\Users\lishi\.local\bin\rea.cmd`（pipx，见 `%APPDATA%\Python\Python312\Scripts\pipx.exe`）。
+REA 装于 `C:\Users\lishi\.local\bin\rea.cmd`（shim 调本地 node_modules，见 §0）。
 
 **必需的两个环境变量**（当前均为用户级，未持久化到系统）：
 

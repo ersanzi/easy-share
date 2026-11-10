@@ -30,6 +30,7 @@ public class SpaceService {
     private final CapacityService capacityService;
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
     private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper sysDeptRowMapper;
+    private final FeaturePermissionService featurePermission;
 
     /**
      * 取个人空间，未开通返回 null。
@@ -198,11 +199,17 @@ public class SpaceService {
     /**
      * 取某账号对共享空间的**生效权限**：显式个人行与所属部门行取宽（write > read）。
      * 显式个人授权不会被部门只读压窄——收窄要么删个人行、要么删部门行，规则可预期。
+     * <p>
+     * 功能开关是前置条件：drive 或 shared 关掉时，这里直接返回 null，
+     * 共享空间便从空间列表、读取入口、写入入口同时消失——一处收口，不漏出口。
      *
      * @param userId 账号 ID
-     * @return read / write / null（未授权）
+     * @return read / write / null（未授权或功能未开通）
      */
     public String sharedPermissionOf(Long userId) {
+        if (!featurePermission.sharedFeatureEnabled(userId)) {
+            return null;
+        }
         String effective = memberPermissionOf(EsSpaceMember.TYPE_USER, userId);
         Long deptId = deptIdOf(userId);
         if (deptId != null && deptId > 0) {
@@ -262,6 +269,9 @@ public class SpaceService {
      * @return 共享前缀
      */
     public String checkSharedWritable(Long userId, long size) {
+        if (!featurePermission.sharedFeatureEnabled(userId)) {
+            throw new ServiceException("你的账号未开通共享空间功能，请联系管理员");
+        }
         EsSpace shared = findShared();
         if (shared.getQuotaBytes() == null || shared.getQuotaBytes() == EsSpace.QUOTA_UNSET) {
             throw new ServiceException("共享空间尚未分配容量");
@@ -281,6 +291,9 @@ public class SpaceService {
      * @return 共享前缀
      */
     public String checkSharedReadable(Long userId) {
+        if (!featurePermission.sharedFeatureEnabled(userId)) {
+            throw new ServiceException("你的账号未开通共享空间功能，请联系管理员");
+        }
         if (sharedPermissionOf(userId) == null) {
             throw new ServiceException("没有共享空间的访问权限");
         }

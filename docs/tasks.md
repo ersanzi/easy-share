@@ -29,6 +29,7 @@
 
 | 日期 | 条目 | 来源 | 建议优先级 |
 | --- | --- | --- | --- |
+| 2026-11-05 | **钉钉/WPS UI 层对标两候选**（REA 不适用——视觉/交互层不写在机器码里，须走资源解析或真机观察）：① 子管理员范围徽标交互——钉钉子管理后台如何展示管辖范围、越界操作的提示文案（**待真机观察**，观察期有真实子管理员反馈时做）；② 文档级成员角色对标——**已完成模型级取证**（docs/intelligence/2026-11-05-dingtalk-docs-permission-reverse.md：角色四档/67 项动作枚举/安全三开关/护栏错误码，含第三片五条设计建议），授权 RPC 形态与真机面板交互待补 | 2026-11-05 会话目标点名候选；REA 层已完成可做部分（qingnse64 图标机制取证，docs/intelligence/2026-11-05-qingnse-icon-handler-reverse.md） | P2（权限第三片设计直接引用 ② 产出；① 观察期有真实子管理员反馈时做） |
 | 2026-10-12 | **WeKnora 评估**（腾讯开源知识管理框架，MIT，13.7K star）：质量触发器命中时与「DeepDoc 组件级方案」并列评估——它是最贴近我们知识服务定位的整服务替换/混合架构候选（空间 RBAC+审计日志/GraphRAG/分块编辑版本史/FAQ 类型/数据源同步/IM 集成/官方 MCP Server）；成本=部署变重+驾驶舱周报 OKF 重建+权限语义映射 | 用户点名 + 调研 [Tencent/WeKnora](https://github.com/Tencent/WeKnora)，详见 docs/intelligence/2026-10-12-kb-landscape.md §0 | P2（触发器=观察期解析失败率/引用错误率不达标；与 DeepDoc 组件级方案二选一或组合） |
 | 2026-10-11 | **插件能力 seam 化**：能力注册表从硬编码 Go 注册改为「定义/提供方/消费方」三角色可替换抽象（对标 DeepSeek Harness 的 seam 概念）——drive.upload 换存储后端、通知换企微机器人等变成插 Provider 而非改核心 | DeepSeek Harness 架构文档对标（docs/architecture.zh.md，"seam 三角色一并设计"） | P2（插件生态成长后做，3 个插件规模暂不值） |
 | 2026-10-11 | **企业插件预置包（profile）**：IT 部署时预置公司插件集（剪切板+待办+未来插件一键预装），同事开箱即有，不必逐个逛商城——控制面下发已装清单或首启批量安装 | 同上（profile/bundle 组装模型映射到企业分发场景） | P1（分发场景真需求，随公司部署观察期反馈定） |
@@ -42,7 +43,8 @@
 
 | 优先级 | 任务 | 来源/依据 | 完成标准 | 可自主 |
 | --- | --- | --- | --- | --- |
-| P2 | Core 知识网关泛化 + 客户端知识页免登（SSO 片 2）：`/kapi/*` 令牌注入反代取代逐端点代理（新知识端点零 Go 改动，消 Wails 五处级联）；Core 透传控制面令牌，知识页不再输密码。**2026-10-11 拍板：部署观察期后启动，勿提前**（动桌面端主链路，部署前不冒这个险） | 2026-10-11 技术栈盘点 + iterations/2026-10-11-知识服务sso.md 边界 | 免登端到端冒烟 + 现有知识端点走新网关回归绿 | ❌（等部署窗口） |
+| P1 | **桌面端免登录收尾（服务器投递）**：投递滑动窗口会话配置 + Redis 持久化，2026-10-25 用户授权「下次你来动」。前置条件=在公司网络（ssh root@192.168.1.239 可达，2026-10-25 不通未执行）。步骤：① `deploy/ruoyi-db/easyshare-client-session.sql` 已改为 timeout=365天/active_timeout=30天（滑动语义：30 天内用过即免登录），scp 后 `docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < 该文件` 重放；② 清 sys_client 的 Redis 缓存（README §长时间登录：键 `sys_client#30d` 或后台客户端管理保存一次），否则仍按旧值；③ `deploy/server-linux/compose.yaml` 已加 redis appendonly + ruoyi-redis-data 卷，先同步该文件到服务器 compose 目录再 `docker compose up -d redis`（容器重建，已获用户点名授权，超出常规红线的部分以此为准）；④ 验证：psql 查 timeout=31536000、控制面探活、桌面端重登一次后 account-session.json 的 expireIn=31536000；⑤ 员工端升级 ≥0.5.1（10-13 旧包无会话落盘，投了 SQL 也无效）——0.5.2 安装包发布到升级点（appupdate 链路）或通知用户手动分发。改动均已落仓未提交（SQL/README/compose.yaml 三文件） | 2026-10-25 用户会话：免登录排查定态（链路实测已通，详见记忆 desktop-auto-login-status） | ①④ 全过 + 员工升级路径确认 | ✅（2026-10-25 用户授权；红线冲突处以此授权为准） |
+| P2 | Core 知识网关泛化：`/kapi/*` 令牌注入反代取代逐端点代理（新知识端点零 Go 改动，消 Wails 五处级联）。**2026-10-11 拍板：部署观察期后启动，勿提前**（动桌面端主链路，部署前不冒这个险）。**客户端知识页免登已于 2026-10-27 以 `POST /api/knowledge/sso` 落地**（见已完成表），本行只剩反代 | 2026-10-11 技术栈盘点 + iterations/2026-10-11-知识服务sso.md 边界 | 现有知识端点走新网关回归绿 | ❌（等部署窗口） |
 | P2 | 汇总页进阶可视化（查询趋势折线/按账号检索排行）：观察期看真实需要再加，数据都在 query_log | 管理员汇总页片收尾记录 | 有真实诉求时做 | ✅ |
 | P2 | AI 周报接知识服务：todo 周报插件增加 AI 汇总（经 Core 网关调 /query，登录态复用；注意 2026-09-05 日志提示涉跨进程登录态） | progress.md 待开始 #5 | 插件冒烟 + 回归绿 | ✅ |
 | P2 | 空间整理算法：plans/2026-08-30-space-pool-and-organize.md 中「整理算法」待实施部分——实现前先读该 plan | progress.md 账号控制面段 | 按 plan 验收标准 | ✅ |
@@ -59,6 +61,7 @@
 
 | 完成日 | 任务 | 验证结果 |
 | --- | --- | --- |
+| 2026-10-27 | 客户端知识页免登（SSO）：Core 会话加 `mode` + `POST /api/knowledge/sso`（先 `GET /auth/me` 探测再落盘）；桌面壳在登录/恢复/保存服务配置后下发控制面令牌，登出与启动 401 只清 SSO 会话；知识页标「统一登录」并隐藏退出按钮 | Go 全包 / vue-tsc 0 / vitest 73 全绿；knowledge/meeting 功能权限在桌面端服务端闭环。见 [iterations/2026-10-27-桌面端知识统一登录.md](iterations/2026-10-27-桌面端知识统一登录.md) |
 | 2026-10-02 | P2 OKF 化切片一：derived/ 重建验证（`knowledge/scripts/rebuild_from_derived.py`——从 document.json+manifest.json 全量重建索引，contextual 参数从 manifest 恢复不重调 LLM，四指标断言不回退） | 重建验证一次通过（10 文档 29 块，recall@5/hit@1/mrr/snippet 与管线直建基线逐项持平 0.952/0.857/0.892/0.905）；pytest 147 passed 全绿。见 [iterations/2026-10-02-okf-rebuild-verify.md](../docs/iterations/2026-10-02-okf-rebuild-verify.md) |
 | 2026-09-06 | P1 管理员汇总页：AdminPanel 概览 Tab 六卡片 + 知识服务 /stats 聚合端点 | 三栈回归全绿（Java 37/go/pytest 144/vitest 40）。见 [iterations/2026-09-06-admin-overview.md](../docs/iterations/2026-09-06-admin-overview.md) || 2026-09-06 | P1 部门级权限片 2（文档级可见性数据面）：visible_depts 字段 + 上传声明 + 设置端点 + 列表过滤收口 | Java 39 全绿 +2；go 全绿。/query 联动核验后拆片 2b。见 [iterations/2026-09-06-dept-permission.md](../docs/iterations/2026-09-06-dept-permission.md) §5 |
 | 2026-09-06 | P2 部门级权限片 2b（/query 检索联动）：auth dept 列（登录下发）+ ingest metadata 透传 + doc_visible_depts 双后端 + visible_doc_ids 过滤 | pytest 147 全绿 +3（端到端部门过滤/auth 往返/旧库补列）。见 [iterations/2026-09-06-dept-permission.md](../docs/iterations/2026-09-06-dept-permission.md) §5 |
@@ -101,6 +104,7 @@
 | 2026-10-11 | 用户直配轮 13（OKF 切片二） | A | 用户授权「需要做就做」：rebuild --apply 生产索引重建落地——重建核心上移 app/kb/rebuild.py（切片一脚本复用，四指标逐位一致 0.952/0.857/0.892/0.905）、JobStore.latest_completed_docs 权威清单（可恢复索引丢文档灾难）、预览/执行双段式（预览零写入）、失败整体中止+备份+原子替换；embedder 走线上同一工厂防维度错配。pytest 150 全绿 +3（破坏性写路径例外用例）；--apply 预览真机冒烟过（4 文档/OpenAIEmbedder 识别正确）。同轮用户拍板：WSL 部署彩排不做（不值得）、Wails v2.14 升级做（推翻助手后置建议）、SSO 待解释后定。**Wails v2.13.0→v2.14.0 升级完成**（上游仅修 WebView2 引导器下载空指针/吞错，低风险）：CLI 双位置坑入 AGENTS 坑表（GOPATH=D:\GoWorks 装 D:\GoWorks\bin，PATH 命中 C:\Users\lishi\go\bin 旧版，覆盖解决）；go.mod v2.14.0+传递依赖升级；绑定重生成零变化；go build/test 全绿、vue-tsc 干净、vitest 40 绿、wails build 过；真机冒烟双进程存活+WebView2 创建+健康端点应答（冒烟进程已清） |
 | 2026-10-11 | 用户直配轮 14（SSO 落地） | A | 用户解释 SSO 后拍板「做」：知识服务信任控制面令牌——app/auth/sso.py introspection 回查 /system/user/getInfo（头与解析同 Go 客户端一套）+60s 缓存 + JIT 建档（role 按控制面 superadmin/*:*:*/dept 取 deptId 跟随，本地 role 不覆盖）+ 本地登录保留；config 加 CONTROL_PLANE_URL/CLIENT_ID，deploy.sh/deploy.ps1/.env.example 默认写同主机 :8090，checklist §2 改单账号口径。pytest 156 全绿 +6（含真实 HTTP 桩验证头与包装解析）；真实进程冒烟：控制面令牌 200+JIT wang/admin/103、匿名 401。收件箱 P1「知识服务 SSO」就此关闭；客户端知识页免登（Core 透传令牌）留下一片 |
 | 2026-10-11 | 用户直配轮 15（插件中心四连修 + 全栈拉起截图） | A | 用户报告插件中心问题，computer-use 通跑三面确认四处异常全修：①侧边栏插件条目错位（.nav-item>span 徽章规则误伤图标，收窄 .nav-count）②待办周报弹窗 hidden 被作者样式覆盖（补 .sheet[hidden]，1.0.3 再加内联 display+委托+Esc/背景关闭防弹化）③商城本地更新仍可重装（前端版本对比，隐藏降级入口）④更新报错 null newPermissions（Go 返回空数组+前端兜底）。剪切板 2.1.0/待办 1.0.3 重新上架，应用内「更新」按钮走通两插件升级，版本三方收敛。全栈拉起（PG/Redis/RustFS/控制面/知识服务/客户端，admin 密码统一 admin123+SSO 对真实 RuoYi 首次端到端验证）；README 嵌工作台真实截图。注：验证期间机器高负载曾致应用实例无响应更替，与插件代码无关。续轮：README 再嵌知识问答真实截图（admin 登录提问、回答带 5 条引用），主页截图齐备（工作台/知识问答/首启） |
+| 2026-10-24 | 情报学习扫描 | B | 第 6 轮（距上轮 24 天，10 月调度未触发本次补偿；仓库三周大演进 0.2.0→0.5.2：长期登录/挂载增量同步/网盘下载闭环/知识引用阅读页/会议听记主线，收件箱待办池已被用户大量拍板改写，OKF --apply 与 Wails v2.14.0 升级已随直配轮 13 落地）：收件箱 0 条新增；关键发现=**RustFS 1.0.2/1.0.3 稳定补丁版已发布**（10-16/17，用户拍板钉的 1.0.1 之后），建议列入部署日 checklist 核对项（P2 不强制，部署前核对 changelog）；Milvus 3.0.3 正常迭代、Wails v3 仍 beta.34 无 GA（v2.14.0 升级已完成故挂账关闭）；WeKnora v0.3.0 增量（shared workspaces/agent skills）与项目路线互证、评估触发器未命中维持挂起；轴②隔轮跳过；Cloudreve 无增量。队列备注：已完成表一处历史格式损坏（09-06 两行挤压）留给下个 A 轮修。产出 [docs/intelligence/2026-10-24-digest.md](intelligence/2026-10-24-digest.md) |
 
 ## 自动化运行规则
 

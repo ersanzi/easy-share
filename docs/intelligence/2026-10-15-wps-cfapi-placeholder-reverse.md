@@ -3,6 +3,8 @@
 日期：2026-10-15 　目标：WPS Office 12.1.0.29161 云盘同步引擎（ksyncengine）
 产物根：`D:\Program\office\WPS Office\12.1.0.29161\office6\`
 
+> ⚠️ **2026-11-05 续篇**：`qingnse64.dll` 已于 11-03 被 WPS 自更新替换（新哈希见续篇 §0），`ksyncengine.dll` 未变、本文地址证据仍有效。§4.3 欠账（状态位→图标映射）已在续篇**证伪并闭合**：图标走扩展名关联 + IconHandler，见 [`2026-11-05-qingnse-icon-handler-reverse.md`](2026-11-05-qingnse-icon-handler-reverse.md)。
+
 | 产物 | 大小 | SHA-256 |
 | --- | --- | --- |
 | `addons\ksyncengine\ksyncengine.dll` | 1 246 200 | `8747df16b1531244d9c7c41ebbb88b3a7cf9e9ba582738a785b52ecda0d282b6` |

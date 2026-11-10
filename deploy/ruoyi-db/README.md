@@ -27,6 +27,8 @@ docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easys
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-app-release.sql
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-plugin.sql
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-file.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-permission.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-profile.sql
 
 # 3) 构建（首建下依赖，走 pom 里的华为云镜像；可选模块 ruoyi-snailai-server 因
 #    milvus/es 依赖下载损坏会失败，不影响 ruoyi-admin fat jar 产出）
@@ -50,15 +52,41 @@ curl -X POST http://localhost:8090/auth/login -H "Content-Type: application/json
 
 返回 `code:200` 且带 `access_token` 即成功。
 
-## 长时间登录（2026-10-20）
+## 长时间登录（2026-10-20；2026-10-25 改滑动窗口）
 
-桌面端会把账号令牌落盘到 `%LOCALAPPDATA%\EasyShare\account-session.json`（用户级目录，0600；不存密码），重启后自动恢复。控制面 PC 客户端默认是 7 天绝对有效期、30 分钟空闲失效，关掉客户端半小时后仍会要求重登；执行 `easyshare-client-session.sql` 把该客户端改为 **30 天绝对有效期 + 30 天空闲有效期**：
+桌面端会把账号令牌落盘到 `%LOCALAPPDATA%\EasyShare\account-session.json`（用户级目录，0600；不存密码），重启后自动恢复。控制面 PC 客户端默认是 7 天绝对有效期、30 分钟空闲失效，关掉客户端半小时后仍会要求重登；执行 `easyshare-client-session.sql` 把该客户端改为 **365 天绝对上限 + 30 天空闲有效期**——实际语义是滑动窗口：只要 30 天内用过一次就一直免登录，连续 30 天不用才要求重登（2026-10-25 前是 30 天绝对有效期，天天用的员工每满 30 天仍要重登一次，不满足「一个月内登录过即免登录」）。长寿命令牌的安全前提：桌面端每次启动都向控制面校验会话，停用账号/后台踢会话立即生效。
 
 ```powershell
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-client-session.sql
 ```
 
+改动只影响新签发的令牌：已在线令牌的 TTL 在签发时已定，老令牌自然到期后重登一次即进入新窗口。免登录还要求桌面端 ≥ 0.5.1（此前版本无会话落盘恢复，每次启动必重登）。
+
 `scripts/ship-control-plane.ps1` 已把它加入自动投递的 SQL 列表，后续部署会自动重放；已有部署需手动执行一次或重跑投递脚本。如果控制面已缓存 PC 客户端（Redis `sys_client#30d`），执行后还需在后台「客户端管理」保存一次触发缓存失效，或清理对应缓存；否则仍按旧的 30 分钟空闲。
+
+## 功能权限与个人资料（2026-10-27）
+
+三张新表，都幂等（`CREATE TABLE IF NOT EXISTS`），`scripts/ship-control-plane.ps1` 会自动重放：
+
+```powershell
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-permission.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-profile.sql
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-permission-role.sql
+```
+
+- `es_user_permission`：一行一账号的五项功能开关（知识问答 / 会议听记 / 网盘 / 共享空间 / 插件中心）。**没有行 = 五项全开**，存量账号不需要迁移；只有管理员关过某项的账号才会落行。网盘关闭时共享空间一并失效。接口：`/easyshare/permission/mine`（登录即可读自己）、`/easyshare/permission/admin/list` 与 `PUT /easyshare/permission/admin`（超管）。
+- `es_permission_role` + `es_user_role`：**角色/权限组与子管理员**（2026-10-27 第三轮；2026-11-05 管理范围表达式化）。成员挂了角色后，五项开关取所挂角色的并集，逐账号行暂不参与；没挂角色时仍走 `es_user_permission`，再没有行则全开。`admin_scope` 非 `none` 的角色是「子管理员」，成员能进管理页的权限矩阵，范围按档位裁剪：`dept`（本部门精确匹配）/ `dept_children`（本部门及下级，按 `sys_dept.parent_id` 内存 BFS）/ `specified`（`scope_dept_ids` 逗号分隔的部门 ID，2026-11-05 新增列，幂等补列）/ `all`（全部成员）；多个管理角色取并集。角色定义与分配仅超管可改；删除角色时，只挂该角色的成员会先落一行逐账号快照，不会被放大成全开。接口：`GET /easyshare/permission/admin/members`（超管/子管理员，按范围裁剪）、`/admin/roles` 增删改与 `PUT /admin/members/{userId}/roles`（超管）。
+- `es_user_profile`：头像字节（≤2MB，按文件头嗅探，拒绝 SVG）。不用 RuoYi 的 `sys_user.avatar` + `sys_oss`，原因是标准上传接口需要 `system:oss:upload` 权限、普通成员没有。读接口 `/easyshare/profile/avatars/{userId}` 匿名可访问（`<img>` 发不了 Authorization），带 7 天缓存与版本号；写接口要求登录本人。昵称与密码仍走 RuoYi 标准个人中心 `/system/user/profile`。
+
+## 文档级成员角色（2026-11-05，企业权限第三片）
+
+一张新表，幂等，`scripts/ship-control-plane.ps1` 自动重放：
+
+```powershell
+docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-file-member.sql
+```
+
+- `es_file_member`：一行 = 一个主体（user/dept）对一份共享空间文件的显式角色，四档 `manage/edit/download/read`（删除是 manage 独占，对齐钉钉）。裁决收口 `FileRoleService.ladder`：上传者恒 manage → 成员行取高 → `es_file.visible_depts` 命中=download → 空间默认（write 成员 manage / read 成员 download）→ 不可见。列表过滤、下载签发、删除、改名、覆盖上传、改可见性六处共用同一份梯子。**未配角色的文件行为与本表引入前完全一致**。护栏：不能修改自己的角色行；仅上传者/manage 档可授权（`/easyshare/file-member/*`）。成员行随回收站 purge 摘行清理。
 
 ## 关键改动与本机坑（都已在配置/脚本里处理）
 

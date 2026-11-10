@@ -98,6 +98,27 @@ describe('useEasyShare', () => {
     wrapper.unmount()
   })
 
+  // 冷启动：前端先挂载时 Core 还没就绪，Go 侧也还没恢复落盘会话。
+  // Core 就绪后必须重新取一次登录态，否则有效会话会被显示成登录页、逼用户重登。
+  it('re-reads auth state once Core becomes ready', async () => {
+    mocks.snapshot
+      .mockRejectedValueOnce(new Error('core unavailable'))
+      .mockResolvedValue(runningSnapshot)
+    mocks.currentUser
+      .mockResolvedValueOnce({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false })
+      .mockResolvedValue({ loggedIn: true, userName: 'admin', nickName: '管理员', avatar: '', isAdmin: true })
+
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('true')
+    wrapper.unmount()
+    mocks.currentUser.mockResolvedValue({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false })
+  })
+
   it('stops polling before ShutdownAll and never contacts the exited Core again', async () => {
     const wrapper = mount(Harness)
     await flushPromises()

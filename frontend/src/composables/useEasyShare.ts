@@ -41,7 +41,16 @@ export function useEasyShare() {
   const dropSending = ref(false)
   const activeView = ref('overview')
   // 账号登录态（P1）。未登录一律 isAdmin=false，登出后必须回到此值以收起「管理」入口。
-  const emptyUser: AuthUser = { loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false }
+  const emptyUser: AuthUser = {
+    loggedIn: false,
+    userId: '',
+    userName: '',
+    nickName: '',
+    avatar: '',
+    isAdmin: false,
+    adminScope: '',
+    features: { knowledge: false, meeting: false, drive: false, shared: false, plugin: false },
+  }
   const currentUser = ref<AuthUser>({ ...emptyUser })
   const loggingIn = ref(false)
   // 在线升级：启动自动检查（Go 侧 24h 节流）发现新版本时记录版本号，
@@ -265,6 +274,16 @@ export function useEasyShare() {
     errorSource = 'operation'
   }
 
+  // 拉取当前登录态。Go 侧 Startup 要等 EnsureCore 返回后才恢复落盘会话，
+  // 冷启动时前端可能先挂载——首次调用拿到的是未登录，必须等 Core 就绪后再取一次，
+  // 否则有效会话会被显示成登录页、逼用户重登。
+  const syncAuth = () => Promise.resolve(core.currentUser())
+    .then(user => { if (!disposed && user) currentUser.value = user })
+    .catch(() => undefined)
+
+  // 桌面端后台刷新了账号态（资料修改、启动校验拿到新权限）：重新取一次。
+  const handleUserUpdated = () => { void syncAuth() }
+
   onMounted(() => {
     disposed = false
     document.addEventListener('visibilitychange', handleVisibility)
@@ -275,17 +294,17 @@ export function useEasyShare() {
     // 订阅升级可用通知（update:available）
     EventsOn('update:available', handleUpdateAvailable)
     EventsOn('auth:expired', handleAuthExpired)
+    EventsOn('auth:user-updated', handleUserUpdated)
 
     void core.logDirectory()
       .then(path => { if (!disposed && path) logDirectory.value = path })
       .catch(value => reportError('resolve log directory', value))
 
     // 拉取当前登录态（进程内若已登录，重开窗口后恢复头像）
-    void Promise.resolve(core.currentUser())
-      .then(user => { if (!disposed && user) currentUser.value = user })
-      .catch(() => undefined)
+    void syncAuth()
 
     void initialize().finally(() => {
+      void syncAuth()
       if (!inactive() && timer === undefined) {
         // 轮询降为 5s fallback：实时事件覆盖快速路径
         startPolling(5000)
@@ -298,6 +317,7 @@ export function useEasyShare() {
     EventsOff('core-event')
     EventsOff('update:available')
     EventsOff('auth:expired')
+    EventsOff('auth:user-updated')
     document.removeEventListener('visibilitychange', handleVisibility)
     OnFileDropOff()
   })

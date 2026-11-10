@@ -55,7 +55,22 @@ const sectionMeta: Record<SectionId, { label: string; title: string; subtitle: s
   settings: { label: '设置', title: '设置', subtitle: '账号、服务与更新', home: 'settings' },
 }
 const railSection = computed(() => sectionOf(view.value))
-const openSection = (id: SectionId) => { view.value = sectionMeta[id].home }
+// 功能权限只决定入口显隐；拦截在控制面与知识服务，这里藏按钮不是鉴权。
+const features = computed(() => app.currentUser.value.features)
+const sectionVisible = (id: SectionId) => {
+  switch (id) {
+    case 'drive': return features.value.drive
+    case 'knowledge': return features.value.knowledge || features.value.meeting
+    case 'apps': return features.value.plugin
+    default: return true
+  }
+}
+const sectionHome = (id: SectionId) => {
+  // 「知识」域里两个页面可各自关停：只开会议时，点域图标要落到会议页而不是空白
+  if (id === 'knowledge') return features.value.knowledge ? 'knowledge' : 'meetings'
+  return sectionMeta[id].home
+}
+const openSection = (id: SectionId) => { view.value = sectionVisible(id) ? sectionHome(id) : 'overview' }
 
 // 浏览器预览（docs/design/*/preview）用 ?scene= 指定初始视图；桌面端没有这个参数，恒为 overview。
 // 只影响首屏落在哪一页，不绕过任何登录与数据流程。
@@ -186,10 +201,24 @@ const relayRecentLabel = (task: TransferTask) => {
 
 // 同步当前页面到 composable，供拖拽路由判断（网盘页拖入直接上传）
 watch(view, value => { app.activeView.value = value })
-// 管理页停在前台时若换成非管理员账号登录，必须退回首页，否则工作区会空白。
-watch(() => app.currentUser.value.isAdmin, isAdmin => {
-  if (!isAdmin && view.value === 'admin') view.value = 'overview'
+// 「管理」入口：超管（RuoYi superadmin）或控制面下发的子管理员（任一管理范围档位：
+// dept / dept_children / specified / all）。子管理员进管理页只能看到权限矩阵，
+// 成员列表由控制面按范围档位裁剪，账号/空间等超管页由 AdminPanel 自己裁掉。
+const canAdmin = computed(() =>
+  app.currentUser.value.isAdmin
+  || (app.currentUser.value.adminScope !== '' && app.currentUser.value.adminScope !== 'none'))
+// 管理页停在前台时若换成无管理权限的账号登录，必须退回首页，否则工作区会空白。
+watch(canAdmin, allowed => {
+  if (!allowed && view.value === 'admin') view.value = 'overview'
 })
+// 管理员在后台收回某项功能后，正停在该域的页面要退回工作台——
+// 否则会看到一个「已关闭」的功能页在报错。
+watch(features, f => {
+  if (view.value === 'cloud' && !f.drive) view.value = 'overview'
+  if (view.value === 'knowledge' && !f.knowledge) view.value = f.meeting ? 'meetings' : 'overview'
+  if (view.value === 'meetings' && !f.meeting) view.value = f.knowledge ? 'knowledge' : 'overview'
+  if ((view.value === 'plugins' || view.value.startsWith('plugin:')) && !f.plugin) view.value = 'overview'
+}, { deep: true })
 // 云上传完成后刷新已挂载的网盘列表；未进入网盘页时由组件挂载自行加载。
 watch(completedCloudUploads, (current, previous) => {
   if (previous !== undefined && current !== previous) cloudRef.value?.refresh()
@@ -302,7 +331,10 @@ const avatarText = computed(() => {
 
       <!-- 当前账号：头像（点击进设置）+ 昵称 + 登出 -->
       <div class="account-chip" :title="app.currentUser.value.nickName || app.currentUser.value.userName">
-        <button class="account-avatar" type="button" aria-label="账号设置" title="账号设置" @click="view = 'settings'">{{ avatarText }}</button>
+        <button class="account-avatar" type="button" aria-label="账号设置" title="账号设置" @click="view = 'settings'">
+          <img v-if="app.currentUser.value.avatar" :src="app.currentUser.value.avatar" alt="">
+          <template v-else>{{ avatarText }}</template>
+        </button>
         <span class="account-name">{{ app.currentUser.value.nickName || app.currentUser.value.userName }}</span>
         <button class="account-logout" type="button" aria-label="退出登录" title="退出登录" @click="app.logout">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></svg>
@@ -371,15 +403,15 @@ const avatarText = computed(() => {
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg>
           <span>总览</span>
         </button>
-        <button :class="['rail-item', railSection === 'drive' ? 'active' : '']" type="button" aria-label="网盘" :aria-current="railSection === 'drive' ? 'page' : undefined" @click="openSection('drive')">
+        <button v-if="features.drive" :class="['rail-item', railSection === 'drive' ? 'active' : '']" type="button" aria-label="网盘" :aria-current="railSection === 'drive' ? 'page' : undefined" @click="openSection('drive')">
           <svg viewBox="0 0 24 24"><path d="M6 19a4 4 0 0 1-.78-7.93A7 7 0 0 1 18.78 11 4 4 0 0 1 18 19H6z"/><path d="M12 12v5m0-5-2 2m2-2 2 2"/></svg>
           <span>网盘</span>
         </button>
-        <button :class="['rail-item', railSection === 'knowledge' ? 'active' : '']" type="button" aria-label="知识" :aria-current="railSection === 'knowledge' ? 'page' : undefined" @click="openSection('knowledge')">
+        <button v-if="features.knowledge || features.meeting" :class="['rail-item', railSection === 'knowledge' ? 'active' : '']" type="button" aria-label="知识" :aria-current="railSection === 'knowledge' ? 'page' : undefined" @click="openSection('knowledge')">
           <svg viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.7.5 1 1.3 1 2.1h5c0-.8.3-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
           <span>知识</span>
         </button>
-        <button :class="['rail-item', railSection === 'apps' ? 'active' : '']" type="button" aria-label="扩展" :aria-current="railSection === 'apps' ? 'page' : undefined" @click="openSection('apps')">
+        <button v-if="features.plugin" :class="['rail-item', railSection === 'apps' ? 'active' : '']" type="button" aria-label="扩展" :aria-current="railSection === 'apps' ? 'page' : undefined" @click="openSection('apps')">
           <svg viewBox="0 0 24 24"><path d="M11.6 4.2a2 2 0 0 1 2.8 0l.4.4.6-.1a2 2 0 0 1 2.1 2.1l-.1.6.4.4a2 2 0 0 1 0 2.8l-.4.4.1.6a2 2 0 0 1-2.1 2.1l-.6-.1-.4.4a2 2 0 0 1-2.8 0l-.4-.4-.6.1a2 2 0 0 1-2.1-2.1l.1-.6-.4-.4a2 2 0 0 1 0-2.8l.4-.4-.1-.6a2 2 0 0 1 2.1-2.1l.6.1Z"/><path d="M9.5 14.5 5 19"/></svg>
           <span>扩展</span>
           <i v-if="pluginSys.updateNotices.value.length" class="rail-dot" :title="`有 ${pluginSys.updateNotices.value.length} 个插件可更新`" />
@@ -417,7 +449,7 @@ const avatarText = computed(() => {
               任务中心
               <span class="nav-count">{{ app.snapshot.value.tasks.length }}</span>
             </button>
-            <button v-if="app.currentUser.value.isAdmin" :class="['nav-item', view === 'admin' ? 'active' : '']" :aria-current="view === 'admin' ? 'page' : undefined" type="button" @click="view = 'admin'">
+            <button v-if="canAdmin" :class="['nav-item', view === 'admin' ? 'active' : '']" :aria-current="view === 'admin' ? 'page' : undefined" type="button" @click="view = 'admin'">
               <svg viewBox="0 0 24 24"><path d="M12 3 4 6v5c0 4.6 3.2 8.8 8 10 4.8-1.2 8-5.4 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
               管理后台
             </button>
@@ -435,11 +467,11 @@ const avatarText = computed(() => {
           </template>
 
           <template v-else-if="railSection === 'knowledge'">
-            <button :class="['nav-item', view === 'knowledge' ? 'active' : '']" :aria-current="view === 'knowledge' ? 'page' : undefined" type="button" @click="view = 'knowledge'">
+            <button v-if="features.knowledge" :class="['nav-item', view === 'knowledge' ? 'active' : '']" :aria-current="view === 'knowledge' ? 'page' : undefined" type="button" @click="view = 'knowledge'">
               <svg viewBox="0 0 24 24"><path d="M12 4.5C10.5 3.5 8.5 3 6 3v15c2.5 0 4.5.5 6 1.5 1.5-1 3.5-1.5 6-1.5V3c-2.5 0-4.5.5-6 1.5Z"/><path d="M12 4.5v15"/></svg>
               知识问答
             </button>
-            <button :class="['nav-item', view === 'meetings' ? 'active' : '']" :aria-current="view === 'meetings' ? 'page' : undefined" type="button" @click="view = 'meetings'">
+            <button v-if="features.meeting" :class="['nav-item', view === 'meetings' ? 'active' : '']" :aria-current="view === 'meetings' ? 'page' : undefined" type="button" @click="view = 'meetings'">
               <svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8 21h8"/></svg>
               会议听记
             </button>
@@ -498,8 +530,8 @@ const avatarText = computed(() => {
         <!-- ═══ 设置页 ═══ -->
         <SettingsPanel v-if="view === 'settings'" @logout="app.logout" />
 
-        <!-- ═══ 管理页（仅管理员）═══ -->
-        <AdminPanel v-else-if="view === 'admin' && app.currentUser.value.isAdmin" />
+        <!-- ═══ 管理页（超管或子管理员）═══ -->
+        <AdminPanel v-else-if="view === 'admin' && canAdmin" />
 
         <!-- ═══ 服务已退出 ═══ -->
         <div v-else-if="app.stopped.value" class="stopped-view" role="status">
