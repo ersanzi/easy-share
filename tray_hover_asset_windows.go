@@ -308,8 +308,8 @@ const hoverPopupHTML = `<!doctype html>
     </div>
 
     <!--
-      拖放区。真实的拖入由 Win32 的 WM_DROPFILES 接收（HTML5 拿不到完整路径），
-      这里只负责显示进度与结果，由 Go 侧回写。
+      拖放区。WebView2 页面接收外部 drop 后，以附加 File 对象交给 Go 读取真实路径。
+      导航默认行为由 preventDefault 阻止，上传状态由 Go 回写。
     -->
     <div class="dropzone" id="dropzone">
       <svg viewBox="0 0 24 24"><path d="M12 15V3m0 12-4-4m4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -472,9 +472,9 @@ const hoverPopupHTML = `<!doctype html>
       btn.setAttribute('data-kind', s.kind);
       btn.textContent = s.label || s.kind;
       // 只读空间不能作为上传目标：能选中反而误导
-      if (s.readOnly) {
+      if (s.readOnly || s.unavailable) {
         btn.disabled = true;
-        btn.title = s.label + '（只读，不能上传）';
+        btn.title = s.unavailable || (s.label + '（只读，不能上传）');
       }
       btn.addEventListener('click', (function (kind) {
         return function () { selectSpace(kind); };
@@ -486,16 +486,22 @@ const hoverPopupHTML = `<!doctype html>
     var want = selected || '';
     var ok = false;
     for (var k = 0; k < spaces.length; k++) {
-      if (spaces[k].kind === want && !spaces[k].readOnly) { ok = true; break; }
+      if (spaces[k].kind === want && !spaces[k].readOnly && !spaces[k].unavailable) { ok = true; break; }
     }
     if (!ok) {
       want = '';
       for (var m = 0; m < spaces.length; m++) {
-        if (!spaces[m].readOnly) { want = spaces[m].kind; break; }
+        if (!spaces[m].readOnly && !spaces[m].unavailable) { want = spaces[m].kind; break; }
       }
     }
+    var open = document.getElementById('openSpace');
+    if (open) { open.disabled = !want; }
+    if (!want && spaces.length > 0) {
+      var quota = document.getElementById('quota');
+      if (quota) { quota.textContent = spaces[0].unavailable || '没有可用挂载'; }
+    }
     activeKind = '';
-    if (want) { selectSpace(want); } else { moveThumb(); renderQuota(); }
+    if (want) { selectSpace(want); } else { moveThumb(); }
   };
 </script>
 </body>

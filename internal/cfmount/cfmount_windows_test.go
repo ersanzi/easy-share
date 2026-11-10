@@ -112,7 +112,7 @@ func TestEntriesInfersDirectories(t *testing.T) {
 // 若直接把 0 编码进身份，**所有这类文件会共享身份 `esf:0`**——
 // fetch 回调按身份反查路径时会全部指错，表现为「打开 A 读到 B 的内容」。
 //
-// 本用例断言：fileId=0 的多个文件，**身份各不相同**，且与正常 fileId 的身份不冲突。
+// 本用例断言：无有效 fileId 的文件不投影，正常文件保持稳定身份。
 func TestEntriesFileIdZeroNoCollision(t *testing.T) {
 	mod := time.Unix(1767225600, 0)
 	objects := []drive.Object{
@@ -133,8 +133,8 @@ func TestEntriesFileIdZeroNoCollision(t *testing.T) {
 		}
 		byID[id] = e.Path
 	}
-	if len(byID) != 3 {
-		t.Fatalf("身份去重后 = %d 个，期望 3：%v", len(byID), byID)
+	if len(byID) != 1 {
+		t.Fatalf("无有效身份的文件必须拒绝投影，得到 %v", byID)
 	}
 
 	// 正常文件用 esf: 前缀（可跨会话稳定）
@@ -142,11 +142,9 @@ func TestEntriesFileIdZeroNoCollision(t *testing.T) {
 	if string(clean.Identity) != "esf:42" {
 		t.Errorf("正常文件身份 = %q，期望 esf:42", clean.Identity)
 	}
-	// 脏数据用 esp: 前缀（路径派生），与 esf: 明确区分
-	for _, name := range []string{"dirty-a.txt", "dirty-b.txt"} {
-		e := findEntry(t, entries, name)
-		if len(e.Identity) < 4 || string(e.Identity[:4]) != "esp:" {
-			t.Errorf("%s 身份 = %q，期望 esp: 前缀", name, e.Identity)
+	for _, o := range objects[:2] {
+		if id := fileIdentity(o); len(id) != 0 {
+			t.Errorf("无有效 FileId 不得生成伪身份: %q", id)
 		}
 	}
 }

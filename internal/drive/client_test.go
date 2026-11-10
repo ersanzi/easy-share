@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,34 @@ func newTestClient(handler http.Handler) (*Client, func()) {
 	server := httptest.NewServer(handler)
 	client := New(server.URL)
 	return client, server.Close
+}
+
+func TestDeleteTreeByFileIDKeepsIdentityAndExplicitRecursiveFlag(t *testing.T) {
+	client, closeFn := newTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/easyshare/drive/object" {
+			t.Errorf("目录删除请求错误: %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			FileID    int64  `json:"fileId"`
+			Path      string `json:"path"`
+			Space     string `json:"space"`
+			Recursive bool   `json:"recursive"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.FileID != 71 || body.Path != "docs/" || body.Space != SpacePersonal || !body.Recursive {
+			t.Errorf("稳定身份与递归参数未透传: %+v", body)
+		}
+		w.Write([]byte(`{"code":200}`))
+	}))
+	defer closeFn()
+	if err := client.DeleteTreeByFileID(context.Background(), "tok", SpacePersonal, 71, "docs/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.DeleteTreeByFileID(context.Background(), "tok", SpacePersonal, 0, "docs/"); err == nil {
+		t.Fatal("无效目录身份不能退回路径递归删除")
+	}
 }
 
 func TestObjectsUnwrapsEnvelope(t *testing.T) {

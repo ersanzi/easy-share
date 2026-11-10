@@ -61,7 +61,7 @@ const AuthHarness = defineComponent({
     <span data-test="error">{{ error }}</span>
     <span data-test="admin">{{ currentUser.isAdmin }}</span>
     <span data-test="logged-in">{{ currentUser.loggedIn }}</span>
-    <button data-test="login" @click="login('admin', 'admin123')">login</button>
+    <button data-test="login" @click="login('admin', 'fixture-only-password')">login</button>
     <button data-test="logout" @click="logout">logout</button>
     <button data-test="open-admin" @click="openAdminConsole">admin</button>
   `,
@@ -75,6 +75,7 @@ describe('useEasyShare', () => {
     mocks.shutdown.mockResolvedValue(undefined)
     mocks.reportError.mockResolvedValue(undefined)
     mocks.logDirectory.mockResolvedValue('C:\\Users\\tester\\EasyShare\\logs')
+    mocks.currentUser.mockReset().mockResolvedValue({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false })
 
   })
 
@@ -170,6 +171,37 @@ describe('useEasyShare', () => {
     await wrapper.get('[data-test="logout"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-test="admin"]').text()).toBe('false')
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('updates the frontend when the saved session restores after the initial query', async () => {
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+
+    const restored = mocks.eventsOn.mock.calls.find(call => call[0] === 'auth:restored')![1]
+    restored({ loggedIn: true, userName: 'admin', nickName: '管理员', avatar: '', isAdmin: true })
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('true')
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('true')
+    wrapper.unmount()
+    expect(mocks.eventsOff).toHaveBeenCalledWith('auth:restored')
+  })
+
+  it('does not let an earlier auth query overwrite restored or expired state', async () => {
+    let resolveInitial!: (user: { loggedIn: boolean; userName: string; nickName: string; avatar: string; isAdmin: boolean }) => void
+    mocks.currentUser.mockReturnValueOnce(new Promise(resolve => { resolveInitial = resolve }))
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    const restored = mocks.eventsOn.mock.calls.find(call => call[0] === 'auth:restored')![1]
+    const expired = mocks.eventsOn.mock.calls.find(call => call[0] === 'auth:expired')![1]
+    restored({ loggedIn: true, userName: 'admin', nickName: '管理员', avatar: '', isAdmin: true })
+    resolveInitial({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false })
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('true')
+    expired()
+    await flushPromises()
     expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
     wrapper.unmount()
   })

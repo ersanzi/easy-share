@@ -17,6 +17,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -38,6 +39,20 @@ class DriveMoveServiceTest {
         storage = mock(DriveStorage.class);
         fileService = mock(DriveFileService.class);
         service = new DriveMoveService(storage, fileService);
+    }
+
+    @Test
+    void emptyDirectoryMovesIdentityAndRemovesOldMarkerWithoutFileCopy() {
+        EsFile directory = new EsFile();
+        directory.setDirectory(true);
+        when(fileService.activeAt(EsFile.TYPE_PERSONAL, 1L, "empty")).thenReturn(directory);
+        when(storage.listAt("users/1/")).thenReturn(java.util.List.of());
+        service.move(EsFile.TYPE_PERSONAL, 1L, "users/1/", "empty", "renamed");
+        InOrder order = inOrder(fileService, storage);
+        order.verify(fileService).moveRegistered(EsFile.TYPE_PERSONAL, 1L, "empty", "renamed");
+        order.verify(storage).deleteDirectory("users/1/", "empty");
+        verify(storage, never()).copyAt(anyString(), anyString(), anyString());
+        verify(storage, never()).deleteAt(anyString(), anyString());
     }
 
     @Test

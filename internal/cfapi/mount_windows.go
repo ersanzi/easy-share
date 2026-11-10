@@ -23,7 +23,7 @@ import (
 //
 // 本实现的身份编码是 `esf:<fileId>`（fileId 是控制面 es_file 的稳定雪花 ID，
 // 见 ADR-0001 的文件身份模型）。挂载时建立 `fileId → 云端路径` 的内存索引；
-// 进程重启后同步根会被重新注册、树会重建，索引随之重建。
+// 进程重启后复用持久注册及占位符，索引由远端清单重建。
 //
 // 这条路线的代价与收益：
 //   - 收益：改名后身份不变（符合 ADR-0001「路径只是属性」）；
@@ -51,10 +51,13 @@ type Mount struct {
 	rootPath string
 	session  *Session
 
-	open OpenFunc
+	open             OpenFunc
+	provider         ProviderInfo
+	syncRootIdentity []byte
 
-	mu    sync.RWMutex
-	index map[string]string // fileId(十进制) → 云端相对路径
+	syncMu sync.Mutex // serialize list/build/index publication, independently of fetch callbacks
+	mu     sync.RWMutex
+	index  map[string]string // fileId(十进制) → 云端相对路径
 
 	// observer 是可选的取数观察钩子（测试与诊断用）。
 	// 放在这里而不是塞进 Fetcher：Fetcher 是「生产契约」，
@@ -108,6 +111,11 @@ type MountOptions struct {
 
 	// SyncRootIdentity 是同步根身份字节（可含空间名/用户标识）。
 	SyncRootIdentity []byte
+	// ProtectedPaths enables additive-only, non-destructive writeback tree sync.
+	// A non-nil empty slice also enables protection.
+	ProtectedPaths []string
+	// Policies 显式指定本次挂载策略；nil 保持已验证的兼容默认。
+	Policies *SyncPolicies
 }
 
 // DefaultFetchTimeout 是 Fetcher 的默认超时。
@@ -118,7 +126,7 @@ const DefaultFetchTimeout = 30 * time.Second
 
 // MountSpace 完成一次完整挂载：注册同步根 → 连接回调 → 拉清单 → 建占位符树。
 //
-// 返回的 *Mount 需在登出/退出时 Close（它会断开连接并注销同步根）。
+// 返回的 *Mount 需在登出/退出时 Close（仅断开连接，保留注册及占位符）。
 func MountSpace(opt MountOptions) (*Mount, error) {
 	if opt.RootPath == "" {
 		return nil, fmt.Errorf("cfapi: RootPath 不能为空")
@@ -126,24 +134,36 @@ func MountSpace(opt MountOptions) (*Mount, error) {
 	if opt.List == nil || opt.Open == nil {
 		return nil, fmt.Errorf("cfapi: List 与 Open 都不能为 nil")
 	}
+	if opt.Policies != nil && opt.Policies.Hydration.Modifier&2 != 0 {
+		return nil, fmt.Errorf("cfapi: STREAMING 水合与外部应用的 OPEN_NO_RECALL 打开方式存在兼容性问题，请使用 FULL 或 PROGRESSIVE 非流式策略")
+	}
+	return mountSpace(opt)
+}
+
+// mountSpace 仅由经策略检查的入口及显式标记的隔离策略实验调用。
+func mountSpace(opt MountOptions) (*Mount, error) {
 	timeout := opt.FetchTimeout
 	if timeout <= 0 {
 		timeout = DefaultFetchTimeout
 	}
 
 	m := &Mount{
-		rootPath: opt.RootPath,
-		open:     opt.Open,
-		index:    map[string]string{},
-		limiter:  NewLimiter(),
+		rootPath:         opt.RootPath,
+		open:             opt.Open,
+		provider:         opt.Provider,
+		syncRootIdentity: append([]byte(nil), opt.SyncRootIdentity...),
+		index:            map[string]string{},
+		limiter:          NewLimiter(),
 	}
 
 	// ① 注册同步根
-	sr, err := NewSyncRoot(opt.Provider, opt.SyncRootIdentity, []byte(identityPrefix), nil)
+	sr, err := NewSyncRoot(opt.Provider, opt.SyncRootIdentity, []byte(identityPrefix), opt.Policies)
 	if err != nil {
 		return nil, err
 	}
-	if err := RegisterSyncRoot(opt.RootPath, &sr.Registration, &sr.Policies, RegisterFlagNone); err != nil {
+	// 根与子目录都由主动建树负责；根也明确禁用按需 population。
+	// 不使用 MARK_IN_SYNC_ON_ROOT，不改变用户文件属性或水合状态。
+	if err := ensureSyncRoot(opt.RootPath, opt.Provider, opt.SyncRootIdentity, sr); err != nil {
 		return nil, fmt.Errorf("cfapi: 注册同步根 %s 失败: %w", opt.RootPath, err)
 	}
 
@@ -151,17 +171,20 @@ func MountSpace(opt MountOptions) (*Mount, error) {
 	sess, err := Connect(opt.RootPath, m.fetcher(timeout),
 		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath)
 	if err != nil {
-		// 连接失败要把同步根撤掉，否则系统里留一个没有回调的根
-		_ = UnregisterSyncRoot(opt.RootPath)
+		// 保留注册：注销会递归删除未水合文件并撤掉目录身份。
+		// 没有活动连接的根可由同身份后续重连。
 		return nil, fmt.Errorf("cfapi: 连接同步根失败: %w", err)
 	}
 	m.session = sess
 
 	// ③ 拉清单建树
-	if err := m.Sync(opt.List); err != nil {
-		// 建树失败不撤根——树可以稍后重试（Sync 是公开的），
-		// 但要把错误如实带出去让调用方决定。
-		return m, err
+	if err := m.syncProtected(opt.List, opt.ProtectedPaths, opt.ProtectedPaths != nil); err != nil {
+		// 首次同步失败时调用方通常只处理错误，不会接管半成品 Mount。
+		// 必须断开回调避免泄漏会话；保留注册，禁止注销删除未水合文件。
+		if closeErr := m.Close(); closeErr != nil {
+			return nil, fmt.Errorf("%w（清理失败挂载: %v）", err, closeErr)
+		}
+		return nil, err
 	}
 	return m, nil
 }
@@ -171,19 +194,38 @@ func MountSpace(opt MountOptions) (*Mount, error) {
 // 可重复调用（例如定时刷新）。**不做增量**——增量需要服务端的 spaceVersion
 // 与变更日志（路线图切片 2），本片是「全量重建」的最小形态。
 func (m *Mount) Sync(list ListFunc) error {
-	m.mu.Lock()
-	listFn := list
-	m.mu.Unlock()
+	return m.syncProtected(list, nil, false)
+}
+
+// SyncProtected never updates or deletes existing entries. The complete remote
+// list still populates the identity index so old protected placeholders hydrate.
+func (m *Mount) SyncProtected(list ListFunc, paths []string) error {
+	return m.syncProtected(list, paths, true)
+}
+
+func (m *Mount) syncProtected(listFn ListFunc, paths []string, conservative bool) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	if listFn == nil {
+		return fmt.Errorf("cfapi: nil list")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	request := &protectionRequest{paths: append([]string(nil), paths...), enabled: conservative}
+	ctx = context.WithValue(ctx, protectionKey{}, request)
 	entries, err := listFn(ctx)
 	if err != nil {
 		return fmt.Errorf("cfapi: 拉取云端清单失败: %w", err)
 	}
 
-	stats := BuildTree(m.rootPath, entries)
+	var stats TreeStats
+	if request.enabled {
+		stats = BuildTreeProtected(m.rootPath, entries, request.paths)
+	} else {
+		stats = BuildTree(m.rootPath, entries)
+	}
 
 	// 清理幽灵占位符（云端已删、本地还在）。
 	//
@@ -192,7 +234,11 @@ func (m *Mount) Sync(list ListFunc) error {
 	//
 	// 只删未水合的；已水合的保留并计数（那份内容是本地仅存，
 	// 删掉就是销毁用户数据，见 removeGhosts 的说明）。
-	stats.Removed, stats.SkippedHydrated = removeGhosts(m.rootPath, entries)
+	// Additive-only mode must not infer deletions, even for paths created after
+	// the scan. Retain every existing entry rather than racing hydration/writes.
+	if !request.enabled {
+		stats.Removed, stats.SkippedHydrated = removeGhosts(m.rootPath, entries)
+	}
 
 	// 更新索引：fileId → 云端路径。只收**创建成功**的条目，
 	// 失败的条目不进索引（否则读取时才知道它没建出来）。
@@ -213,22 +259,13 @@ func (m *Mount) Sync(list ListFunc) error {
 	return nil
 }
 
-// Close 断开连接并注销同步根。可重复调用。
+// Close only disconnects callbacks. Registration and on-disk identities persist.
+// UnregisterSyncRoot is a destructive stop-sync operation, never normal cleanup.
 func (m *Mount) Close() error {
-	if m == nil {
+	if m == nil || m.session == nil {
 		return nil
 	}
-	var firstErr error
-	if m.session != nil {
-		if err := m.session.Close(); err != nil {
-			firstErr = err
-		}
-	}
-	// 注销同步根：不做的话系统里会留一个指向不存在提供方的根
-	if err := UnregisterSyncRoot(m.rootPath); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	return firstErr
+	return m.session.Close()
 }
 
 // LastSync 返回上次成功同步的时间。
@@ -266,7 +303,11 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 			return FetchResult{Err: fmt.Errorf("请求区间非法：offset=%d length=%d", offset, length)}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		requestCtx := req.Context
+		if requestCtx == nil {
+			requestCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(requestCtx, timeout)
 		defer cancel()
 
 		// 观察钩子：在真实回调线程上，**取数之前**报告「谁在读什么」。
@@ -290,33 +331,37 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 			}
 		}
 
-		rc, err := m.open(ctx, cloudPath, offset, length)
-		if err != nil {
-			return FetchResult{Err: fmt.Errorf("读取云端 %s 失败: %w", cloudPath, err)}
-		}
-		defer rc.Close()
-
-		buf := make([]byte, length)
-
-		// 只有到达内核会弹进度框的量级才回报：小文件根本不显示进度，
-		// 逐块回报只是纯开销（还会把回调线程占得更久）。
-		var report func(completed int64)
-		if length >= progressMinBytes {
-			report = func(completed int64) { m.reportProgress(req, length, completed) }
-		}
-		n, err := readProgressively(rc, buf, report)
-		if err != nil && err != io.ErrUnexpectedEOF {
-			return FetchResult{Err: fmt.Errorf("读取云端 %s 内容失败: %w", cloudPath, err)}
-		}
-		if int64(n) < length {
-			// 短读：如实回报实际字节数，让系统自己决定是否重试剩余区间。
-			// 这里不补零——补零会让上层读到静默损坏的数据。
-			buf = buf[:n]
-			if report != nil {
-				m.reportProgress(req, length, int64(n))
+		return FetchResult{Transfer: func(send func(FetchResult) error) error {
+			const chunkSize = int64(progressChunk)
+			for pos := offset; pos < offset+length; {
+				n := min(chunkSize, offset+length-pos)
+				chunkCtx, stop := context.WithTimeout(requestCtx, timeout)
+				rc, err := m.open(chunkCtx, cloudPath, pos, n)
+				if err != nil {
+					stop()
+					return fmt.Errorf("读取云端 %s 失败: %w", cloudPath, err)
+				}
+				buf := make([]byte, n)
+				_, err = io.ReadFull(rc, buf)
+				closeErr := rc.Close()
+				stop()
+				if err != nil {
+					return fmt.Errorf("读取云端区间 %d+%d 失败: %w", pos, n, err)
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+				if err = send(FetchResult{Data: buf, Offset: pos}); err != nil {
+					return err
+				}
+				pos += n
+				// 保留上游内核进度接口，但不为报告进度整文件驻留内存。
+				if length >= progressMinBytes {
+					m.reportProgress(req, length, pos-offset)
+				}
 			}
-		}
-		return FetchResult{Data: buf, Offset: offset}
+			return nil
+		}}
 	}
 }
 

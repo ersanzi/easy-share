@@ -71,6 +71,10 @@ func (a *App) sessionToken() spacedav.TokenFunc {
 //
 // 登录后、以及管理员改了配额或授权之后调用。未登录时全部卸载。
 func (a *App) refreshSpaceMounts() {
+	// Windows 云空间只走 CFAPI；失败时不得把旧 WebDAV UNC 当作成功入口。
+	if a.refreshNativeSpaceMounts() {
+		return
+	}
 	// 悬浮窗切换器与挂载读的是同一份空间数据，借登录态通道触发它重读，
 	// 免得为此再拉一条 App→托盘 的通路。
 	defer a.publishTrayUser()
@@ -102,7 +106,17 @@ func (a *App) refreshSpaceMounts() {
 	// WebDAV 上传的暂存目录：同样放数据根。
 	// 不放系统临时目录的原因：拖进来的可能是几十 GB，而系统盘通常最小；
 	// 放数据根，用户至少有「清理数据盘」这一个直觉可循。
+	//
+	// ⚠️ 必须在这里建出来：newWriteFile 用 os.CreateTemp(spoolDir) 落暂存，
+	// 目录不存在时返回 ENOENT，被 webdav 的 handlePut 翻成 **404 Not Found**。
+	// 症状极具误导——「此电脑」里能看到文件、能打开（GET 不经过 spool），
+	// 但拖文件进去卡死/失败，且日志里没有任何 upload 记录。
 	spoolDir := filepath.Join(filepath.Dir(a.configPath), "upload-spool")
+	if err := os.MkdirAll(spoolDir, 0o755); err != nil {
+		a.logger.Printf("space mount: 创建上传暂存目录失败 %s: %v", spoolDir, err)
+		// 不直接 return：读、列举等只读能力仍然可用，用户不该因为
+		// 暂存目录建不出来就整个盘都打不开。
+	}
 	// 增量列举版本持久化：桌面端重启后带 last_version 继续拉差异，
 	// 不再退回全量。文件与 upload-sessions 同放数据根。
 	versionStore := spacedav.NewDiskVersionStore(
@@ -239,7 +253,7 @@ func (a *App) unmountAllSpaces() {
 	_ = a.mounts.personal.Stop(ctx)
 	_ = a.mounts.shared.Stop(ctx)
 
-	// CfApi 同步根跟着卸：令牌已清空，挂着的占位符读不了任何数据
+	// CfApi 仅断连并撤入口：令牌已清空，不再服务回调；保留注册及本地数据。
 	a.unmountCfapiSpaces()
 
 	if had {
@@ -283,6 +297,10 @@ func spaceLabel(space string) string {
 //
 // report 用来回写状态；传 nil 表示不回写（浮窗不可用时）。
 func (a *App) uploadDroppedToSpace(paths []string, report func(title, hint, kind string)) {
+	a.uploadDroppedToSpaceSelection(paths, a.targetSpace(), report)
+}
+
+func (a *App) uploadDroppedToSpaceSelection(paths []string, space string, report func(title, hint, kind string)) {
 	if report == nil {
 		report = func(string, string, string) {}
 	}
@@ -292,8 +310,23 @@ func (a *App) uploadDroppedToSpace(paths []string, report func(title, hint, kind
 		report("上传失败", err.Error(), "err")
 		return
 	}
+	a.accountMu.RLock()
+	dropSession := a.accountSession
+	sameToken := dropSession != nil && dropSession.Token == token
+	a.accountMu.RUnlock()
+	if !sameToken {
+		report("上传取消", "登录账号已变化", "err")
+		return
+	}
 
-	space := a.targetSpace()
+	if space != drive.SpacePersonal && space != drive.SpaceShared {
+		report("暂不能上传", "未选择可用云盘", "err")
+		return
+	}
+	if err := a.nativeDropAvailable(space); err != nil {
+		report("暂不能上传", err.Error(), "err")
+		return
+	}
 	label := spaceLabel(space)
 
 	// 先确认目标空间当前真的可写：拖进去再被控制面拒，用户已经等了一轮
@@ -306,20 +339,31 @@ func (a *App) uploadDroppedToSpace(paths []string, report func(title, hint, kind
 
 	var failed int
 	for _, path := range paths {
+		a.accountMu.RLock()
+		sameSession := a.accountSession == dropSession
+		a.accountMu.RUnlock()
+		if !sameSession {
+			report("上传取消", "登录账号已变化，未继续提交文件", "err")
+			return
+		}
 		info, statErr := os.Stat(path)
 		if statErr != nil {
 			failed++
 			continue
 		}
+		var uploadErr error
 		if info.IsDir() {
-			a.uploadDir(core, driveClient, token, space, path, "")
+			uploadErr = a.uploadDir(core, driveClient, token, space, path, "")
 		} else {
-			a.uploadSingleFile(core, driveClient, token, space, path, filepath.Base(path))
+			uploadErr = a.uploadSingleFile(core, driveClient, token, space, path, filepath.Base(path))
+		}
+		if uploadErr != nil {
+			failed++
 		}
 	}
 
 	if failed > 0 {
-		report("部分未上传", fmt.Sprintf("%d 项读取失败，详见任务中心", failed), "err")
+		report("部分未上传", fmt.Sprintf("%d 项上传失败，详见任务中心", failed), "err")
 	} else {
 		report("已提交上传", fmt.Sprintf("%d 项 → %s，进度见任务中心", len(paths), label), "ok")
 	}
@@ -363,6 +407,9 @@ func (a *App) assertSpaceWritable(space string) error {
 // 两者内容相同，但 UNC 打开后标题栏显示的是 \\127.0.0.1@19082\DavWWWRoot 这种地址、
 // 也没有图标，用户会觉得「这不是我那个盘」。按 CLSID 打开的就是此电脑里那一项本身。
 func (a *App) OpenCurrentSpace() error {
+	if handled, err := a.openNativeCurrentSpace(); handled {
+		return err
+	}
 	space := a.targetSpace()
 	clsid := spaceCLSID(space)
 
@@ -388,6 +435,9 @@ func (a *App) OpenCurrentSpace() error {
 
 // SetDropSpace 记下悬浮窗切换器选中的目标空间。由浮窗线程调用。
 func (a *App) SetDropSpace(kind string) {
+	if kind != "" && kind != drive.SpacePersonal && kind != drive.SpaceShared {
+		return
+	}
 	a.dropSpaceMu.Lock()
 	a.dropSpace = kind
 	a.dropSpaceMu.Unlock()

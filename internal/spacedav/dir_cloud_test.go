@@ -86,6 +86,44 @@ func TestReadOnlyMkdirTouchesNothing(t *testing.T) {
 	}
 }
 
+func TestPersistentDirectoryListAndStatRemainDirectories(t *testing.T) {
+	client := newFake(
+		drive.Object{Path: "empty", Directory: true, FileId: 17},
+		drive.Object{Path: "ordinary.txt", Size: 3},
+	)
+	fs := newFS(client, drive.SpacePersonal, false)
+	ctx := context.Background()
+	info, err := fs.Stat(ctx, "/empty")
+	if err != nil || !info.IsDir() {
+		t.Fatalf("持久空目录必须保留目录类型: %v %v", info, err)
+	}
+	file, err := fs.OpenFile(ctx, "/", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	entries, err := file.Readdir(-1)
+	if err != nil || len(entries) != 2 || entries[0].Name() != "empty" || !entries[0].IsDir() {
+		t.Fatalf("目录列表把持久目录当成文件: %v %v", entries, err)
+	}
+}
+
+func TestPersistentDirectoryDeletionOrdersChildrenBeforeParents(t *testing.T) {
+	client := newFake(
+		drive.Object{Path: "docs", Directory: true, FileId: 1},
+		drive.Object{Path: "docs/sub", Directory: true, FileId: 2},
+		drive.Object{Path: "docs/sub/file.txt", Size: 3, FileId: 3},
+	)
+	fs := newFS(client, drive.SpacePersonal, false)
+	if err := fs.RemoveAll(context.Background(), "/docs"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"docs/sub/file.txt", "docs/sub", "docs", "docs/"}
+	if !slices.Equal(client.deleted, want) {
+		t.Fatalf("持久目录删除次序=%v，应为%v", client.deleted, want)
+	}
+}
+
 func TestRemoveEmptyDirectoryClearsMarker(t *testing.T) {
 	client := newFake()
 	fs := newFS(client, drive.SpacePersonal, false)

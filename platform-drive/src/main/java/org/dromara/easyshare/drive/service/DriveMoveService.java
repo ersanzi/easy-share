@@ -48,6 +48,21 @@ public class DriveMoveService {
      * @throws RuntimeException 原样抛出存储层错误；补偿失败只记日志，不掩盖原始错误
      */
     public void move(String spaceType, Long ownerId, String prefix, String from, String to) {
+        var row = fileService.activeAt(spaceType, ownerId, from);
+        if (row != null && row.directoryEntry()) {
+            if (storage.listAt(prefix).stream().anyMatch(object -> object.path().startsWith(from + "/"))) {
+                throw new org.dromara.common.core.exception.ServiceException("目录非空，请先处理子项");
+            }
+            fileService.moveRegistered(spaceType, ownerId, from, to);
+            try {
+                // 新目录没有marker；旧marker若留下，下一次列表会把旧路径重新认领。
+                storage.deleteDirectory(prefix, from);
+            } catch (RuntimeException ex) {
+                fileService.moveRegistered(spaceType, ownerId, to, from);
+                throw ex;
+            }
+            return; // 目录不对应文件正文对象。
+        }
         // 先在目录层占住目标名字：目标已被占用时在这里就拒绝，不会有任何对象被复制
         fileService.moveRegistered(spaceType, ownerId, from, to);
         try {

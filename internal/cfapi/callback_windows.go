@@ -3,7 +3,9 @@
 package cfapi
 
 import (
+	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -32,6 +34,8 @@ import (
 // 字段取自 CF_CALLBACK_INFO 与 CF_CALLBACK_PARAMETERS 的并集，已转成 Go 语义
 // （时间/大小是 Go 类型，路径是 string）。调用方无需接触任何 C 结构体。
 type FetchRequest struct {
+	// Context 随请求取消和会话关闭失效，供分块取数及时停止。
+	Context context.Context
 	// FileIdentity 是占位符的稳定身份（创建时写入的那段字节）。
 	// 调用方用它反查是哪个云端文件——**不要用路径反查**（改名后路径会变）。
 	FileIdentity []byte
@@ -77,6 +81,9 @@ type FetchResult struct {
 	// Err 非 nil 表示本次拉取失败，回调会带错误状态返回给系统，
 	// 系统会把这次 I/O 报错给发起进程（而不是让读取永久挂起）。
 	Err error
+	// Transfer 分块回填同一次请求，不必先把整份文件装入内存。
+	// 回调驱动其执行并逐块检查 CfExecute 结果；其他 Fetcher 可继续使用 Data。
+	Transfer func(func(FetchResult) error) error
 }
 
 // Fetcher 由调用方实现：给定请求，返回要回填的字节。
@@ -195,12 +202,16 @@ type ProcessInfo struct {
 // CallbackParametersFetch 是 CF_CALLBACK_PARAMETERS 中 FetchData 分支的
 // Go 侧映像。
 //
-// CF_CALLBACK_PARAMETERS 是个大 union；FETCH_DATA 分支的布局
-// = ParamSize(4) + Flags(4) + 6×LARGE_INTEGER(48) = 56 字节，
-// 与 C 实测一致（见 testdata/layout_check.c 输出）。
+// CF_CALLBACK_PARAMETERS 的 union 按 8 字节对齐，FetchData 本身也有
+// Flags 到 LARGE_INTEGER 的填充；不能将嵌套结构简单摊平。
+// SDK x64：union@8、Flags@8、RequiredFileOffset@16、RequiredLength@24，size=64。
+// 来源：https://learn.microsoft.com/windows/win32/api/cfapi/ns-cfapi-cf_callback_parameters
+// 真实回调的 ParamSize 与独立字节 fixture 另有回归，避免实现和测试一起错位。
 type CallbackParametersFetch struct {
 	ParamSize             uint32
+	_                     uint32
 	Flags                 uint32
+	_                     uint32
 	RequiredFileOffset    int64
 	RequiredLength        int64
 	OptionalFileOffset    int64
@@ -266,12 +277,22 @@ type Session struct {
 	rootPath string
 	fetcher  Fetcher
 
-	key  connectionKey
-	once sync.Once
+	key      connectionKey
+	once     sync.Once
+	closeErr error // sync.Once publishes the same disconnect result to every caller
 	// active 标记是否已连接，Close 用它决定要不要真正调 CfDisconnectSyncRoot。
 	active bool
 	mu     sync.Mutex
+	// 仅供隔离布局实验观察原始 SDK 字节；生产默认 nil。
+	parameterObserver func([]byte)
+	synchronousProbe  bool
+	transferObserver  func(int64, int64, uintptr)
+	work              sync.WaitGroup
+	requests          map[fetchWorkKey]*fetchWork
 }
+
+type fetchWorkKey struct{ transfer, request int64 }
+type fetchWork struct{ cancel context.CancelFunc }
 
 // Connect 连接同步根并注册 FETCH_DATA 回调。
 //
@@ -291,7 +312,7 @@ func Connect(rootPath string, fetcher Fetcher, connectFlags uint32) (*Session, e
 		return nil, fmt.Errorf("cfapi: 同步根路径转换失败: %w", err)
 	}
 
-	s := &Session{rootPath: rootPath, fetcher: fetcher}
+	s := &Session{rootPath: rootPath, fetcher: fetcher, requests: make(map[fetchWorkKey]*fetchWork), active: true}
 
 	// 回调表：两项 + 终止项。回调函数指针用 syscall.NewCallback 生成，
 	// 该 trampoline 会正确切到 Go 栈，因此回调里可以安全使用 Go 代码
@@ -327,27 +348,30 @@ func (s *Session) Close() error {
 	if s == nil {
 		return nil
 	}
-	var err error
 	s.once.Do(func() {
 		s.mu.Lock()
 		active := s.active
 		s.active = false
+		for _, request := range s.requests {
+			request.cancel()
+		}
 		s.mu.Unlock()
 		if !active {
 			return
 		}
 		p, perr := proc("CfDisconnectSyncRoot")
 		if perr != nil {
-			err = perr
+			s.closeErr = perr
 			return
 		}
 		// ⚠️ ConnectionKey 是**按值传**（`CfDisconnectSyncRoot(CF_CONNECTION_KEY)`），
 		// 不是指针。传 &key 会得到 0x80070057 (E_INVALIDARG)——
 		// 这一点最初写成了取地址，被 TestMountSpaceEndToEnd 的 Close 抓到。
 		r1, _, _ := p.Call(uintptr(s.key))
-		err = checkHResult(r1, "CfDisconnectSyncRoot")
+		s.closeErr = checkHResult(r1, "CfDisconnectSyncRoot")
+		s.work.Wait()
 	})
-	return err
+	return s.closeErr
 }
 
 // onFetchData 是 CF_CALLBACK_TYPE_FETCH_DATA 的处理函数。
@@ -375,6 +399,9 @@ func (s *Session) onFetchData(infoPtr, paramsPtr uintptr) uintptr {
 
 	info := asCallbackInfo(infoPtr)
 	params := asCallbackParamsFetch(paramsPtr)
+	if s.parameterObserver != nil && params.ParamSize >= 24 && params.ParamSize <= 256 {
+		s.parameterObserver(append([]byte(nil), unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&paramsPtr))), params.ParamSize)...))
+	}
 
 	// 进程信息：读取节流靠它分辨「用户在打开文件」与「索引器在扫盘」。
 	// ProcessInfo 为 nil 是合法的（未置 REQUIRE_PROCESS_INFO 时），
@@ -396,16 +423,74 @@ func (s *Session) onFetchData(infoPtr, paramsPtr uintptr) uintptr {
 		ProcessId:      procID,
 	}
 
-	res := s.fetcher(req)
-
-	// 回填：无论成功失败都要回一次，否则读取方会永久挂起。
-	return s.executeTransfer(info, res)
+	if s.synchronousProbe {
+		res := s.fetcher(req)
+		if res.Transfer != nil {
+			if err := res.Transfer(func(chunk FetchResult) error { return s.executeTransferChecked(info, chunk) }); err != nil {
+				_ = s.executeTransferChecked(info, FetchResult{Offset: req.RequiredOffset, Err: err})
+			}
+			return 0
+		}
+		return s.executeTransfer(info, res)
+	}
+	// 只复制异步完成所需的值；绝不在回调返回后引用 Windows 提供的内存指针。
+	copied := CallbackInfo{ConnectionKey: info.ConnectionKey, TransferKey: info.TransferKey, RequestKey: info.RequestKey, FileSize: info.FileSize}
+	req.FileIdentity = append([]byte(nil), req.FileIdentity...)
+	ctx, cancel := context.WithCancel(context.Background())
+	req.Context = ctx
+	key := fetchWorkKey{info.TransferKey, info.RequestKey}
+	job := &fetchWork{cancel: cancel}
+	s.mu.Lock()
+	if !s.active {
+		s.mu.Unlock()
+		cancel()
+		return 0
+	}
+	if previous := s.requests[key]; previous != nil {
+		previous.cancel()
+	}
+	s.requests[key] = job
+	s.work.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.work.Done()
+		defer cancel()
+		defer func() {
+			s.mu.Lock()
+			if s.requests[key] == job {
+				delete(s.requests, key)
+			}
+			s.mu.Unlock()
+			if recover() != nil {
+				_ = s.executeTransferChecked(&copied, FetchResult{Offset: req.RequiredOffset, Err: fmt.Errorf("fetch worker panic")})
+			}
+		}()
+		res := s.fetcher(req)
+		if res.Transfer != nil {
+			if err := res.Transfer(func(chunk FetchResult) error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return s.executeTransferChecked(&copied, chunk)
+			}); err != nil && ctx.Err() == nil {
+				_ = s.executeTransferChecked(&copied, FetchResult{Offset: req.RequiredOffset, Err: err})
+			}
+		} else if ctx.Err() == nil {
+			_ = s.executeTransferChecked(&copied, res)
+		}
+	}()
+	return 0
 }
 
 // executeTransfer 用 CfExecute(TRANSFER_DATA) 把结果（或错误）回报给系统。
 //
 // 返回 0 是 CALLBACK 的约定返回值（void）。
 func (s *Session) executeTransfer(info *CallbackInfo, res FetchResult) uintptr {
+	_ = s.executeTransferChecked(info, res)
+	return 0
+}
+
+func (s *Session) executeTransferChecked(info *CallbackInfo, res FetchResult) error {
 	opInfo := OperationInfo{
 		StructSize:    uint32(unsafe.Sizeof(OperationInfo{})),
 		Type:          OperationTypeTransferData,
@@ -434,20 +519,30 @@ func (s *Session) executeTransfer(info *CallbackInfo, res FetchResult) uintptr {
 
 	p, err := proc("CfExecute")
 	if err != nil {
-		return 0
+		return err
 	}
-	p.Call(
+	hr, _, _ := p.Call(
 		uintptr(unsafe.Pointer(&opInfo)),
 		uintptr(unsafe.Pointer(&opParams)),
 	)
-	return 0
+	runtime.KeepAlive(res.Data)
+	if s.transferObserver != nil {
+		s.transferObserver(res.Offset, opParams.Length, hr)
+	}
+	return checkHResult(hr, "CfExecute TRANSFER_DATA")
 }
 
 // onCancelFetchData 是 CF_CALLBACK_TYPE_CANCEL_FETCH_DATA 的处理函数。
 //
 // WPS 的这个回调是**空实现**（取证 §3.2b 实测函数体 76 字节）。本包同样留空——
 // 但**保留注册**，因为不注册会让取消事件无人处理，超时路径更难排查。
-func (s *Session) onCancelFetchData(_, _ uintptr) uintptr {
+func (s *Session) onCancelFetchData(infoPtr, _ uintptr) uintptr {
+	info := asCallbackInfo(infoPtr)
+	s.mu.Lock()
+	if job := s.requests[fetchWorkKey{info.TransferKey, info.RequestKey}]; job != nil {
+		job.cancel()
+	}
+	s.mu.Unlock()
 	return 0
 }
 

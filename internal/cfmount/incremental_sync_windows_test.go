@@ -109,7 +109,7 @@ func TestIncrementalSyncAddsPlaceholder(t *testing.T) {
 
 	// ② 云端新建一个文件，再同步一次：必须带上一轮的版本游标，且不能再拉全量
 	fc.addCreated("docs/new.txt", 11, 303)
-	fc.files["docs/new.txt"] = []byte("brand new!!")   // 11 字节，与事件里的 Size 对齐
+	fc.files["docs/new.txt"] = []byte("brand new!!") // 11 字节，与事件里的 Size 对齐
 	if err := m.Sync(List(cfg)); err != nil {
 		t.Fatalf("Sync 失败: %v", err)
 	}

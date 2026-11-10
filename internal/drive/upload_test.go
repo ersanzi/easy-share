@@ -121,3 +121,32 @@ func TestUploadFileEmptyFile(t *testing.T) {
 		t.Errorf("内容应为空：%q", *received)
 	}
 }
+
+// 对象存储要求空 PUT 有明确的零长度，不能把包装后的 reader 当作未知长度分块发送。
+func TestUploadEmptyFileUsesExplicitZeroLength(t *testing.T) {
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.Header.Get("Content-Length") != "0" {
+			t.Errorf("empty PUT framing: length=%d transfer=%v header=%q", r.ContentLength, r.TransferEncoding, r.Header.Get("Content-Length"))
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) != 0 {
+			t.Errorf("empty PUT body: bytes=%d err=%v", len(body), err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer store.Close()
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"code":200,"data":{"url":"` + store.URL + `/empty","path":"empty.txt"}}`))
+	}))
+	defer control.Close()
+	path := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	version := int64(0)
+	if err := New(control.URL).UploadFileIfVersion(context.Background(), "tok", SpacePersonal, "empty.txt", path, &version, nil); err != nil {
+		t.Fatal(err)
+	}
+}

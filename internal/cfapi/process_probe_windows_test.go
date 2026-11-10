@@ -55,7 +55,7 @@ func TestFetchReportsRequestingProcess(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(content[offset:end])), nil
 	}
 
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath: root, Provider: testProvider, List: list, Open: open,
 		SyncRootIdentity: []byte("easyshare-proc-probe"),
 	})
@@ -131,7 +131,7 @@ func TestLimiterDoesNotBlockUserRead(t *testing.T) {
 		}
 		return io.NopCloser(bytes.NewReader(content[offset:end])), nil
 	}
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath: root, Provider: testProvider, List: list, Open: open,
 		SyncRootIdentity: []byte("easyshare-nodelay-probe"),
 	})

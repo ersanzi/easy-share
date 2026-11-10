@@ -149,15 +149,15 @@ const (
 // CF_POPULATION_POLICY_PRIMARY 取值。
 const (
 	PopulationPolicyPartial    = 0
-	PopulationPolicyFull       = 1
-	PopulationPolicyAlwaysFull = 2
+	PopulationPolicyFull       = 2
+	PopulationPolicyAlwaysFull = 3
 )
 
 // 注册标志（CF_REGISTER_FLAGS）。
 const (
-	RegisterFlagNone      = 0x00000000
-	RegisterFlagUpdate    = 0x00000001
-	RegisterFlagNoConnect = 0x00000002
+	RegisterFlagNone                            = 0x00000000
+	RegisterFlagUpdate                          = 0x00000001
+	RegisterFlagDisableOnDemandPopulationOnRoot = 0x00000002
 )
 
 // ConnectFlag 是 CF_CONNECT_FLAGS 中本包用到的位。
@@ -361,9 +361,10 @@ type SyncRootResult struct {
 // 后者是提供方对文件身份的字典序前缀（本仓用固定前缀 + fileId 编码）。
 // 两者都由调用方给出，本函数只负责保证生命周期与 StructSize 正确。
 //
-// policies 传 nil 时用一组适配「只读按需」的默认：Full 水合 + Full 填充。
-// 选 Full 而非 Partial，是因为第一片只做只读呈现，不需要渐进式下载；
-// 等做双向同步时再按 WPS 的做法细化。
+// policies 传 nil 时默认 Full 水合 + AlwaysFull 填充。
+// 当前架构主动铺完整目录树，且没有 FETCH_PLACEHOLDERS 回调；AlwaysFull 只表示
+// 名称空间完整，禁止系统请求按需填目录，不会预下载文件内容（仍由 FETCH_DATA 水合）。
+// 数值依据：Microsoft Learn CF_POPULATION_POLICY_PRIMARY（cfapi.h）。
 func NewSyncRoot(provider ProviderInfo, syncRootIdentity, fileIdentity []byte, policies *SyncPolicies) (*SyncRootResult, error) {
 	name, err := syscall.UTF16FromString(provider.Name)
 	if err != nil {
@@ -400,7 +401,7 @@ func NewSyncRoot(provider ProviderInfo, syncRootIdentity, fileIdentity []byte, p
 		r.Policies = SyncPolicies{
 			StructSize: uint32(unsafe.Sizeof(SyncPolicies{})),
 			Hydration:  HydrationPolicy{Primary: HydrationPolicyFull},
-			Population: PopulationPolicy{Primary: PopulationPolicyFull},
+			Population: PopulationPolicy{Primary: PopulationPolicyAlwaysFull},
 		}
 	}
 	return r, nil
@@ -449,6 +450,8 @@ type PlaceholderSpec struct {
 	// 而重建（带 SUPERSEDE）会把本地改动覆盖掉。用文件系统层的只读位
 	// 把写挡在门外，用户得到明确的「拒绝访问」，而不是「保存成功但会丢」。
 	ReadOnly bool
+	// NoMarkInSync avoids claiming synchronization without a locked verification.
+	NoMarkInSync bool
 }
 
 // Placeholders 持有一批占位符的 C 侧表示。
@@ -493,6 +496,9 @@ func NewPlaceholders(specs []PlaceholderSpec) *Placeholders {
 
 		attributes := uint32(FileAttributeNormal)
 		flags := uint32(PlaceholderCreateFlagMarkInSync)
+		if s.NoMarkInSync {
+			flags &^= PlaceholderCreateFlagMarkInSync
+		}
 		if s.IsDir {
 			attributes = FileAttributeDirectory
 			flags |= PlaceholderCreateFlagDisableOnDemandPopulation
@@ -639,7 +645,9 @@ func RegisterSyncRoot(rootPath string, reg *SyncRegistration, policies *SyncPoli
 	return checkHResult(r1, "CfRegisterSyncRoot")
 }
 
-// UnregisterSyncRoot 注销同步根（卸载/登出时调用）。
+// UnregisterSyncRoot explicitly stops syncing a tree (uninstall/confirmed unlink).
+// DESTRUCTIVE: deletes unhydrated placeholders and reverts populated directories.
+// Never call on normal exit, logout, reconnect, or failed mount cleanup.
 func UnregisterSyncRoot(rootPath string) error {
 	p, err := proc("CfUnregisterSyncRoot")
 	if err != nil {

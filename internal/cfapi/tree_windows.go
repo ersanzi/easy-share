@@ -77,7 +77,8 @@ type TreeStats struct {
 	// 两者分开是因为它们的语义完全不同：前者是我们主动清理，
 	// 后者是**刻意不删**（见 removeGhosts 的说明）。
 	Removed int
-	// SkippedHydrated 是「云端已删但本地已水合、故刻意保留」的数量。
+	// SkippedHydrated 是无法确认可安全删除而刻意保留的文件数量。
+	// 包括已水合、未同步、普通本地文件及查询失败（沿用原字段名）。
 	//
 	// 这不是失败。保留是因为那份内容**只存在于本地**——
 	// 删掉它就是销毁用户仅存的副本（实测见 ghost_probe_windows_test.go）。
@@ -136,6 +137,16 @@ func (s TreeStats) Error() string {
 // （会更新元数据），但本函数**不做去重**——去重是调用方的事（它才知道
 // 本地已有多少、哪些需要更新）。
 func BuildTree(rootPath string, entries []CloudEntry) TreeStats {
+	return buildTree(rootPath, entries, nil, false)
+}
+
+// BuildTreeProtected is additive-only: it never updates existing local entries,
+// including entries created or hydrated after the writeback scan.
+func BuildTreeProtected(rootPath string, entries []CloudEntry, protected []string) TreeStats {
+	return buildTree(rootPath, entries, protected, true)
+}
+
+func buildTree(rootPath string, entries []CloudEntry, protected []string, conservative bool) TreeStats {
 	var stats TreeStats
 
 	// 按深度排序确保先父后子；同深度按路径排序保证结果稳定（可复现）。
@@ -150,6 +161,25 @@ func BuildTree(rootPath string, entries []CloudEntry) TreeStats {
 	})
 
 	for _, e := range sorted {
+		if conservative {
+			if !validProtectedEntry(e.Path) {
+				stats.Failures = append(stats.Failures, EntryFailure{Path: e.Path, IsDir: e.IsDir, Err: fmt.Errorf("unsafe cloud path")})
+				continue
+			}
+			if pathProtected(e.Path, protected) {
+				continue
+			}
+			if _, err := os.Lstat(joinPath(rootPath, e.Path)); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				stats.Failures = append(stats.Failures, EntryFailure{Path: e.Path, IsDir: e.IsDir, Err: err})
+				continue
+			}
+			if !safeCreateParent(rootPath, e.Path) {
+				stats.Failures = append(stats.Failures, EntryFailure{Path: e.Path, IsDir: e.IsDir, Err: fmt.Errorf("unsafe or missing parent")})
+				continue
+			}
+		}
 		parent, name := splitParent(e.Path)
 		if name == "" {
 			// 空路径或只有分隔符：跳过（调用方数据问题，不当作创建失败）
@@ -169,6 +199,7 @@ func BuildTree(rootPath string, entries []CloudEntry) TreeStats {
 			IsDir:        e.IsDir,
 			Identity:     e.Identity,
 			ReadOnly:     e.ReadOnly,
+			NoMarkInSync: conservative,
 		}}
 		ph := NewPlaceholders(specs)
 		if len(ph.Infos) == 0 {
@@ -187,6 +218,9 @@ func BuildTree(rootPath string, entries []CloudEntry) TreeStats {
 			// 批量接口在「首个条目即失败」时会把错误上抛到调用级——
 			// 所以两条路径都要处理，不能只挑一条。
 			if isAlreadyExistsErr(err) {
+				if conservative {
+					continue
+				} // local writer won the creation race
 				if uerr := updateExisting(parentAbs, name, e); uerr != nil {
 					stats.Failures = append(stats.Failures, EntryFailure{
 						Path: e.Path, IsDir: e.IsDir, Err: uerr,
@@ -211,6 +245,9 @@ func BuildTree(rootPath string, entries []CloudEntry) TreeStats {
 			// （CfUpdatePlaceholder，路线图切片 5 第 5 步）：
 			// 占位符与内容都保留，只把大小/时间对齐云端。
 			if isAlreadyExists(r) {
+				if conservative {
+					continue
+				}
 				if err := updateExisting(parentAbs, name, e); err != nil {
 					stats.Failures = append(stats.Failures, EntryFailure{
 						Path: e.Path, IsDir: e.IsDir, Err: err,
@@ -366,7 +403,12 @@ func removeGhosts(rootPath string, entries []CloudEntry) (removed, skippedHydrat
 	// 期望存在的路径集合（文件与目录都算）
 	want := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		want[filepath.ToSlash(strings.Trim(e.Path, "/"))] = true
+		rel := strings.Trim(strings.ReplaceAll(e.Path, "\\", "/"), "/")
+		want[rel] = true
+		// 清单可能只含文件；其祖先仍是必需目录，不能当作幽灵清空。
+		for parent := path.Dir(rel); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			want[parent] = true
+		}
 	}
 
 	// 遍历本地实际存在的条目（只走两层以内？不——全量递归，但要跳过已删父目录）
@@ -377,6 +419,10 @@ func removeGhosts(rootPath string, entries []CloudEntry) (removed, skippedHydrat
 			return // 读不到就跳过：清理是尽力而为，不该让整次 Sync 失败
 		}
 		for _, item := range items {
+			// 不跟随本地符号链接/目录联接，避免越过同步根清理其他位置。
+			if item.Type()&os.ModeSymlink != 0 {
+				continue
+			}
 			rel := item.Name()
 			if relDir != "" {
 				rel = relDir + "/" + rel
@@ -391,16 +437,17 @@ func removeGhosts(rootPath string, entries []CloudEntry) (removed, skippedHydrat
 				continue
 			}
 
-			// 云端没有它 —— 幽灵。只删未水合的。
-			if !item.IsDir() && isHydrated(abs) {
+			// 云端没有它不等于可以删除：普通本地文件（包括零字节）尚未上传。
+			if !item.IsDir() && !isSafeGhostPlaceholder(abs) {
 				skippedHydrated++
 				continue
 			}
-			// 目录：先递归清子项，再删自己（否则非空目录删不掉）
+			// 目录先清子项，再仅尝试删除空目录。绝不能 RemoveAll：
+			// 子项可能因已水合、本地新建或查询失败而被刻意保留。
 			if item.IsDir() {
 				walk(abs, rel)
 			}
-			if err := os.RemoveAll(abs); err != nil {
+			if err := os.Remove(abs); err != nil {
 				continue // 删不掉就留着（可能是被占用），下次再试
 			}
 			removed++
@@ -408,6 +455,42 @@ func removeGhosts(rootPath string, entries []CloudEntry) (removed, skippedHydrat
 	}
 	walk(rootPath, "")
 	return removed, skippedHydrated
+}
+
+// isSafeGhostPlaceholder 只确认本提供方已同步且无本地内容的占位符。
+// 单看磁盘分配会把普通零字节文件、尚未上传的空文件也当成幽灵。
+func isSafeGhostPlaceholder(absPath string) bool {
+	p, err := proc("CfGetPlaceholderInfo")
+	if err != nil {
+		return false
+	}
+	h, err := OpenPlaceholderHandle(absPath)
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(h)
+
+	// CF_PLACEHOLDER_BASIC_INFO：身份从偏移 28 开始；最大身份长度为 4096。
+	var info struct {
+		PinState       uint32
+		InSyncState    uint32
+		FileID         int64
+		SyncRootFileID int64
+		IdentityLength uint32
+		Identity       [4096]byte
+	}
+	var returned uint32
+	hr, _, _ := p.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&info)),
+		unsafe.Sizeof(info), uintptr(unsafe.Pointer(&returned)))
+	if hr != 0 || returned < 28 || info.InSyncState != 1 ||
+		info.IdentityLength > uint32(len(info.Identity)) ||
+		info.IdentityLength > returned-28 {
+		return false
+	}
+	if _, ok := decodeIdentity(info.Identity[:info.IdentityLength]); !ok {
+		return false
+	}
+	return !isHydrated(absPath)
 }
 
 // isHydrated 判断占位符是否已在本地持有内容。

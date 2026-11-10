@@ -487,6 +487,8 @@ func (f *FS) RemoveAll(ctx context.Context, name string) error {
 		for _, obj := range list {
 			fileIDs[obj.Path] = obj.FileId.Int64()
 		}
+		// 目录实体同样在清单中，先删子项，避免非空父目录先被服务器拒绝。
+		sort.Slice(targets, func(i, j int) bool { return len(targets[i]) > len(targets[j]) })
 		for _, target := range targets {
 			if err := f.deleteObject(ctx, token, target, fileIDs[target]); err != nil {
 				f.invalidate()
@@ -618,6 +620,7 @@ func (f *FS) Stat(ctx context.Context, name string) (os.FileInfo, error) {
 				name:    path.Base(key),
 				size:    obj.Size,
 				modTime: obj.LastModified,
+				isDir:   obj.Directory,
 			}, nil
 		}
 	}
@@ -643,7 +646,7 @@ func (f *FS) isDir(ctx context.Context, key string) (bool, error) {
 func (f *FS) isDirFrom(list []drive.Object, key string) (bool, error) {
 	prefix := key + "/"
 	for _, obj := range list {
-		if strings.HasPrefix(obj.Path, prefix) {
+		if (obj.Directory && strings.TrimSuffix(obj.Path, "/") == key) || strings.HasPrefix(obj.Path, prefix) {
 			return true, nil
 		}
 	}
@@ -683,6 +686,10 @@ func (f *FS) openDir(ctx context.Context, key, label string) (webdav.File, error
 		}
 		if idx := strings.Index(remainder, "/"); idx >= 0 {
 			dirs[remainder[:idx]] = true
+			continue
+		}
+		if obj.Directory {
+			dirs[remainder] = true
 			continue
 		}
 		files[remainder] = &fileInfo{name: remainder, size: obj.Size, modTime: obj.LastModified}

@@ -17,6 +17,8 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
@@ -119,6 +121,38 @@ public class DriveStorage {
                 .signatureDuration(properties.getGetExpiry())
                 .getObjectRequest(r -> r.bucket(properties.getBucket()).key(key)))
             .url().toExternalForm();
+    }
+
+    /** 对象存在性以存储为准；只有明确的缺键响应返回 null，权限与网络故障继续上抛。 */
+    public ObjectMetadata metadataAt(String prefix, String relative) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        try {
+            var head = client.headObject(HeadObjectRequest.builder()
+                .bucket(properties.getBucket()).key(key).build()).join();
+            String etag = head.eTag();
+            if (etag != null && etag.length() >= 2 && etag.startsWith("\"") && etag.endsWith("\"")) {
+                etag = etag.substring(1, etag.length() - 1);
+            }
+            return new ObjectMetadata(head.contentLength(), etag);
+        } catch (java.util.concurrent.CompletionException ex) {
+            Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+            if (cause instanceof S3Exception s3 && s3.statusCode() == 404) {
+                String code = s3.awsErrorDetails() == null ? null : s3.awsErrorDetails().errorCode();
+                if (code == null || "NoSuchKey".equals(code) || "NotFound".equals(code) || "404".equals(code)) {
+                    return null;
+                }
+            }
+            throw new ServiceException("对象元数据校验失败: " + cause.getMessage());
+        }
+    }
+
+    /** 单请求对象的 ETag 可核对 MD5；分片 ETag 不匹配时不采用秒传。 */
+    public record ObjectMetadata(long size, String etag) {
+        public boolean matches(long expectedSize, String md5) {
+            return size == expectedSize && md5 != null && md5.matches("(?i)[0-9a-f]{32}")
+                && md5.equalsIgnoreCase(etag);
+        }
     }
 
     /**

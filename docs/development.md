@@ -52,8 +52,13 @@ npm --prefix frontend run dev
 ### 全部 Go 测试
 
 ```powershell
-go test ./...
+# 干净检出须先生成 main.go 的 frontend/dist 嵌入资源
+npm ci --prefix frontend
+npm --prefix frontend run build
+go test -p 1 ./...
 ```
+
+本地CFAPI单测使用独立临时根；真实服务器和真实鼠标测试默认关闭。Windows个人云盘的协议、迁移和显式验收参数见 [windows-cloud-primary.md](windows-cloud-primary.md)。
 
 ### 活栈测试（真实控制面 + PostgreSQL + RustFS）★ **发现契约类缺陷的唯一手段**
 
@@ -71,9 +76,8 @@ docker ps --format "{{.Names}}	{{.Status}}" | Select-String "ruoyi|rustfs"
 
 $env:EASYSHARE_LIVE_DRIVE='1'
 $env:EASYSHARE_LIVE_BASE='http://127.0.0.1:8090'
-$env:EASYSHARE_LIVE_USER_A='admin'; $env:EASYSHARE_LIVE_PASS_A='admin123'
-# 权限用例另外用到两个真实账号（本机 dev 库自带）：
-#   test / test1，密码均为 666666
+$env:EASYSHARE_LIVE_USER_A='<专用测试账号>'; $env:EASYSHARE_LIVE_PASS_A='<测试账号口令>'
+# 权限用例另外用到两个专用测试账号，凭据由本机安全配置注入，不写进仓库。
 # 需要的环境装配（只在首次做一次）：
 #   admin 对共享空间 write、test 对共享空间 read、test1 **不授权**
 #   test / test1 各开 1 GiB 个人空间、共享空间配容量

@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 
 	"easyshare/internal/winui"
 
@@ -135,8 +137,8 @@ func newTrayHost(app *App) (*trayHost, error) {
 	// 悬停图标才弹出，点固定才常驻。
 	// 拖入回调要能回写状态到浮窗自己，而浮窗此刻还没构造出来，
 	// 故先声明再闭包引用——构造完成后 host.popup 已就位。
-	onDropped := func(paths []string) {
-		app.uploadDroppedToSpace(paths, func(title, hint, kind string) {
+	onDropped := func(paths []string, space string) {
+		app.uploadDroppedToSpaceSelection(paths, space, func(title, hint, kind string) {
 			if host.popup != nil {
 				host.popup.SetDropStatus(title, hint, kind)
 			}
@@ -234,21 +236,33 @@ func (h *trayHost) watchStatus() {
 
 // watchUser 把登录态变化推给悬浮窗（登录/登出时头像与空间切换器跟随账号）。
 func (h *trayHost) watchUser() {
-	for user := range h.app.trayUserCh {
+	var generation atomic.Uint64
+	for range h.app.trayUserCh {
 		if h.popup == nil {
 			continue
 		}
+		request := generation.Add(1)
+		h.app.accountMu.RLock()
+		session := h.app.accountSession
+		base := strings.TrimSpace(h.app.config.PlatformBaseURL)
+		user := h.app.currentUserLocked()
+		h.app.accountMu.RUnlock()
 		h.popup.SetUser(user.LoggedIn, user.NickName, user.UserName)
 		if !user.LoggedIn {
-			// 退出登录：清空切换器，别留着上个账号的空间
 			h.popup.SetSpaces(nil)
 			continue
 		}
-		// 读空间要回控制面，不能卡住这个循环——它还负责头像更新
 		go func() {
 			spaces, err := h.app.hoverSpaces()
+			h.app.accountMu.RLock()
+			defer h.app.accountMu.RUnlock()
+			// 同账号重登也是新世代；旧网络结果不能复活已退出账号的空间。
+			if generation.Load() != request || h.app.accountSession != session || strings.TrimSpace(h.app.config.PlatformBaseURL) != base {
+				return
+			}
 			if err != nil {
-				h.app.logger.Printf("hover spaces: %v", err)
+				h.popup.SetSpaces(nil)
+				h.popup.SetDropStatus("云盘未连接", "请检查登录与服务器连接", "err")
 				return
 			}
 			h.popup.SetSpaces(spaces)

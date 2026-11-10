@@ -43,14 +43,38 @@ $env:JAVA_HOME = 'D:\Develop\java21'
 deploy/ruoyi-db/run-ruoyi-admin.ps1
 ```
 
-登录验证（默认账号 admin/admin123；普通用户 test/test1 密码 666666）：
+登录验证使用已开通的测试账号；口令由本机安全方式注入，不在仓库中维护：
 
 ```powershell
 curl -X POST http://localhost:8090/auth/login -H "Content-Type: application/json" `
-  -d '{"clientId":"e5cd7e4891bf95d1d19206ce24a7b32e","grantType":"password","username":"admin","password":"admin123"}'
+  -d '{"clientId":"e5cd7e4891bf95d1d19206ce24a7b32e","grantType":"password","username":"<测试账号>","password":"<本机注入口令>"}'
 ```
 
 返回 `code:200` 且带 `access_token` 即成功。
+
+## Windows个人CFAPI目录协议与迁移
+
+此通路依赖本仓 `platform-drive`，不能只升级桌面源码。详情见 [Windows云端主存说明](../../docs/windows-cloud-primary.md)。
+
+1. 按已有部署顺序准备 `easyshare-space.sql`、`easyshare-file.sql`、回收站及增量列举等业务迁移。
+2. 备份数据库，在维护窗口中执行 `easyshare-directory.sql`：为 `es_file`、`es_file_change_log` 添加目录类型，并建立空间内文件/目录冲突及非空树保护。必须在 file/recycle/incremental-list 之后执行；可重复运行。
+3. 构建并部署配套控制面。`scripts/ship-control-plane.ps1` 的SQL清单已把此迁移放在已有业务迁移之后；本次源码提交不自动运行该脚本或修改服务器。
+4. 用测试账号认证调用 `GET /easyshare/drive/capabilities`，确认协议1与持久目录；测试持久空目录、旧 `/mkdir` 尾斜杠响应和 `includeDirs`，再启用新客户端。
+5. 回退只回退程序并保留新增列和用户数据，不盲删目录列/触发器，不把旧本机状态覆盖新pending。
+
+兼容说明：旧目录marker被列表认领为持久目录身份，默认对象清单返回 `directory:true`；`includeDirs=true` 为旧客户端保留尾斜杠展示。明确递归删除按子项到父项软删并保留文件正文，旧marker清理不删除文件内容；非递归非空目录拒绝。
+
+### 可复现Java回归
+
+先按下方接线要求准备RuoYi基础源码，父POM版本为6.0.0、本机安装JDK21。第三方 `platform/` 不提交本产品仓；配置只在本机或受保护环境维护。
+
+```powershell
+# 在仓库根执行，-am带上父工程与依赖模块；不要把BUILD SUCCESS当作已跑测试
+mvn -B -ntp -f platform/pom.xml -pl ../platform-drive -am clean test `
+  -Dmaven.test.skip=false -DskipTests=false -Drevision=6.0.0
+```
+
+检查Surefire输出/报告中的实际用例数、Failures/Errors/Skipped。目录反射、预签重试及兼容回归均不连接生产数据库；SQL迁移回归只能在新建测试库执行。此次基于已准备的RuoYi6.0基础工程验证，不宣称已经完成全新服务器安装演练。
 
 ## 长时间登录（2026-10-20；2026-10-25 改滑动窗口）
 

@@ -53,7 +53,8 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/account` | 控制面账号客户端：登录态、用户/空间/配额管理（P1/P3）、成员功能权限/权限角色与个人资料（`permission.go`/`profile.go`，2026-10-27）；会话落盘用户级 `account-session.json`（0600，不含密码），启动恢复并校验，401 时清空退回登录页 |
 | `internal/spacedav` | 空间 WebDAV 文件系统（P4 挂载的服务层）：建在 `internal/drive` 客户端之上，每个操作经控制面，配额与共享授权对资源管理器同样生效 |
 | `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
-| `spacemount.go` | 桌面端空间挂载（P4：登录后挂「此电脑」个人/共享盘、换账号重挂）与浮窗拖放目标 |
+| `spacemount.go` + `cfmount_app_windows.go` | 登录态与平台挂载编排：Windows 个人CFAPI、非Windows原空间通路、悬浮窗空间目标 |
+| `internal/cfapi` + `internal/cfmount` | 按需读取、持久同步根、条件写回、受保护目录投影及已验证缓存回收 |
 | `appupdate.go` + `internal/update` | 客户端在线升级（检查/下载/SHA256 校验/静默安装，升级源为控制面，见第 4b 节） |
 | `internal/cloud` | 网盘视图类型与预览辅助（`File`/`Preview`/预览分类/文本限量内联），供桌面端 Wails 绑定使用；Core 直连 S3 的 Service 与路由已删（KI-5） |
 | `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake，`scripts/create_bucket.go` 等控制面之外的用途仍在用） |
@@ -248,17 +249,22 @@ Authorization: Bearer <apiToken>
 1. 桌面端打开 `desktop.log`，加载或首次生成 `config.json`。
 2. 调用带 HMAC proof 的 `/health` 检查现有 Core。
 3. 身份匹配则复用；否则启动同目录下的 `easyshare-core(.exe)`（macOS 用 Setsid 独立会话）。
-4. 建立 Core API Client，启动 watchdog（5s 心跳，连续 3 次失败重启 Core）。
-5. 启动 eventStream：WebSocket 订阅 Core 事件，转发为 Wails `core-event`，断线指数退避重连。
-6. 注册系统文件入口（Windows: Shell NameSpace 注册表；macOS: mount_webdav 挂载）。
-7. 前端初始化：首次快照 → 订阅 `core-event` 实时事件 → 5s 轮询 fallback。
+4. 建立 Core API Client；先清理上次遗留的 Shell 入口，再恢复保存的账号会话。恢复会异步挂载，因此不能在它之后再做无条件入口清理。
+5. 启动 watchdog、Core事件流与插件系统；恢复的用户快照通过 `auth:restored` 通知前端，前端仍做一次当前用户查询并防止迟到响应覆盖新状态。
+6. Windows 通过认证、目录能力探测与本机保护扫描后发布个人CFAPI入口；非Windows保留原平台挂载通路。
+7. 前端初始化快照、订阅事件并建立5秒fallback轮询。
 
 ### 系统文件入口（此电脑 / Finder）
 
-桌面端与 Core 各贡献一部分入口，全部指向本机 WebDAV：
+Windows 云端空间与局域网入口分开；CFAPI同步根是服务器云盘的Windows接入与透明缓存，不是另一份本地云盘。
 
-- **局域网共享**（Core，:19080 常驻）：Windows 通过注册表在 Shell NameSpace 注册 CLSID，委托文件夹指向 WebDAV UNC（`\\127.0.0.1@19080\DavWWWRoot`），无需盘符映射；macOS 优先 `mount_webdav` 挂载（不弹 GUI 对话框），osascript 兜底。
-- **云端空间盘**（P4，桌面端进程 ：19082/:19083）：登录后按账号**实际拥有的空间**挂载——个人盘条目名为「<昵称> 的网盘」，共享盘为「EasyShare 共享」（只读授权也挂，但 WebDAV 层拒写）。退出登录、配额收回或共享授权撤销时条目随之卸载；数据全部经控制面（`internal/spacedav`），配额与授权对资源管理器同样生效。旧 19081 云盘驱动器（bucket 根挂载点）已随 P2 永久下线。
+- **Windows 个人云盘**：认证、配额和 `GET /easyshare/drive/capabilities` 协议1/持久目录探测通过后建立CFAPI连接。根与根外写回状态按服务器/账号/空间稳定身份隔离。首次及每轮都先扫描保护本机修改，再投影远端树；新建与编辑用带版本条件上传，独立远端全文校验后确认。
+- **持久目录**：通过 `POST /easyshare/drive/directories` 创建数据库目录实体，目录类型同时出现在清单与变更日志；旧 `/mkdir`、`includeDirs` 与明确递归删除继续兼容，部署须先执行配套迁移。
+- **缓存管理**：默认5分钟空闲后，仅对精确已提交版本/哈希、无pending、无占用/修改/固定的完整缓存回收；持同一NTFS句柄再确认远端。显式保留/释放接口走同一保护链路，失败保留数据。
+- **Windows 共享CFAPI**：未具备完整权限执行适配，暂不发布，不退回UNC冒充成功；主窗口的共享文件操作保留。
+- **局域网与非Windows**：Core局域网WebDAV职责不变；非Windows个人/共享继续使用 `internal/spacedav` 与既有平台挂载。Windows云盘不再依赖19082/19083或WebClient。
+- **正常退出**：断开CFAPI回调而不注销持久根；注销/重建根可能损坏未水合占位身份，不得用作日常进程清理。退出登录撤销入口和旧会话，旧世代请求不得发布结果。
+- **安全范围**：只实现新增/编辑/目录创建；不从本机消失推断远端删除/改名，不从远端缺项删除已有本机内容。可写模式使用保守全量清单，不宣称已启用增量优化。完整取舍、状态恢复与测试见 [Windows云端主存说明](windows-cloud-primary.md)。
 
 ### 退出全部服务
 
@@ -269,6 +275,8 @@ Authorization: Bearer <apiToken>
 3. 关闭 Core HTTP Server 并退出进程
 4. 桌面端设置 quitting=true，调用 runtime.Quit（桌面进程退出时空间 WebDAV :19082/:19083 随之关闭）
 5. 前端进入"服务已安全退出"状态
+
+Windows个人CFAPI的托盘退出还要先断开回调连接，保持根注册和占位身份；见 `app.go` · `beginQuit`。退出不等于清除CFAPI状态，回退程序前须确认活动传输/pending并保存当前状态。
 
 托盘退出额外加 3s 超时：Core 无响应时强制退出桌面进程，避免卡死。
 
@@ -295,6 +303,7 @@ desktop eventStream (Go 协程，指数退避重连)
 - 配置持久化在 `config.json`，使用临时文件加原子替换写入，支持热加载（`/api/config/reload`）。
 - 传输任务：运行中为内存状态；终态（completed/rejected/failed）持久化为 JSON 文件。
 - 网盘文件存储在 RustFS（S3 兼容），凭据只在控制面（`deploy/rustfs/.env` → RuoYi 进程环境），客户端经预签名 URL 直传，不暴露给前端。
+- Windows云根与根外 `cfapi-state` 按稳定服务器/账号/空间身份分隔；`pending.json` 和不可变上传快照用于失败恢复，不能直接覆盖或删掉。普通目录恢复需显式受限ACL授权与原NTFS身份/远端目录身份匹配，JSON不是跨信任边界的签名。
 - peers 是内存状态，Core 退出后丢失。
 - 知识服务登录态持久化在 `knowledge.json`（与 config.json 同目录，仅 Core 读写）：桌面进程保存设置时整份回写旧 config.json，令牌若存其中会被冲掉，故独立成文件。`mode` 区分手动登录（password）与随客户端账号的统一登录（sso），登出客户端账号只清后者。令牌不出 Core，前端只见登录态视图（`internal/knowledge`）。
 - 插件系统（桌面端进程，见 §4c）：登记表 `plugins.json`、插件包 `plugins/{id}/`、插件私有 KV `plugins-data/{id}.json`（均在 config.json 同目录）；剪切板历史 `clipboard/history.jsonl`（追加写 + 环形截断默认 1000 条）与图片 `clipboard/files/{sha256}.png`（默认 200MB LRU），设置在 `clipboard/settings.json`。

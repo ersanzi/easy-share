@@ -128,14 +128,18 @@ typedef struct CF_PROCESS_INFO {
 } CF_PROCESS_INFO;          /* size 48 */
 
 typedef struct CF_CALLBACK_PARAMETERS_FETCH {
-  ULONG         ParamSize;
-  DWORD         Flags;
-  LARGE_INTEGER RequiredFileOffset;
-  LARGE_INTEGER RequiredLength;
-  LARGE_INTEGER OptionalFileOffset;
-  LARGE_INTEGER OptionalLength;
-  LARGE_INTEGER LastDehydrationTime;
-  DWORD         LastDehydrationReason;
+  ULONG ParamSize;
+  union {
+    struct {
+      DWORD Flags;
+      LARGE_INTEGER RequiredFileOffset;
+      LARGE_INTEGER RequiredLength;
+      LARGE_INTEGER OptionalFileOffset;
+      LARGE_INTEGER OptionalLength;
+      LARGE_INTEGER LastDehydrationTime;
+      DWORD LastDehydrationReason;
+    } FetchData;
+  };
 } CF_CALLBACK_PARAMETERS_FETCH;
 
 typedef struct CF_OPERATION_INFO {
@@ -199,8 +203,8 @@ int main(void) {
   OFF(CF_PROCESS_INFO, SessionId);
   OFF(CF_CALLBACK_INFO, RequestKey);
   SHOW(CF_CALLBACK_PARAMETERS_FETCH);
-  OFF(CF_CALLBACK_PARAMETERS_FETCH, RequiredFileOffset);
-  OFF(CF_CALLBACK_PARAMETERS_FETCH, RequiredLength);
+  OFF(CF_CALLBACK_PARAMETERS_FETCH, FetchData.RequiredFileOffset);
+  OFF(CF_CALLBACK_PARAMETERS_FETCH, FetchData.RequiredLength);
   SHOW(CF_OPERATION_INFO);
   OFF(CF_OPERATION_INFO, ConnectionKey);
   OFF(CF_OPERATION_INFO, TransferKey);

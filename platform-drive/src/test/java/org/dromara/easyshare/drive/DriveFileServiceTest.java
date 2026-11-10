@@ -86,6 +86,175 @@ class DriveFileServiceTest {
     }
 
     @Test
+    void createDirectoryPersistsNormalizedIdentityAndLogsType() {
+        when(mapper.insert(any(EsFile.class))).thenAnswer(invocation -> {
+            ((EsFile) invocation.getArgument(0)).setFileId(99L);
+            return 1;
+        });
+        EsFile created = service.createDirectory(EsFile.TYPE_PERSONAL, 1L, 2L, "docs\\empty");
+        assertEquals("docs/empty", created.getFilePath());
+        assertEquals("empty", created.getFileName());
+        assertEquals(99L, created.getFileId());
+        assertEquals(2L, created.getUploadBy());
+        assertEquals(0L, created.getFileSize());
+        assertEquals(1L, created.getVersionId());
+        assertEquals(EsFile.STATE_ACTIVE, created.getState());
+        assertTrue(created.directoryEntry());
+        verify(changeLog).record(eq(EsFile.TYPE_PERSONAL), eq(1L), eq("created"),
+            eq(created), eq(99L), eq("docs/empty"), eq(null));
+    }
+
+    @Test
+    void createDirectoryIsIdempotentWithoutChangingIdentity() {
+        EsFile directory = row(7L, "docs");
+        directory.setDirectory(true);
+        when(mapper.selectOne(any())).thenReturn(directory);
+        assertEquals(directory, service.createDirectory(EsFile.TYPE_PERSONAL, 1L, 2L, "docs"));
+        verify(mapper, never()).insert(any(EsFile.class));
+        org.mockito.Mockito.verifyNoInteractions(changeLog);
+    }
+
+    @Test
+    void createDirectoryRejectsExistingFile() {
+        when(mapper.selectOne(any())).thenReturn(row(7L, "docs"));
+        assertEquals("该位置已有同名文件", assertThrows(ServiceException.class,
+            () -> service.createDirectory(EsFile.TYPE_PERSONAL, 1L, 1L, "docs")).getMessage());
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
+    void fileAncestorRejectsDirectoryAndEveryUploadOverload() {
+        when(mapper.selectOne(any())).thenReturn(row(7L, "docs"));
+        List<Runnable> writes = List.of(
+            () -> service.createDirectory(EsFile.TYPE_PERSONAL, 1L, 1L, "docs/child"),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs/child", 1L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs/child", 1L, 0L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs/child", 1L, null, "hash"),
+            () -> service.assertVersion(EsFile.TYPE_PERSONAL, 1L, "docs/child", null));
+        for (Runnable write : writes) {
+            assertEquals("父路径是文件，不能创建子项",
+                assertThrows(ServiceException.class, write::run).getMessage());
+        }
+        verify(mapper, never()).insert(any(EsFile.class));
+        verify(mapper, never()).update(any(), any());
+    }
+
+    @Test
+    void directoryAncestorAllowsChildDirectory() {
+        EsFile parent = row(7L, "docs");
+        parent.setDirectory(true);
+        when(mapper.selectOne(any())).thenReturn(parent, (EsFile) null);
+        assertTrue(service.createDirectory(EsFile.TYPE_PERSONAL, 1L, 1L, "docs/child").directoryEntry());
+        verify(mapper).insert(any(EsFile.class));
+    }
+
+    @Test
+    void everyUploadOverloadRejectsExistingDirectory() {
+        EsFile directory = row(7L, "docs");
+        directory.setDirectory(true);
+        when(mapper.selectOne(any())).thenReturn(directory);
+        List<Runnable> writes = List.of(
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L, 0L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L, null, "hash"),
+            () -> service.assertVersion(EsFile.TYPE_PERSONAL, 1L, "docs", null),
+            () -> service.assertVersion(EsFile.TYPE_PERSONAL, 1L, "docs", 1L));
+        for (Runnable write : writes) {
+            assertEquals("该位置是目录，不能上传文件",
+                assertThrows(ServiceException.class, write::run).getMessage());
+        }
+        verify(mapper, never()).insert(any(EsFile.class));
+        verify(mapper, never()).update(any(), any());
+        org.mockito.Mockito.verifyNoInteractions(changeLog);
+    }
+
+    @Test
+    void everyUploadOverloadRejectsDirectoryWinningInsertRace() {
+        EsFile directory = row(7L, "docs");
+        directory.setDirectory(true);
+        when(mapper.insert(any(EsFile.class))).thenThrow(new DuplicateKeyException("path occupied"));
+        List<Runnable> writes = List.of(
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L, 0L),
+            () -> service.registerOnPresign(EsFile.TYPE_PERSONAL, 1L, 1L, "docs", 1L, null, "hash"));
+        for (Runnable write : writes) {
+            // 确定性模拟首次查空、插入撞唯一键、重查发现目录抢先占位。
+            when(mapper.selectOne(any())).thenReturn(null, directory);
+            assertEquals("该位置是目录，不能上传文件",
+                assertThrows(ServiceException.class, write::run).getMessage());
+        }
+        verify(mapper, never()).update(any(), any());
+        org.mockito.Mockito.verifyNoInteractions(changeLog);
+    }
+
+    @Test
+    void existingPersistentDirectoryAndMarkerHaveOneStableIdentity() {
+        EsFile directory = row(7L, "docs");
+        directory.setDirectory(true);
+        directory.setState(EsFile.STATE_ACTIVE);
+        when(mapper.selectList(any())).thenReturn(List.of(directory));
+        DriveFileService.Listing listing = service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("docs/", 0L, Instant.now())));
+        assertEquals(List.of("docs"), listing.objects().stream().map(DriveObject::path).toList());
+        assertEquals(7L, listing.fileIds().get("docs"));
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
+    void legacyMarkerIsPromotedToDirectoryWithoutBecomingAFile() {
+        when(mapper.selectList(any())).thenReturn(List.of());
+        when(mapper.insert(any(EsFile.class))).thenAnswer(invocation -> {
+            EsFile directory = invocation.getArgument(0);
+            assertTrue(directory.directoryEntry());
+            directory.setFileId(19L);
+            return 1;
+        });
+        DriveFileService.Listing listing = service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("legacy/", 0L, Instant.now())));
+        assertEquals(List.of("legacy"), listing.objects().stream().map(DriveObject::path).toList());
+        assertEquals(19L, listing.fileIds().get("legacy"));
+        assertTrue(listing.activeByPath().get("legacy").directoryEntry());
+    }
+
+    @Test
+    void recycledDirectoryMarkerDoesNotResurrectAnActiveRow() {
+        EsFile directory = row(7L, "docs");
+        directory.setDirectory(true);
+        directory.setState(EsFile.STATE_RECYCLED);
+        when(mapper.selectList(any())).thenReturn(List.of(directory));
+        assertTrue(service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("docs/", 0L, Instant.now()))).objects().isEmpty());
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
+    void markerCannotOverrideAnExistingFile() {
+        EsFile file = row(7L, "docs");
+        when(mapper.selectList(any())).thenReturn(List.of(file));
+        assertThrows(ServiceException.class, () -> service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("docs/", 0L, Instant.now()))));
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
+    void markerConflictsWithUnregisteredStorageFileBeforeAnyInsert() {
+        when(mapper.selectList(any())).thenReturn(List.of());
+        assertThrows(ServiceException.class, () -> service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("same", 3L, Instant.now()),
+                new DriveObject("same/", 0L, Instant.now()))));
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
+    void markerBelowStorageFileCannotCreateOrphanDirectory() {
+        when(mapper.selectList(any())).thenReturn(List.of());
+        assertThrows(ServiceException.class, () -> service.list(EsFile.TYPE_PERSONAL, 1L, 1L,
+            List.of(new DriveObject("parent", 3L, Instant.now()),
+                new DriveObject("parent/child/", 0L, Instant.now()))));
+        verify(mapper, never()).insert(any(EsFile.class));
+    }
+
+    @Test
     void registerOnPresignInsertsNormalizedPath() {
         when(mapper.selectOne(any())).thenReturn(null);
 
@@ -439,6 +608,30 @@ void recycleSubtreeSoftDeletesEveryRowUnderDir() {
 }
 
 @Test
+void recycleSubtreeOrdersPersistentChildDirectoriesBeforeRoot() {
+    EsFile root = row(1L, "docs");
+    root.setDirectory(true);
+    EsFile child = row(2L, "docs/sub");
+    child.setDirectory(true);
+    EsFile file = row(3L, "docs/sub/a.txt");
+    EsFile unrelated = row(4L, "docs-other/keep.txt");
+    when(mapper.selectOne(any())).thenReturn(root);
+    when(mapper.selectList(any())).thenReturn(List.of(child, unrelated, file));
+    java.util.ArrayList<String> order = new java.util.ArrayList<>();
+    org.mockito.Mockito.doAnswer(invocation -> {
+        EsFile value = invocation.getArgument(0);
+        if (EsFile.STATE_RECYCLED.equals(value.getState())) {
+            order.add(value.getFilePath());
+        }
+        return 1;
+    }).when(mapper).updateById(any(EsFile.class));
+
+    assertEquals(3, service.recycleSubtree(EsFile.TYPE_PERSONAL, 1L, "docs"));
+    assertEquals(List.of("docs/sub/a.txt", "docs/sub", "docs"), order);
+    assertNull(unrelated.getDeletedAt());
+}
+
+@Test
 void recycleSubtreeRejectsBlankDirPath() {
     // 空目录路径会让 likeRight 退化成 "/" 前缀、命中整个空间——必须拒，
     // 递归删这种破坏性操作不允许有「其实删了全盘」的解释空间
@@ -479,7 +672,13 @@ void restoreConflictWhenActiveOccupiesOrigin() {
     recycled.setState(EsFile.STATE_RECYCLED);
     recycled.setOriginPath("docs/x.pdf");
     when(mapper.selectById(7L)).thenReturn(recycled);
-    when(mapper.selectOne(any())).thenReturn(row(9L, "docs/x.pdf")); // 同名 active 占位
+    // 祖先 docs 不存在；只有原路径查询返回同名 active，不能把它误当祖先。
+    when(mapper.selectOne(any())).thenAnswer(invocation -> {
+        var query = (com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<?>) invocation.getArgument(0);
+        query.getSqlSegment();
+        return query.getParamNameValuePairs().containsValue("docs/x.pdf")
+            ? row(9L, "docs/x.pdf") : null;
+    });
 
     ServiceException ex = assertThrows(ServiceException.class,
         () -> service.restoreFromRecycle(EsFile.TYPE_PERSONAL, 1L, 7L));

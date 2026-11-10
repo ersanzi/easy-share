@@ -57,7 +57,7 @@ func TestGhostCleanupSparesHydratedFile(t *testing.T) {
 		}
 		return io.NopCloser(bytes.NewReader(b[offset:end])), nil
 	}
-	m, err := MountSpace(MountOptions{
+	m, err := mountSpaceForTest(t, MountOptions{
 		RootPath: root, Provider: testProvider, List: list, Open: open,
 		SyncRootIdentity: []byte("easyshare-ghost-safety"),
 	})
