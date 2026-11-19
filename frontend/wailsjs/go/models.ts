@@ -467,6 +467,9 @@ export namespace drive {
 	    }
 	}
 	export class RecycleEntryView {
+	    directory: boolean;
+	    batchId: string;
+	    snapshotState: string;
 	    fileId: string;
 	    path: string;
 	    originPath: string;
@@ -481,6 +484,9 @@ export namespace drive {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.batchId = source["batchId"];
+	        this.snapshotState = source["snapshotState"];
 	        this.fileId = source["fileId"];
 	        this.path = source["path"];
 	        this.originPath = source["originPath"];

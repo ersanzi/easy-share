@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -167,8 +168,8 @@ func SpaceEntries(iconPath string, mounts []SpaceMount) []Entry {
 			entry.CLSID = cloudCLSID
 			// 个人空间带上账号名：换账号时「此电脑」里看到的就是当前账号的盘，
 			// 不至于两个账号的盘长得一模一样、分不清此刻登录的是谁。
-			if mount.DisplayName != "" {
-				entry.Name = mount.DisplayName + " 的网盘"
+			if name := strings.TrimSpace(mount.DisplayName); name != "" {
+				entry.Name = name + " 的网盘"
 			} else {
 				entry.Name = "EasyShare 网盘"
 			}
@@ -262,10 +263,7 @@ func namespaceCleanupCLSIDs(clsid string) []string {
 
 func removeNamespaceEntry(clsid string) error {
 	unregisterOne(clsid)
-	for _, path := range []string{
-		`Software\Classes\CLSID\` + clsid,
-		`Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + clsid,
-	} {
+	for _, path := range append([]string{`Software\Classes\CLSID\` + clsid}, namespacePaths(clsid)...) {
 		key, err := registry.OpenKey(registry.CURRENT_USER, path, registry.QUERY_VALUE)
 		if err == registry.ErrNotExist {
 			continue
@@ -413,18 +411,23 @@ func registerOne(entry Entry) error {
 	// 就是一个打不开的空壳条目——比不显示更糟。所以先把定义全部写完整，最后才让它可见。
 	//
 	// 失败时回滚已写的 CLSID 定义，避免留下不完整的残骸。
-	nsPath := `Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + entry.CLSID
-	nsKey, _, err := registry.CreateKey(registry.CURRENT_USER, nsPath, registry.SET_VALUE)
-	if err != nil {
-		unregisterOne(entry.CLSID)
-		return fmt.Errorf("create NameSpace key: %w", err)
-	}
-	err = nsKey.SetStringValue("", entry.Name)
-	clearStaleDisplayOverrides(nsKey)
-	nsKey.Close()
-	if err != nil {
-		unregisterOne(entry.CLSID)
-		return fmt.Errorf("configure NameSpace: %w", err)
+	// MyComputer磁贴与Desktop导航根共用同一CLSID/目标，不另建本地盘。
+	for _, nsPath := range namespacePaths(entry.CLSID) {
+		if strings.Contains(nsPath, `\Desktop\`) && !entry.writableFilesystem {
+			continue
+		}
+		nsKey, _, err := registry.CreateKey(registry.CURRENT_USER, nsPath, registry.SET_VALUE)
+		if err != nil {
+			unregisterOne(entry.CLSID)
+			return fmt.Errorf("create NameSpace key: %w", err)
+		}
+		err = nsKey.SetStringValue("", entry.Name)
+		clearStaleDisplayOverrides(nsKey)
+		nsKey.Close()
+		if err != nil {
+			unregisterOne(entry.CLSID)
+			return fmt.Errorf("configure NameSpace: %w", err)
+		}
 	}
 
 	return nil
@@ -439,10 +442,18 @@ func deleteOptionalValue(key registry.Key, name string) error {
 	return err
 }
 
+func namespacePaths(clsid string) []string {
+	return []string{
+		`Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + clsid,
+		`Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\` + clsid,
+	}
+}
+
 func unregisterOne(clsid string) {
-	// Remove from NameSpace first, then the CLSID definition.
-	nsPath := `Software\Microsoft\Windows\CurrentVersion\Explorer\MyComputer\NameSpace\` + clsid
-	_ = registry.DeleteKey(registry.CURRENT_USER, nsPath)
+	// 先撤两处可见性，再删定义；退出不注销CFAPI根、不改正文。
+	for _, nsPath := range namespacePaths(clsid) {
+		_ = registry.DeleteKey(registry.CURRENT_USER, nsPath)
+	}
 
 	// Delete CLSID tree (subkeys first).
 	base := `Software\Classes\CLSID\` + clsid

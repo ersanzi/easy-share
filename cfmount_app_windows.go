@@ -17,8 +17,10 @@ import (
 	"easyshare/internal/cfapi"
 	"easyshare/internal/cfmount"
 	"easyshare/internal/drive"
+	"easyshare/internal/explorerview"
 	"easyshare/internal/fsutil"
 	"easyshare/internal/namespace"
+	"easyshare/internal/shellroot"
 	"golang.org/x/sys/windows"
 )
 
@@ -26,17 +28,21 @@ import (
 type cfapiMounts struct {
 	// lifecycleMu is never acquired while holding mu. Cancellation must precede
 	// waiting for mu, because reconcile holds mu during cancellable network I/O.
-	lifecycleMu  sync.Mutex
-	lifetime     *nativeMountLifetime
-	mu           sync.Mutex
-	personal     *cfapi.Mount
-	personalRoot string
-	syncStop     chan struct{}
-	mounting     bool
-	generation   uint64
-	session      *account.Session
-	lastError    error
-	cacheApply   func(context.Context, *cfapi.Mount, string, bool) error
+	lifecycleMu           sync.Mutex
+	lifetime              *nativeMountLifetime
+	mu                    sync.Mutex
+	personal              *cfapi.Mount
+	personalRoot          string
+	displayName, subtitle string
+	syncStop              chan struct{}
+	mounting              bool
+	generation            uint64
+	session               *account.Session
+	lastError             error
+	cacheApply            func(context.Context, *cfapi.Mount, string, bool) error
+	viewWatcher           *explorerview.Watcher
+	deleteCoordinator     *nativeDeleteCoordinator
+	undoMenu              io.Closer
 }
 
 type nativeLifetimeReader struct {
@@ -153,6 +159,7 @@ func (a *App) mountCfapiSpaces() {
 	if a.cfapi.mounting || (a.cfapi.personal != nil && a.cfapi.session == session) {
 		a.cfapi.mu.Unlock()
 		a.cfapi.lifecycleMu.Unlock()
+		a.refreshNativeSpaceLabel()
 		return
 	}
 	lifetime := newNativeMountLifetime()
@@ -222,6 +229,12 @@ func (a *App) mountCfapiSpaces() {
 	stateDir := filepath.Join(filepath.Dir(a.configPath), "cfapi-state", identity)
 	client := drive.New(base)
 	client.Sessions = drive.NewSessionStore(filepath.Join(stateDir, "upload-sessions"))
+	capabilities, err := client.Capabilities(ctx, token())
+	if err != nil {
+		fail(err)
+		return
+	}
+	client.VerifyUploadCommit = capabilities.UploadCommitVerification
 	cfg := cfmount.Config{RootPath: root, Space: drive.SpacePersonal, Client: client, Token: token, ProviderName: "EasyShare 网盘", ProviderID: cfapiPersonalProviderID}
 	// 能力探测必须先于 Mkdir/注册；旧服务端或尚未接好写回保护时 fail closed。
 	controller := &nativeCacheController{}
@@ -237,6 +250,27 @@ func (a *App) mountCfapiSpaces() {
 		fail(err)
 		return
 	}
+	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		fail(err)
+		return
+	}
+	shellID := "EasyShare 网盘!" + tokenUser.User.Sid.String() + "!" + identity
+	if info, registered, err := cfapi.QuerySyncRootStandardInfo(root); err != nil || (registered && (info.ProviderName != cfg.ProviderName || string(info.Identity) != identity)) {
+		fail(fmt.Errorf("Shell接入前根归属不符: %v", err))
+		return
+	}
+	a.accountMu.RLock()
+	label := session.User.DisplayName() + " 的网盘"
+	a.accountMu.RUnlock()
+	if err := shellroot.Register(root, shellID, label, namespace.IconFromBuild()+",0", "1.0", []byte(identity)); err != nil {
+		fail(err)
+		return
+	}
+	if err := shellroot.SuppressGeneratedNavigation(shellID, root); err != nil {
+		fail(err)
+		return
+	}
 	openRemote := cfmount.Open(cfg)
 	open := func(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
 		ctx, cancel := nativeLifetimeContext(ctx, lifetime.ctx)
@@ -247,25 +281,42 @@ func (a *App) mountCfapiSpaces() {
 		}
 		return &nativeLifetimeReader{ReadCloser: reader, cancel: cancel}, nil
 	}
-	mount, err := cfapi.MountSpace(cfapi.MountOptions{RootPath: root, Provider: cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "1.0", ID: cfg.ProviderID}, SyncRootIdentity: []byte(identity), List: list, Open: open})
+	var deletion *nativeDeleteCoordinator
+	var operations *cfapi.OperationCallbacks
+	safeRecycle, recycleErr := client.SupportsSafeRecycle(ctx, token(), drive.SpacePersonal)
+	if recycleErr != nil {
+		fail(fmt.Errorf("删除协议能力核对:%w", recycleErr))
+		return
+	}
+	if safeRecycle {
+		deletion, err = newNativeDeleteCoordinator(cfg, stateDir, identity, controller.Engine)
+		if err != nil {
+			fail(err)
+			return
+		}
+		deletion.onChanged = func() { go a.cloudMutationChanged() }
+		controller.BeforeScan = deletion.BeforeReconcile
+		operations = deletion.Callbacks()
+	}
+	mount, err := cfapi.MountSpace(cfapi.MountOptions{RootPath: root, Provider: cfapi.ProviderInfo{Name: cfg.ProviderName, Version: "1.0", ID: cfg.ProviderID}, SyncRootIdentity: []byte(identity), List: list, Open: open, Operations: operations})
 	if err != nil {
 		fail(err)
 		return
 	}
+	if deletion != nil {
+		deletion.Callbacks(mount)
+	}
 
-	// 持账号读锁至注册完成，登出必须先改变会话再卸载，因此无法越过此发布屏障。
-	a.accountMu.RLock()
+	// 持账号读锁至注册完成；按同步回调的相同锁序取得挂载锁和账号锁。
 	a.cfapi.mu.Lock()
+	a.accountMu.RLock()
 	if lifetime.ctx.Err() != nil || a.cfapi.generation != generation || a.accountSession != session || session.Token == "" || strings.TrimSpace(session.User.UserID) == "" || strings.TrimSpace(a.config.PlatformBaseURL) != base {
 		a.cfapi.mu.Unlock()
 		a.accountMu.RUnlock()
 		_ = mount.Close()
 		return
 	}
-	name := session.User.NickName
-	if name == "" {
-		name = session.User.UserName
-	}
+	name := session.User.DisplayName()
 	entries := namespace.SpaceEntries(namespace.IconFromBuild(), []namespace.SpaceMount{{Kind: "personal", TargetPath: root, UserID: session.User.UserID, DisplayName: name, Subtitle: usageSubtitle(*personal)}})
 	if err = namespace.Register(entries); err != nil {
 		_ = namespace.Unregister(entries)
@@ -276,7 +327,10 @@ func (a *App) mountCfapiSpaces() {
 		return
 	}
 	a.cfapi.personal, a.cfapi.personalRoot, a.cfapi.session = mount, root, session
+	a.cfapi.displayName, a.cfapi.subtitle = name, usageSubtitle(*personal)
+	a.cfapi.viewWatcher = explorerview.Start(lifetime.ctx, explorerview.Options{Root: root, StateFile: filepath.Join(stateDir, "explorer-view.json"), Logf: a.logger.Printf})
 	a.cfapi.cacheApply = controller.Apply
+	a.cfapi.deleteCoordinator = deletion
 	a.cfapi.lastError = nil
 	stop := make(chan struct{})
 	a.cfapi.syncStop = stop
@@ -284,6 +338,20 @@ func (a *App) mountCfapiSpaces() {
 	a.cfapi.mu.Unlock()
 	a.accountMu.RUnlock()
 	a.logger.Printf("cfapi mount: 个人空间已挂载 %s", root)
+	if deletion != nil {
+		menu, err := a.startNativeUndoMenu(root, mount, deletion, lifetime)
+		if err != nil {
+			a.reportError("初始化Windows可撤销删除菜单", err)
+		} else {
+			a.cfapi.mu.Lock()
+			if a.cfapi.personal == mount && a.cfapi.lifetime == lifetime {
+				a.cfapi.undoMenu = menu
+			} else {
+				_ = menu.Close()
+			}
+			a.cfapi.mu.Unlock()
+		}
+	}
 	go a.cfapiSyncLoop(stop, mount, reconcile)
 }
 
@@ -328,6 +396,16 @@ func (a *App) unmountCfapiLifetime(expected *nativeMountLifetime) {
 	if a.cfapi.syncStop != nil {
 		close(a.cfapi.syncStop)
 	}
+	if a.cfapi.viewWatcher != nil {
+		a.cfapi.viewWatcher.Close()
+		a.cfapi.viewWatcher = nil
+	}
+	if a.cfapi.undoMenu != nil {
+		if err := a.cfapi.undoMenu.Close(); err != nil {
+			a.logger.Printf("可撤销删除菜单收尾:%v", err)
+		}
+		a.cfapi.undoMenu = nil
+	}
 	if a.cfapi.personal != nil {
 		if err := a.cfapi.personal.Close(); err != nil {
 			a.logger.Printf("cfapi mount: 卸载失败: %v", err)
@@ -335,7 +413,9 @@ func (a *App) unmountCfapiLifetime(expected *nativeMountLifetime) {
 	}
 	a.cfapi.personal, a.cfapi.session = nil, nil
 	a.cfapi.cacheApply = nil
+	a.cfapi.deleteCoordinator = nil
 	a.cfapi.personalRoot, a.cfapi.syncStop = "", nil
+	a.cfapi.displayName, a.cfapi.subtitle = "", ""
 }
 
 func (a *App) CfapiMountPath() string {

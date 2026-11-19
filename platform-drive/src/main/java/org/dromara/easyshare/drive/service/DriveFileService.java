@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.dromara.common.core.exception.ServiceException;
 import org.dromara.easyshare.drive.DriveKeys;
 import org.dromara.easyshare.drive.DriveObject;
+import org.dromara.easyshare.drive.DriveRecycleKeys;
 import org.dromara.easyshare.drive.domain.EsFile;
 import org.dromara.easyshare.drive.domain.EsFileChangeLog;
 import org.dromara.easyshare.drive.domain.EsSpace;
@@ -300,6 +301,7 @@ public class DriveFileService {
      */
     @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public Listing list(String spaceType, Long ownerId, Long uploadBy, List<DriveObject> objects) {
+        objects = objects.stream().filter(object -> !object.path().startsWith(DriveRecycleKeys.STORAGE_DIR)).toList();
         ListView view = listView(spaceType, ownerId);
         Set<String> ordinaryPaths = new HashSet<>();
         objects.stream().filter(object -> !object.path().endsWith("/"))

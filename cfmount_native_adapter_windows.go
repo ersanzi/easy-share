@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"easyshare/internal/cfapi"
@@ -22,7 +23,9 @@ type nativeDirectoryCapabilities interface {
 }
 
 type nativeCacheController struct {
-	Apply func(context.Context, *cfapi.Mount, string, bool) error
+	Apply      func(context.Context, *cfapi.Mount, string, bool) error
+	Engine     func() *cfmount.WritebackEngine
+	BeforeScan func(context.Context, *cfapi.Mount) error
 }
 
 type nativeCacheControllerKey struct{}
@@ -74,7 +77,12 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 	// 桌面通过能力闸门后才创建同步根；在首次 List 中、创建任何占位符之前初始化写回引擎。
 	var mu sync.Mutex
 	var engine *cfmount.WritebackEngine
-	if controller, ok := ctx.Value(nativeCacheControllerKey{}).(*nativeCacheController); ok {
+	var publishedEngine atomic.Pointer[cfmount.WritebackEngine]
+	controller, _ := ctx.Value(nativeCacheControllerKey{}).(*nativeCacheController)
+	var status *nativeSyncStatus
+	if controller != nil {
+		controller.Engine = publishedEngine.Load
+		status = newNativeSyncStatus(parent, cfg.RootPath, log.Printf)
 		controller.Apply = func(request context.Context, m *cfapi.Mount, path string, keep bool) error {
 			request, cancel := nativeLifetimeContext(request, parent)
 			defer cancel()
@@ -83,7 +91,7 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 			if engine == nil || m == nil {
 				return fmt.Errorf("云空间写回引擎未就绪")
 			}
-			return engine.WithCommittedCache(request, path, func(ctx context.Context, c cfmount.CacheCandidate) error {
+			err := engine.WithCommittedCache(request, path, func(ctx context.Context, c cfmount.CacheCandidate) error {
 				baseline := nativeCacheBaseline(c)
 				if keep {
 					return m.KeepVerifiedCache(ctx, baseline)
@@ -91,6 +99,10 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 				_, err := m.ReleaseVerifiedCacheNow(ctx, baseline)
 				return err
 			})
+			if err == nil && status != nil {
+				status.reconcile(request, m, engine)
+			}
+			return err
 		}
 	}
 	initial := func(ctx context.Context) ([]cfapi.CloudEntry, error) {
@@ -105,6 +117,9 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 		if err != nil {
 			log.Printf("cfapi mount: 恢复授权加载失败，禁止初始化写回: %v", err)
 			return nil, err
+		}
+		if status != nil {
+			writebackConfig.OnStatus = status.record
 		}
 		e, err := cfmount.NewWritebackEngine(writebackConfig)
 		if err != nil {
@@ -126,6 +141,7 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 			return nil, err
 		}
 		engine = e
+		publishedEngine.Store(e)
 		return entries, nil
 	}
 	reconcile := func(m *cfapi.Mount) error {
@@ -134,8 +150,16 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 		if engine == nil || m == nil {
 			return fmt.Errorf("CFAPI 写回引擎尚未完成初始保护扫描")
 		}
+		if status != nil {
+			m.SetFetchStatusObserver(status.fetch)
+		}
 		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 		defer cancel()
+		var deletionErr error
+		if controller != nil && controller.BeforeScan != nil {
+			deletionErr = controller.BeforeScan(ctx, m)
+			// 每个未决目标由持久保护名单排除；其它目录仍可继续同步，不能一处冲突冻结全盘。
+		}
 		result, err := engine.Reconcile(ctx, func(ctx context.Context, protected []string) error {
 			return m.SyncProtected(func(_ context.Context) ([]cfapi.CloudEntry, error) { return remote(ctx) }, protected)
 		}, func(ctx context.Context, c cfmount.CacheCandidate) (bool, error) {
@@ -145,7 +169,10 @@ func prepareNativeCFAPI(ctx context.Context, cfg cfmount.Config, stateDir, ident
 			}
 			return r.Released, err
 		})
-		return errors.Join(err, nativeWritebackIssues(result))
+		if status != nil {
+			status.reconcile(ctx, m, engine)
+		}
+		return errors.Join(deletionErr, err, nativeWritebackIssues(result))
 	}
 	return initial, reconcile, nil
 }

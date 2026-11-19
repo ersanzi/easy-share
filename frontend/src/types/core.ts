@@ -138,6 +138,12 @@ export interface RecycleEntry {
    * 前后端在这件事上必须一致。
    */
   fileId: string
+  /** 新批次仅列根条目；缺失时保持旧回收站文件兼容 */
+  directory?: boolean
+  /** 服务端回收批次 ID，全程保持字符串 */
+  batchId?: string
+  /** 服务端快照状态，不由客户端伪造 */
+  snapshotState?: string
   path: string
   /** 删除前的路径快照（还原落点） */
   originPath: string

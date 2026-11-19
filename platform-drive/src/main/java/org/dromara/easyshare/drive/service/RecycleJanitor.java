@@ -9,6 +9,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -20,9 +21,8 @@ import java.util.List;
  * <p><b>保留期常量为什么放在这个类</b>：前端删除确认框与回收站面板都写着「保留 30 天」，
  * 那句话的可信度直接取决于这个值。把它和清理逻辑放在一起，改动时更容易被看见。
  *
- * <p><b>失败处理</b>：单条失败只记日志、继续下一条。下次调度会重新扫到它，
- * 不需要人工补偿——{@code purgeFromRecycle} 对已被清掉的行会抛错，
- * 那只会让它退出「待清理」集合，不会留下半截状态。
+ * <p><b>失败处理</b>：单条失败只记日志、继续下一条，下次调度重试。
+ * 所有清理均交给回收站服务，避免只摘数据库行而遗留正文或绕过批次快照保护。
  *
  * @author EasyShare
  */
@@ -35,7 +35,7 @@ public class RecycleJanitor {
     public static final int RETENTION_DAYS = 30;
 
     private final EsFileMapper fileMapper;
-    private final DriveFileService fileService;
+    private final DriveRecycleService recycleService;
 
     /** 每天 03:30 跑一次：避开业务高峰，也给「刚删完就后悔」留足当场还原的窗口。 */
     @Scheduled(cron = "0 30 3 * * ?")
@@ -60,10 +60,19 @@ public class RecycleJanitor {
                 .eq(EsFile::getState, EsFile.STATE_RECYCLED)
                 .lt(EsFile::getDeletedAt, cutoff));
         int done = 0;
+        HashSet<String> seenBatches = new HashSet<>();
         for (EsFile row : expired) {
+            String batchId = row.getRecycleBatchId();
+            if (batchId != null && (!Boolean.TRUE.equals(row.getRecycleRoot())
+                || !seenBatches.add(batchId))) {
+                continue;
+            }
             try {
-                fileService.purgeFromRecycle(row.getSpaceType(), row.getOwnerId(), row.getFileId());
-                done++;
+                // 服务内解析个人 owner / 共享批次 operator，并安全清理正文与数据库。
+                DriveRecycleService.Result result = recycleService.purgeExpiredFile(row);
+                if (result != null && "purged".equals(result.status())) {
+                    done += result.memberCount();
+                }
             } catch (RuntimeException ex) {
                 log.warn("回收站清理失败 fileId={} path={}", row.getFileId(), row.getFilePath(), ex);
             }

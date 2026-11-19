@@ -53,6 +53,19 @@ public static class EAInput {
  public static void LeftClickBackground(IntPtr h,int pid,int x,int y){Background(h,pid,x,y);if(GetForegroundWindow()!=h||GetAsyncKeyState(1)<0||GetAsyncKeyState(2)<0)throw new Exception("Unsafe background focus");Move(x,y);Background(h,pid,x,y);Emit(6,0,0);}
  public static void RightClick(IntPtr h,int pid,int x,int y){Background(h,pid,x,y);if(GetForegroundWindow()!=h)throw new Exception("Foreground changed");Move(x,y);Background(h,pid,x,y);Emit(0x18,0,0);}
  public static void DoubleClickItem(IntPtr root,int pid,int x,int y,string expectedName){Identity(root,pid);if(GetForegroundWindow()!=root)throw new Exception("Double-click window not foreground");Hit(root,pid,x,y);AutomationElement e=AutomationElement.FromPoint(new System.Windows.Point(x,y));bool found=false;for(int i=0;i<12&&e!=null;i++,e=TreeWalker.RawViewWalker.GetParent(e))if(e.Current.ControlType==ControlType.ListItem&&e.Current.Name==expectedName&&e.Current.ProcessId==pid){found=true;break;}if(!found)throw new Exception("Double-click exact tile hit unproved");Move(x,y);Hit(root,pid,x,y);Emit(6,0,0);Thread.Sleep(70);Hit(root,pid,x,y);Emit(6,0,0);}
+ public static void DragExplorerFile(IntPtr source,int sourcePid,IntPtr target,int targetPid,int sx,int sy,int tx,int ty,string expectedName){
+  Identity(source,sourcePid);Identity(target,targetPid);Hit(source,sourcePid,sx,sy);Background(target,targetPid,tx,ty);
+  AutomationElement e=AutomationElement.FromPoint(new System.Windows.Point(sx,sy));bool exact=false;
+  for(int i=0;i<15&&e!=null;i++,e=TreeWalker.RawViewWalker.GetParent(e)){if(e.Current.ControlType==ControlType.ListItem&&e.Current.Name==expectedName&&e.Current.ProcessId==sourcePid){exact=true;break;}}
+  if(!exact)throw new Exception("Exact source Explorer item not proved");
+  if(!FocusSource(source))throw new Exception("Source Explorer foreground unavailable");
+  bool down=false;KeyInput(0x11,0,0);
+  try{Move(sx,sy);Hit(source,sourcePid,sx,sy);Emit(2,0,0);down=true;Thread.Sleep(150);
+   for(int i=1;i<=30;i++){Identity(source,sourcePid);Identity(target,targetPid);Move(sx+(tx-sx)*i/30,sy+(ty-sy)*i/30);Thread.Sleep(40);}
+   Hit(target,targetPid,tx,ty);Thread.Sleep(150);Emit(4,0,0);down=false;
+  }catch{KeyInput(0x1b,0,0);KeyInput(0x1b,0,2);if(down){Move(sx,sy);Emit(4,0,0);down=false;}throw;}
+  finally{KeyInput(0x11,0,2);}
+ }
  public static string LastDragDiagnostic="";
  public static string Drag(IntPtr target,int pid,string source,int sx,int sy,int tx,int ty){
   LastDragDiagnostic="start";

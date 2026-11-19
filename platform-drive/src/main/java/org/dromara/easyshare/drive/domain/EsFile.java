@@ -90,6 +90,24 @@ public class EsFile extends BaseEntity {
     /** 同路径覆盖上传递增的版本号（0=首次登记） */
     private Long versionId;
 
+    /** 唯一删除批次；NULL 为旧回收站数据，不代表存在独立正文快照。 */
+    private String recycleBatchId;
+    /** 本空间内独立快照的相对键，只能由 DriveRecycleKeys 按身份生成。 */
+    private String recycleStoragePath;
+    /** 是否为本次删除的根项；目录子项共享 batchId。 */
+    private Boolean recycleRoot;
+    /** 调用方删除操作标识；在空间/操作者内幂等，不能用路径代替。 */
+    private String recycleOperationId;
+    /** 被删除的确切版本，允许历史版本 0。 */
+    private Long recycleSnapshotVersion;
+    /** HEAD 存储字节数及 ETag 元数据；ETag 不能作为快照正文一致性证明。 */
+    private Long recycleSnapshotSize;
+    private String recycleSnapshotEtag;
+    /** 整对象流式 SHA-256（64 位小写十六进制）；NULL 为旧数据未核验，不代表 ready。 */
+    private String recycleSnapshotSha256;
+    /** NULL=旧数据未核验，preparing=待复制核验，ready=已核验；不是对象存在性真值。 */
+    private String recycleSnapshotState;
+
     /** 内容 MD5（十六进制小写）；秒传判定键，未上报为 NULL（切片 6） */
     private String contentMd5;
 

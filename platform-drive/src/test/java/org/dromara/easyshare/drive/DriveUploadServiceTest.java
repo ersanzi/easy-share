@@ -147,7 +147,7 @@ class DriveUploadServiceTest {
         verify(storage, never()).completeUpload(anyString(), anyString(), anyString(), any());
         // 目录层也不该被登记
         verify(fileService, never()).registerOnPresign(anyString(), anyLong(), anyLong(),
-            anyString(), anyLong(), any());
+            anyString(), anyLong(), any(), any());
     }
 
     @Test
@@ -158,7 +158,7 @@ class DriveUploadServiceTest {
         uploading.setExpectedVersion(3L);
         when(mapper.selectById(9L)).thenReturn(uploading);
         doThrow(new ServiceException("文件在本次上传期间被其他人修改（版本 3 已过期）"))
-            .when(fileService).registerOnPresign(anyString(), anyLong(), anyLong(), anyString(), anyLong(), any());
+            .when(fileService).registerOnPresign(anyString(), anyLong(), anyLong(), anyString(), anyLong(), any(), any());
 
         assertThrows(ServiceException.class,
             () -> service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag-a"))));
@@ -230,7 +230,7 @@ class DriveUploadServiceTest {
         // 校验先于登记，且版本一路透传到目录层（条件 UPDATE 才是真正的原子闸门）
         verify(fileService).assertVersion(EsUploadSession.TYPE_PERSONAL, 1L, "big/backup.iso", 5L);
         verify(fileService).registerOnPresign(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
-            "big/backup.iso", 100L * 1024 * 1024, 5L);
+            "big/backup.iso", 100L * 1024 * 1024, 5L, null);
         verify(usageService).invalidate("users/1/");
     }
 
@@ -248,7 +248,7 @@ class DriveUploadServiceTest {
         InOrder order = inOrder(fileService, storage);
         order.verify(fileService).assertVersion(anyString(), anyLong(), anyString(), any());
         order.verify(fileService).registerOnPresign(anyString(), anyLong(), anyLong(),
-            anyString(), anyLong(), any());
+            anyString(), anyLong(), any(), any());
         order.verify(storage).completeUpload(anyString(), anyString(), anyString(), any());
     }
 
@@ -259,7 +259,7 @@ class DriveUploadServiceTest {
         // 模拟前置校验之后才由目录抢占路径，登记回退必须终止聚合与秒传复制。
         doThrow(new ServiceException("该位置是目录，不能上传文件"))
             .when(fileService).registerOnPresign(EsUploadSession.TYPE_PERSONAL, 1L, 1L,
-                "big/backup.iso", 100L * 1024 * 1024, null);
+                "big/backup.iso", 100L * 1024 * 1024, null, null);
         assertEquals("该位置是目录，不能上传文件", assertThrows(ServiceException.class,
             () -> service.complete(1L, 9L, List.of(new DriveStorage.UploadPart(1, "etag")))).getMessage());
         verify(storage).abortUpload("users/1/", "big/backup.iso", "s3-upload-id");

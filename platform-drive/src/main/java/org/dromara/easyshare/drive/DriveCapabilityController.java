@@ -13,9 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class DriveCapabilityController {
     @GetMapping("/capabilities")
     public R<Capabilities> capabilities() {
-        return R.ok(new Capabilities(true, 1));
+        return R.ok(new Capabilities(true, 1, true, true, true, true));
     }
 
-    public record Capabilities(boolean persistentDirectories, int protocolVersion) {
+    public record Capabilities(boolean persistentDirectories, int protocolVersion,
+                               boolean recycleSnapshots, boolean recycleBatches,
+                               boolean recycleOperations, boolean uploadCommitVerification) {
     }
 }

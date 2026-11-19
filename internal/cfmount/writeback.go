@@ -45,6 +45,8 @@ type WritebackConfig struct {
 	// every existing file and unknown subdirectory retains its own protection.
 	// Implementations must bind namespace/root, NTFS identity and committed provenance.
 	TrustedDirectory func(context.Context, string, string, string, drive.Object) (bool, error)
+	// OnStatus 只接收写回快照；不能重入引擎或阻塞上传与服务器校验。
+	OnStatus func(WritebackStatus)
 }
 
 type writebackRecord struct {
@@ -89,11 +91,12 @@ type WritebackResult struct {
 // WritebackEngine 持久化意图和不可变上传快照。仅支持新增、编辑和目录创建；
 // 不推断删除/改名，不删除或改写任何用户文件。不支持多个进程共享同一 StateDir。
 type WritebackEngine struct {
-	mu         sync.Mutex
-	cfg        WritebackConfig
-	state      writebackState
-	seen       map[string]localObservation
-	cacheProof map[string]cacheLocalProof // 仅本轮完整快照匹配已提交版本的证据
+	mu                sync.Mutex
+	cfg               WritebackConfig
+	state             writebackState
+	seen              map[string]localObservation
+	cacheProof        map[string]cacheLocalProof // 仅本轮完整快照匹配已提交版本的证据
+	deletionProtected []string                   // 明确删除/还原未决路径，不推断扫描缺项为删除
 }
 
 func NewWritebackEngine(cfg WritebackConfig) (*WritebackEngine, error) {
@@ -179,7 +182,10 @@ func (e *WritebackEngine) save() error {
 	if err != nil {
 		return err
 	}
-	return replaceWritebackState(name, filepath.Join(e.cfg.StateDir, "pending.json"))
+	if err := replaceWritebackState(name, filepath.Join(e.cfg.StateDir, "pending.json")); err != nil {
+		return fmt.Errorf("cfmount writeback: 原子替换pending状态失败: %w", err)
+	}
+	return nil
 }
 
 // Reconcile 是桌面定时循环的唯一调度入口：先扫描/写回，再在同一互斥区内同步树。
@@ -230,6 +236,16 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		rel = filepath.ToSlash(rel)
 		if !validWritebackPath(rel) {
 			return fmt.Errorf("cfmount writeback: 不安全路径 %q", rel)
+		}
+		for _, blocked := range e.deletionProtected {
+			if rel == blocked || strings.HasPrefix(rel, blocked+"/") {
+				present[rel] = true
+				out.ProtectedPaths = append(out.ProtectedPaths, blocked)
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		info, x := d.Info()
 		if x != nil {
@@ -307,7 +323,14 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		}
 		info := local[p]
 		r := e.state.Records[p]
-		issue := func(kind string, x error) { out.Issues = append(out.Issues, WritebackIssue{p, kind, x.Error()}) }
+		issue := func(kind string, x error) {
+			out.Issues = append(out.Issues, WritebackIssue{p, kind, x.Error()})
+			phase := WritebackFailed
+			if kind == "conflict" {
+				phase = WritebackConflict
+			}
+			e.publishStatus(p, phase, info.Size(), 0, x.Error())
+		}
 		if info.IsDir() {
 			if r != nil && r.Directory {
 				continue
@@ -330,6 +353,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 					issue("unsupported-directory", errors.New("客户端未适配 CreateDirectory"))
 					continue
 				}
+				e.publishStatus(p, WritebackPending, 0, 0, "等待创建云端目录")
 				created, x := dc.CreateDirectory(ctx, token, e.cfg.Space, p)
 				if x != nil {
 					issue("directory", x)
@@ -345,6 +369,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 			if err = e.save(); err != nil {
 				return out, err
 			}
+			e.publishStatus(p, WritebackSynced, 0, 0, "云端目录已确认")
 			continue
 		}
 		if o, exists := remote[p]; exists && o.Directory {
@@ -360,9 +385,11 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		now := time.Now()
 		if !ok || old.Size != info.Size() || !old.Mod.Equal(info.ModTime()) || old.Identity != localID {
 			e.seen[p] = localObservation{Size: info.Size(), Mod: info.ModTime(), Since: now, Identity: localID}
+			e.publishStatus(p, WritebackPending, info.Size(), 0, "等待文件写入稳定")
 			continue
 		}
 		if now.Sub(old.Since) < e.cfg.StableFor {
+			e.publishStatus(p, WritebackPending, info.Size(), 0, "等待文件写入稳定")
 			continue
 		}
 		if r != nil && r.Directory {
@@ -408,11 +435,13 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 					continue
 				}
 				e.cacheProof[p] = cacheLocalProof{Info: info, Identity: localID, Hash: pending.Hash, Size: pending.Size}
+				e.publishStatus(p, WritebackSynced, pending.Size, pending.Size, "已确认的云端版本与本机正文一致")
 				continue
 			}
 			if r == nil {
 				if o, exists := remote[p]; exists {
 					// 只有完整读回相同字节且身份/版本稳定才采纳初始基线。
+					e.publishStatus(p, WritebackVerifying, pending.Size, pending.Size, "正在确认已有云端内容")
 					verified, x := e.verifyObject(ctx, token, p, pending.Hash, pending.Size)
 					os.Remove(filepath.Join(e.cfg.StateDir, pending.Snapshot))
 					if x != nil || o.VersionId.Int64() <= 0 || o.FileId.Int64() != verified.FileId.Int64() || o.VersionId != verified.VersionId {
@@ -425,6 +454,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 					}
 					out.Verified = append(out.Verified, p)
 					e.cacheProof[p] = cacheLocalProof{Info: info, Identity: localID, Hash: pending.Hash, Size: pending.Size}
+					e.publishStatus(p, WritebackSynced, pending.Size, pending.Size, "云端正文与版本已确认")
 					continue
 				}
 				r = &writebackRecord{}
@@ -440,11 +470,13 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		q := r.Pending
 		if q.Attempted {
 			// 上次上传结果不明时先读回；不能因重启重试而覆盖更新的远端版本。
+			e.publishStatus(p, WritebackVerifying, q.Size, q.Size, "重新确认上次上传结果")
 			if verified, x := e.verifyObject(ctx, token, p, q.Hash, q.Size); x == nil && (r.FileID == 0 || verified.FileId.Int64() == r.FileID) {
 				if err = e.commit(p, r, verified); err != nil {
 					return out, err
 				}
 				out.Verified = append(out.Verified, p)
+				e.publishStatus(p, WritebackSynced, q.Size, q.Size, "云端正文与版本已确认")
 				continue
 			}
 		}
@@ -463,7 +495,11 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		if err = e.save(); err != nil {
 			return out, err
 		}
-		uploadErr := e.cfg.Client.UploadFileIfVersion(ctx, token, e.cfg.Space, p, snap, &q.Expected, nil)
+		e.publishStatus(p, WritebackUploading, q.Size, 0, "正在上传")
+		uploadErr := e.cfg.Client.UploadFileIfVersion(ctx, token, e.cfg.Space, p, snap, &q.Expected, func(done, total int64) {
+			e.publishStatus(p, WritebackUploading, total, done, "正在上传")
+		})
+		e.publishStatus(p, WritebackVerifying, q.Size, q.Size, "正在确认云端正文与版本")
 		verified, verifyErr := e.verifyObject(ctx, token, p, q.Hash, q.Size)
 		if verifyErr == nil && r.FileID > 0 && verified.FileId.Int64() != r.FileID {
 			verifyErr = errors.New("上传确认的远端身份与原提交基线不符")
@@ -480,6 +516,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 			return out, err
 		}
 		out.Verified = append(out.Verified, p)
+		e.publishStatus(p, WritebackSynced, q.Size, q.Size, "云端正文与版本已确认")
 		if matched != nil {
 			e.cacheProof[p] = cacheLocalProof{Info: info, Identity: localID, Hash: matched.Hash, Size: matched.Size}
 		}
@@ -507,7 +544,10 @@ func (e *WritebackEngine) commit(p string, r *writebackRecord, verified drive.Ob
 		return err
 	}
 	// 仅清理我们自己的快照，绝不删除用户文件。
-	return os.Remove(filepath.Join(e.cfg.StateDir, q.Snapshot))
+	if err := os.Remove(filepath.Join(e.cfg.StateDir, q.Snapshot)); err != nil {
+		return fmt.Errorf("cfmount writeback: 清理已确认快照失败: %w", err)
+	}
+	return nil
 }
 
 func hashWritebackFile(p string) (string, int64, error) {

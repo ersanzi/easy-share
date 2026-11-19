@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 import type { RecycleEntry } from '../types/core'
 import { RECYCLE_RETENTION_DAYS } from '../types/core'
 import { core } from '../services/core'
@@ -13,21 +14,47 @@ const entries = ref<RecycleEntry[]>([])
 const loading = ref(false)
 const error = ref('')
 const pendingPurge = ref<RecycleEntry | null>(null)
+let loadVersion = 0
+let unmounted = false
+let stopCloudChanged: (() => void) | undefined
 
 const load = async () => {
+  const version = ++loadVersion
   loading.value = true
   error.value = ''
   try {
-    entries.value = await core.cloudRecycleList()
+    const list = await core.cloudRecycleList()
+    if (!unmounted && version === loadVersion) entries.value = list
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '回收站加载失败'
-    entries.value = []
+    if (!unmounted && version === loadVersion) {
+      error.value = e instanceof Error ? e.message : '回收站加载失败'
+      entries.value = []
+    }
   } finally {
-    loading.value = false
+    if (!unmounted && version === loadVersion) loading.value = false
   }
 }
 
-const fileName = (path: string) => path.split('/').pop() ?? path
+const fileName = (path: string) => path.replace(/\/+$/, '').split('/').pop() || path
+const isDirectory = (entry: RecycleEntry) => entry.directory === true
+  || (entry.directory === undefined && (entry.originPath || entry.path).endsWith('/'))
+
+const entryType = (entry: RecycleEntry) => {
+  if (isDirectory(entry)) return '文件夹'
+  const name = fileName(entry.originPath || entry.path)
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ''
+  if (/^(docx?|rtf|odt|pages)$/.test(ext)) return 'Word 文档'
+  if (/^(xlsx?|csv|ods|numbers)$/.test(ext)) return 'Excel 表格'
+  if (/^(pptx?|odp|key)$/.test(ext)) return '演示文稿'
+  if (ext === 'pdf') return 'PDF 文档'
+  if (/^(png|jpe?g|gif|webp|bmp|svg|ico|heic)$/.test(ext)) return '图片'
+  if (/^(zip|rar|7z|tar|gz|bz2|xz)$/.test(ext)) return '压缩包'
+  if (/^(mp3|wav|flac|aac|m4a|ogg)$/.test(ext)) return '音频'
+  if (/^(mp4|mov|mkv|avi|webm|wmv)$/.test(ext)) return '视频'
+  if (/^(md|txt|json|ya?ml|xml|html?|css|js|ts|jsx|tsx|go|py|java|sql|sh|log)$/.test(ext)) return '文本 / 代码'
+  return '文件'
+}
 
 const formatSize = (value: number) => value < 1024
   ? `${value} B`
@@ -58,10 +85,12 @@ const remainDays = (deletedAt?: string) => {
   return Math.max(0, RECYCLE_RETENTION_DAYS - passed)
 }
 
-// 一行的副标题：原路径 · 大小 · 删除时间 · 倒计时。
+// 一行的副标题：原路径 · 类型 · 文件大小 · 删除时间 · 倒计时。
 // 倒计时集中在函数里拼，模板只管展示，避免同一函数在标签里被调用三次。
 const rowMeta = (entry: RecycleEntry) => {
-  const parts = [entry.originPath, formatSize(entry.size), `删除于 ${formatDate(entry.deletedAt)}`]
+  const parts = [entry.originPath || entry.path, entryType(entry)]
+  if (!isDirectory(entry)) parts.push(formatSize(entry.size))
+  if (entry.deletedAt) parts.push(`删除于 ${formatDate(entry.deletedAt)}`)
   const days = remainDays(entry.deletedAt)
   if (days !== null) {
     // 最后三天换个说法：这时候「还能反悔」已经是个紧迫信息了
@@ -73,7 +102,8 @@ const rowMeta = (entry: RecycleEntry) => {
 const restore = async (entry: RecycleEntry) => {
   try {
     await core.cloudRecycleRestore(entry.fileId)
-    entries.value = entries.value.filter(item => item.fileId !== entry.fileId)
+    // 根条目可能代表整个目录批次，必须重新核对服务端完整列表。
+    await load()
   } catch (e) {
     // 还原冲突（原位置有同名文件）等错误直接透出控制面的可读说明
     error.value = e instanceof Error ? e.message : '还原失败'
@@ -90,13 +120,22 @@ const confirmPurge = async () => {
   if (!entry) return
   try {
     await core.cloudRecyclePurge(entry.fileId)
-    entries.value = entries.value.filter(item => item.fileId !== entry.fileId)
+    await load()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '彻底删除失败'
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  stopCloudChanged = EventsOn('cloud:changed', () => { void load() })
+  void load()
+})
+onUnmounted(() => {
+  unmounted = true
+  ++loadVersion
+  // 只取消本组件的订阅，不移除其他入口的 cloud:changed 监听器。
+  stopCloudChanged?.()
+})
 </script>
 
 <template>
@@ -109,7 +148,7 @@ onMounted(load)
       <div class="header-actions">
         <button class="text-button" type="button" @click="load">刷新</button>
         <button class="text-button" type="button" @click="emit('back')">返回网盘</button>
-        <span class="count-badge">{{ entries.length }} 个文件</span>
+        <span class="count-badge">{{ entries.length }} 个项目</span>
       </div>
     </header>
 
@@ -122,13 +161,14 @@ onMounted(load)
         <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/></svg>
       </span>
       <strong>回收站为空</strong>
-      <p>删除的文件会保留 {{ RECYCLE_RETENTION_DAYS }} 天，期间可随时还原。</p>
+      <p>删除的文件和文件夹会保留 {{ RECYCLE_RETENTION_DAYS }} 天，期间可随时还原。</p>
     </div>
 
     <div v-else class="cloud-list">
       <article v-for="entry in entries" :key="entry.fileId" class="cloud-row">
         <div class="cloud-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
+          <svg v-if="isDirectory(entry)" class="recycle-directory-icon" viewBox="0 0 24 24"><path d="M3 5h7l2 2h9v13H3z"/></svg>
+          <svg v-else class="recycle-file-icon" viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
         </div>
         <div class="cloud-info">
           <strong>{{ fileName(entry.originPath || entry.path) }}</strong>

@@ -206,6 +206,21 @@ describe('useEasyShare', () => {
     wrapper.unmount()
   })
 
+  it('does not restore old auth after a later logout during profile refresh', async () => {
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    let resolveProfile!: (user: { loggedIn: boolean; userName: string; nickName: string; avatar: string; isAdmin: boolean }) => void
+    mocks.currentUser.mockReturnValueOnce(new Promise(resolve => { resolveProfile = resolve }))
+    const updated = mocks.eventsOn.mock.calls.find(call => call[0] === 'auth:user-updated')![1]
+    updated()
+    mocks.logout.mockResolvedValue(undefined)
+    await wrapper.get('[data-test="logout"]').trigger('click')
+    resolveProfile({ loggedIn: true, userName: 'old', nickName: '旧账号', avatar: '', isAdmin: true })
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+    wrapper.unmount()
+  })
+
   it('surfaces admin console open failures as operation errors', async () => {
     mocks.openAdminConsole.mockRejectedValueOnce(new Error('管理后台地址无效（需 http/https）：ftp://x'))
 

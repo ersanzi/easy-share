@@ -83,12 +83,15 @@ public class DriveController {
     private final org.dromara.easyshare.drive.service.FileMarkService markService;
     /** 文件分享 */
     private final org.dromara.easyshare.drive.service.ShareService shareService;
+    /** 不同入口仍共用同一安全批次服务；旧请求体可忽略新增结果。 */
+    private final org.dromara.easyshare.drive.service.DriveRecycleService recycleService;
     /** 版本历史 */
     private final org.dromara.easyshare.drive.service.FileVersionService versionService;
 
     /** 创建数据库目录；沿用个人空间配额初始化和共享空间写权限。 */
     @PostMapping("/directories")
     public R<FileVo> createDirectory(@Validated @RequestBody DirectoryBo body) {
+        DriveKeys.requireUserPath(body.path());
         Long userId = LoginHelper.getUserId();
         String space = body.space() == null || body.space().isBlank() ? EsSpace.TYPE_PERSONAL : body.space();
         if (!EsSpace.TYPE_PERSONAL.equals(space) && !EsSpace.TYPE_SHARED.equals(space)) {
@@ -298,6 +301,7 @@ public class DriveController {
     @PostMapping("/presign-put")
     @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public R<PresignVo> presignPut(@Validated @RequestBody PutBo body) {
+        DriveKeys.requireUserPath(body.path());
         Long userId = LoginHelper.getUserId();
         long size = body.size() == null ? 0L : body.size();
         String space = body.space();
@@ -379,6 +383,7 @@ public class DriveController {
      */
     @PostMapping("/presign-get")
     public R<PresignVo> presignGet(@Validated @RequestBody PathBo body) {
+        DriveKeys.requireUserPath(body.path());
         Long userId = LoginHelper.getUserId();
         String prefix = readablePrefix(body.space());
         fileService.assertDownloadable(body.space(), ownerIdOf(body.space(), userId), body.path(),
@@ -398,54 +403,26 @@ public class DriveController {
      * @return 操作结果
      */
     @DeleteMapping("/object")
-    public R<Void> delete(@Validated @RequestBody PathBo body) {
+    public R<org.dromara.easyshare.drive.service.DriveRecycleService.Result> delete(@Validated @RequestBody PathBo body) {
         Long userId = LoginHelper.getUserId();
-        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
-        String prefix = shared
-            ? spaceService.checkSharedWritable(userId, 0L)
-            : DriveKeys.userPrefix(userId);
-        Long ownerId = ownerIdOf(body.space(), userId);
-        // 兼容旧接口的尾斜杠，并按数据库类型识别新目录；始终先以fileId校验归属。
-        boolean isDir = body.path() != null && body.path().endsWith("/");
-        String path = fileService.resolveDeletePath(body.space(), ownerId, body.fileId(),
-            isDir ? body.path().replaceAll("/+$", "") : body.path());
-        EsFile target = fileService.activeAt(body.space(), ownerId, path);
-        isDir = target != null ? target.directoryEntry() : isDir;
-        // 删除是 manage 独占（企业权限第三片，对齐钉钉）：共享空间已登记文件按文档级
-        // 角色拦；未登记行（目录标记/幽灵行，查不到 active 行）沿用空间级写权限口径。
-        if (shared) {
-            fileRoleService.assertManage(target, userId);
-        }
-        if (isDir && Boolean.TRUE.equals(body.recursive())) {
-            // 先按深度软删子项和目录实体，再清旧marker；文件正文保留用于回收站还原。
-            fileService.recycleSubtree(body.space(), ownerId, path);
-            storage.deleteDirectoryTree(prefix, path);
-            usageService.invalidate(prefix);
-            return R.ok();
-        }
-        if (target != null && target.directoryEntry()
-            && storage.listAt(prefix).stream().anyMatch(object -> object.path().startsWith(path + "/"))) {
-            throw new org.dromara.common.core.exception.ServiceException("目录非空，请先处理子项");
-        }
-        // 软删（P1 回收站）：RustFS 对象保留，目录行置 recycled + 原路径快照。
-        // 还原时同键复位，无需搬对象；彻底删除走 /recycle/purge 才真删对象。
-        EsFile recycled = fileService.markRecycled(body.space(), ownerId, path);
-        if (recycled == null) {
-            // 没有 active 行的对象：目录标记（mkdir 建的，无 es_file 行），
-            // 或登记后从未真正写入的幽灵行。软删找不到可置状态的行，对象留着
-            // 等于「删不掉」——目录会永远挂在列表里。直接删对象。
-            if (isDir) {
-                // 目录键带尾斜杠，keyAt 内的 normalizeRelative 会拒，走专用方法
-                storage.deleteDirectory(prefix, path);
-            } else {
-                storage.deleteAt(prefix, path);
-            }
-        } else if (isDir) {
-            // 持久目录软删后清掉可能遗留的旧marker；文件正文仍只由purge释放。
-            storage.deleteDirectory(prefix, path);
-        }
-        usageService.invalidate(prefix);
-        return R.ok();
+        String space = body.space() == null || body.space().isBlank() ? EsSpace.TYPE_PERSONAL : body.space();
+        if (EsSpace.TYPE_SHARED.equals(space)) { spaceService.checkSharedWritable(userId, 0L); }
+        Long ownerId = ownerIdOf(space, userId);
+        // 列表惰性接入旧marker；新删除必须先有真实稳定身份，不能将无行对象直接真删。
+        String prefix = readablePrefix(space);
+        fileService.list(space, ownerId, userId, storage.listWithDirs(prefix).stream()
+            .filter(object -> !object.path().startsWith(org.dromara.easyshare.drive.domain.EsFileVersion.STORAGE_DIR)).toList());
+        return R.ok(recycleService.recycle(space, ownerId, userId, body.fileId(), body.path(),
+            body.expectedVersion(), body.operationId(), Boolean.TRUE.equals(body.recursive())));
+    }
+
+    /** 删除请求超时后只读核对原操作，不能按路径重复删除另一个文件。 */
+    @GetMapping("/recycle/operation")
+    public R<org.dromara.easyshare.drive.service.DriveRecycleService.Result> recycleOperation(
+        @RequestParam String operationId, @RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        readablePrefix(space);
+        Long userId = LoginHelper.getUserId();
+        return R.ok(recycleService.operation(space, ownerIdOf(space, userId), userId, operationId));
     }
 
     // ── 回收站（P1，wps-cloud-drive-benchmark.md §6-P1 第 1 项）──────────────
@@ -476,8 +453,8 @@ public class DriveController {
             ? spaceService.checkSharedWritable(userId, 0L)
             : DriveKeys.userPrefix(userId);
         Long ownerId = ownerIdOf(body.space(), userId);
-        String from = DriveKeys.normalizeRelative(body.from());
-        String to = DriveKeys.normalizeRelative(body.to());
+        String from = DriveKeys.requireUserPath(body.from());
+        String to = DriveKeys.requireUserPath(body.to());
         if (from.equals(to)) {
             return R.ok(new MoveVo(to));
         }
@@ -522,13 +499,16 @@ public class DriveController {
      *
      * @param space personal / shared
      */
-    @GetMapping("/recycle")    public R<List<RecycleVo>> recycle(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+    @GetMapping("/recycle")
+    public R<List<RecycleVo>> recycle(@RequestParam(defaultValue = EsSpace.TYPE_PERSONAL) String space) {
+        readablePrefix(space);
         Long userId = LoginHelper.getUserId();
         Long ownerId = ownerIdOf(space, userId);
-        return R.ok(fileService.listRecycled(space, ownerId).stream()
+        return R.ok(recycleService.list(space, ownerId).stream()
             .map(row -> new RecycleVo(row.getFileId(), row.getFilePath(), row.getOriginPath(),
                 row.getFileSize(), row.getVersionId(),
-                row.getDeletedAt() == null ? null : row.getDeletedAt().atZone(java.time.ZoneId.systemDefault()).toInstant()))
+                row.getDeletedAt() == null ? null : row.getDeletedAt().atZone(java.time.ZoneId.systemDefault()).toInstant(),
+                row.directoryEntry(), row.getRecycleBatchId(), row.getRecycleSnapshotState()))
             .toList());
     }
 
@@ -536,37 +516,24 @@ public class DriveController {
      * 还原：按 origin_path 复位为 active。原位置有同名 active 文件时报冲突。
      */
     @PostMapping("/recycle/restore")
-    public R<Void> recycleRestore(@Validated @RequestBody RecycleBo body) {
+    public R<org.dromara.easyshare.drive.service.DriveRecycleService.Result> recycleRestore(@Validated @RequestBody RecycleBo body) {
         Long userId = LoginHelper.getUserId();
-        fileService.restoreFromRecycle(body.space(), ownerIdOf(body.space(), userId), body.fileId());
-        usageService.invalidate(readablePrefix(body.space()));
-        return R.ok();
+        String space = body.space() == null || body.space().isBlank() ? EsSpace.TYPE_PERSONAL : body.space();
+        readablePrefix(space);
+        if (EsSpace.TYPE_SHARED.equals(space)) { spaceService.checkSharedWritable(userId, 0L); }
+        return R.ok(recycleService.restore(space, ownerIdOf(space, userId), userId, body.fileId()));
     }
 
     /**
      * 彻底删除：目录行摘除 + RustFS 对象删除（不可还原）。
      */
     @PostMapping("/recycle/purge")
-    public R<Void> recyclePurge(@Validated @RequestBody RecycleBo body) {
+    public R<org.dromara.easyshare.drive.service.DriveRecycleService.Result> recyclePurge(@Validated @RequestBody RecycleBo body) {
         Long userId = LoginHelper.getUserId();
-        boolean shared = EsSpace.TYPE_SHARED.equals(body.space());
-        String prefix = shared
-            ? spaceService.checkSharedWritable(userId, 0L)
-            : DriveKeys.userPrefix(userId);
-        Long ownerId = ownerIdOf(body.space(), userId);
-        DriveFileService.PurgeResult purged = fileService.purgeFromRecycle(body.space(), ownerId, body.fileId());
-        // 成员角色行已随 purgeFromRecycle 摘行清理，无需在此重复
-        // KI-7：只有当该路径没有 active 行在用时才删对象。
-        // 对象键由路径派生（DriveKeys.keyAt），而用户可能「删完又重新上传了同名文件」——
-        // 那个键此刻属于新文件，删了就会丢掉用户当前在用的内容。
-        if (purged.deletable()) {
-            storage.deleteAt(prefix, purged.row().getFilePath());
-        } else {
-            log.info("purge 跳过删对象：路径 {} 已被同路径 active 文件占用（回收站旧行的对象早已被覆盖）",
-                purged.row().getFilePath());
-        }
-        usageService.invalidate(prefix);
-        return R.ok();
+        String space = body.space() == null || body.space().isBlank() ? EsSpace.TYPE_PERSONAL : body.space();
+        readablePrefix(space);
+        if (EsSpace.TYPE_SHARED.equals(space)) { spaceService.checkSharedWritable(userId, 0L); }
+        return R.ok(recycleService.purge(space, ownerIdOf(space, userId), userId, body.fileId()));
     }
 
     /**
@@ -581,7 +548,8 @@ public class DriveController {
      * 回收站行视图：路径快照与删除时间（还原落点展示用）。
      */
     public record RecycleVo(Long fileId, String path, String originPath,
-                            Long size, Long versionId, Instant deletedAt) {
+                            Long size, Long versionId, Instant deletedAt,
+                            boolean directory, String batchId, String snapshotState) {
     }
 
     /**
@@ -947,7 +915,12 @@ public class DriveController {
         String path,
         String space,
         Long fileId,
-        Boolean recursive) {
+        Boolean recursive,
+        Long expectedVersion,
+        String operationId) {
+        public PathBo(String path, String space, Long fileId, Boolean recursive) {
+            this(path, space, fileId, recursive, null, null);
+        }
     }
     /**
      * 改名 / 移动请求体。

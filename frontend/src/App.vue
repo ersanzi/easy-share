@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import ActivityDrawer from './components/ActivityDrawer.vue'
 import AdminPanel from './components/AdminPanel.vue'
 import CloudPanel from './components/CloudPanel.vue'
@@ -29,7 +29,7 @@ import {
   taskStatusLabel,
   taskTimestamp,
 } from './utils/tasks'
-import { WindowMinimise, Quit, WindowToggleMaximise, WindowIsMaximised } from '../wailsjs/runtime/runtime'
+import { WindowMinimise, Quit, WindowToggleMaximise, WindowIsMaximised, EventsOn } from '../wailsjs/runtime/runtime'
 
 // 内置视图 + 动态插件视图（plugin:{id}）
 type BuiltinView = 'overview' | 'devices' | 'transfers' | 'cloud' | 'knowledge' | 'meetings' | 'admin' | 'plugins' | 'settings'
@@ -135,7 +135,14 @@ const toggleMaximise = async () => {
   await WindowToggleMaximise()
   await syncMaximised()
 }
-onMounted(() => { void syncMaximised() })
+onMounted(() => {
+  void syncMaximised()
+  stopPetNavigation = EventsOn('desktop:open-view', (target: string) => {
+    if (target === 'settings' || target === 'transfers') view.value = target
+  })
+})
+let stopPetNavigation: (() => void) | undefined
+onBeforeUnmount(() => { stopPetNavigation?.() })
 
 const activeTaskCount = computed(() => app.snapshot.value.tasks
   .filter(task => taskSection(task) === 'active').length)
@@ -259,9 +266,7 @@ const handleCloudDownloadAs = async (key: string) => {
   await app.cloudDownloadAs(key)
 }
 const handleCloudDelete = async (key: string, subCount?: number, subDirCount?: number) => {
-  // 目录 key 带尾斜杠：递归删时子文件逐个进回收站，目录标记本身直接删（目录没有
-  // es_file 行，不进回收站）。文案必须分开讲，不能沿用文件的「可在回收站还原」
-  // 让用户以为文件夹也能一键还原——还原其中任一文件时目录会按路径重新出现。
+  // 持久目录与内容按同一批次进回收站，确认文案与服务端整批还原保持一致。
   const isDir = key.endsWith('/')
   const name = key.split('/').filter(Boolean).pop() ?? key
   const inner = subCount || subDirCount
@@ -271,8 +276,8 @@ const handleCloudDelete = async (key: string, subCount?: number, subDirCount?: n
     title: isDir ? '删除云端文件夹' : '删除云端文件',
     message: isDir
       ? inner
-        ? `确定删除文件夹「${name}」${inner}？文件删除后可在回收站还原，还原任一文件时该文件夹会重新出现；文件夹本身不进回收站。`
-        : `确定删除空文件夹「${name}」？文件夹不进回收站，删除后不可还原。`
+        ? `确定删除文件夹「${name}」${inner}？整个文件夹及内容会进入回收站，可整批还原，保留 ${RECYCLE_RETENTION_DAYS} 天。`
+        : `确定删除空文件夹「${name}」？删除后可在回收站还原，保留 ${RECYCLE_RETENTION_DAYS} 天。`
       : `确定删除「${name}」？删除后可在回收站还原，回收站保留 ${RECYCLE_RETENTION_DAYS} 天。`,
     confirmText: '删除',
     danger: true,

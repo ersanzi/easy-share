@@ -307,3 +307,55 @@ func TestWritebackRejectsStateWithinRoot(t *testing.T) {
 		t.Fatal("状态目录被允许放入同步根")
 	}
 }
+
+func TestWritebackRestoredLocalFileContinuesOriginalPendingWithoutDuplicateUpload(t *testing.T) {
+	e, f, c := wbSetup(t)
+	f.fail = true
+	wbWrite(t, c, "a", "pending payload")
+	wbStable(t, e)
+	original := *e.state.Records["a"].Pending
+	if err := os.Rename(filepath.Join(c.RootPath, "a"), filepath.Join(c.StateDir, "recycled-local")); err != nil {
+		t.Fatal(err)
+	}
+	wbTick(t, e)
+	if e.state.Records["a"].Pending == nil || *e.state.Records["a"].Pending != original {
+		t.Fatal("本机临时删除丢失原上传意图")
+	}
+	if err := os.Rename(filepath.Join(c.StateDir, "recycled-local"), filepath.Join(c.RootPath, "a")); err != nil {
+		t.Fatal(err)
+	}
+	f.fail = false
+	r := wbStable(t, e)
+	if len(r.Verified) != 1 || string(f.data["a"]) != "pending payload" || f.versions["a"] != 1 || e.state.Records["a"].Pending != nil {
+		t.Fatalf("撤销后的原上传未完成: %+v", r)
+	}
+	before := f.uploads
+	wbStable(t, e)
+	if f.uploads != before || f.versions["a"] != 1 {
+		t.Fatal("已确认的恢复内容被重复上传")
+	}
+}
+
+func TestWritebackUncertainCommitWithLocalUndoAdoptsRemoteWithoutReupload(t *testing.T) {
+	e, f, c := wbSetup(t)
+	f.fail = true
+	wbWrite(t, c, "a", "submitted payload")
+	wbStable(t, e)
+	if err := os.Rename(filepath.Join(c.RootPath, "a"), filepath.Join(c.StateDir, "recycled-local")); err != nil {
+		t.Fatal(err)
+	}
+	wbTick(t, e)
+	// 服务器实际已提交，但本进程尚未收到确认；本机随后从系统回收站撤销回原位置。
+	f.data["a"], f.versions["a"] = []byte("submitted payload"), 1
+	if err := os.Rename(filepath.Join(c.StateDir, "recycled-local"), filepath.Join(c.RootPath, "a")); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewWritebackEngine(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := wbStable(t, restarted)
+	if len(r.Verified) != 1 || f.uploads != 1 || restarted.state.Records["a"].Pending != nil || restarted.state.Records["a"].FileID != 123 {
+		t.Fatalf("提交不明+撤销未按原结果恢复: %+v", r)
+	}
+}

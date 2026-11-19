@@ -62,6 +62,9 @@ type App struct {
 	// 账号控制面（RuoYi）会话。token 只保管在桌面端进程，不下发前端。
 	accountMu      sync.RWMutex
 	accountSession *account.Session
+	// accountRevision 使同账号资料请求的迟到结果无法覆盖新资料或注销后的状态。
+	accountRevision    uint64
+	accountRefreshOnce sync.Once
 	// features 是控制面下发的成员功能权限，只影响入口显隐；真正的拦截在控制面与知识服务。
 	// 与 accountSession 同生命周期：登录时拉取、校验会话时刷新、登出清空。
 	features account.FeatureFlags
@@ -189,6 +192,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.registerNamespace()
 	// 恢复上次登录的账号会话（令牌落盘、只存用户级 AppData）。失败/过期时静默回到登录页。
 	a.restoreAccountSession()
+	a.startAccountProfileRefresh()
 
 	go a.watchdog()
 	go a.eventStream()
@@ -396,6 +400,10 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 	if base == "" {
 		return AuthUser{}, fmt.Errorf("未配置账号服务地址")
 	}
+	a.accountMu.Lock()
+	a.accountRevision++
+	loginRevision := a.accountRevision
+	a.accountMu.Unlock()
 	client := account.New(base)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -405,7 +413,12 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 		return AuthUser{}, err
 	}
 	a.accountMu.Lock()
+	if a.accountRevision != loginRevision {
+		a.accountMu.Unlock()
+		return AuthUser{}, staleProfileError()
+	}
 	a.accountSession = session
+	a.accountRevision++
 	a.features = account.AllFeatures()
 	a.adminScope = ""
 	a.accountMu.Unlock()
@@ -457,6 +470,12 @@ func (a *App) accountSessionPath() string {
 }
 
 func (a *App) saveAccountSession(session *account.Session) {
+	// 与清空会话串行，避免旧资料请求在注销后把令牌重新写回磁盘。
+	a.accountMu.RLock()
+	defer a.accountMu.RUnlock()
+	if session == nil || a.accountSession != session {
+		return
+	}
 	path := a.accountSessionPath()
 	if path == "" {
 		return
@@ -467,19 +486,28 @@ func (a *App) saveAccountSession(session *account.Session) {
 }
 
 func (a *App) clearAccountSession() {
+	a.clearAccountSessionIf(nil)
+}
+
+func (a *App) clearAccountSessionIf(expected *account.Session) bool {
 	a.accountMu.Lock()
+	if expected != nil && a.accountSession != expected {
+		a.accountMu.Unlock()
+		return false
+	}
 	a.accountSession = nil
+	a.accountRevision++
 	a.features = account.FeatureFlags{}
 	a.adminScope = ""
+	path := a.accountSessionPath()
+	if path != "" {
+		if err := account.RemoveSession(path); err != nil {
+			a.logger.Printf("remove account session: %v", err)
+		}
+	}
 	a.accountMu.Unlock()
 	a.SetDropSpace("")
-	path := a.accountSessionPath()
-	if path == "" {
-		return
-	}
-	if err := account.RemoveSession(path); err != nil {
-		a.logger.Printf("remove account session: %v", err)
-	}
+	return true
 }
 
 // restoreAccountSession 启动时恢复落盘会话，再异步向控制面校验：
@@ -504,6 +532,7 @@ func (a *App) restoreAccountSession() {
 	}
 	a.accountMu.Lock()
 	a.accountSession = session
+	a.accountRevision++
 	// 落盘会话不含权限快照：恢复时先按全开显示，等下面异步校验拿到真实配置再收口。
 	a.features = account.AllFeatures()
 	a.adminScope = ""
@@ -520,53 +549,33 @@ func (a *App) restoreAccountSession() {
 }
 
 func (a *App) validateAccountSession() {
-	a.accountMu.RLock()
-	session := a.accountSession
-	a.accountMu.RUnlock()
-	base := strings.TrimSpace(a.config.PlatformBaseURL)
-	if session == nil || session.Token == "" || base == "" {
+	client, session, err := a.accountClient()
+	if err != nil {
 		return
 	}
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	client := account.New(base)
-	fresh, err := client.SessionInfo(ctx, session.Token)
-	if err == nil {
-		// 头像地址与功能权限不在 getInfo 里（前者是我们自己的存储，后者是 EasyShare 的矩阵），
-		// 同一次校验顺手拉齐；失败保留全开，入口不因一次抖动消失。
-		a.syncAccountProfile(ctx, client, fresh)
-		a.accountMu.Lock()
-		if a.accountSession != nil && a.accountSession.Token == session.Token {
-			a.accountSession.User = fresh.User
-			a.accountSession.Roles = fresh.Roles
-			a.accountSession.Permissions = fresh.Permissions
-		}
-		current := a.accountSession
-		a.accountMu.Unlock()
-		if current != nil {
-			a.saveAccountSession(current)
-		}
-		a.notifyAccountChanged()
+	if err := a.refreshAccountSession(ctx, client, session); err == nil {
 		return
-	}
-	if errors.Is(err, account.ErrUnauthorized) {
-		a.logger.Printf("restored account session rejected: %v", err)
-		a.clearAccountSession()
-		// 账号已失效，统一登录的知识会话不能再留着（否则下一个登录的人会看到上一个账号的知识库）。
+	} else if errors.Is(err, account.ErrUnauthorized) {
+		// 旧账号的迟到401必须与清空原子比较，不能越过新的登录世代。
+		if !a.clearAccountSessionIf(session) {
+			return
+		}
+		a.logger.Printf("account session rejected: %v", err)
 		a.clearKnowledgeSSO()
 		a.unmountAllSpaces()
 		a.publishTrayUser()
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "auth:expired")
 		}
-		return
+	} else {
+		a.logger.Printf("validate account session (keep offline): %v", err)
 	}
-	// 控制面不可达时保留本地会话：离线仍可使用局域网传输与本地设置。
-	a.logger.Printf("validate restored account session (keep offline): %v", err)
 }
 
 // ServiceEndpoints 是登录后下发的服务拓扑：客户端只预知控制面一个地址，
@@ -850,6 +859,7 @@ func (a *App) currentUserLocked() AuthUser {
 // notifyAccountChanged 让托盘与前端一起拿最新的账号态（昵称/头像/权限）。
 func (a *App) notifyAccountChanged() {
 	a.publishTrayUser()
+	go a.refreshNativeSpaceLabel()
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "auth:user-updated")
 	}
@@ -859,6 +869,21 @@ func (a *App) notifyAccountChanged() {
 // 读不到时保持「五项全开 + 会话里已有的头像」：入口显隐只是可用性提示，
 // 真正的拦截在控制面与知识服务，不该因为一次网络抖动就把入口全藏起来。
 func (a *App) syncAccountProfile(ctx context.Context, client *account.Client, session *account.Session) {
+	request, valid := a.beginAccountProfileRequest(session)
+	if !valid {
+		return
+	}
+	flags, scope, avatar := a.readAccountProfile(ctx, client, session)
+	a.accountMu.Lock()
+	if a.accountSession == session && a.accountRevision == request {
+		session.User.Avatar = avatar
+		a.features = flags
+		a.adminScope = scope
+	}
+	a.accountMu.Unlock()
+}
+
+func (a *App) readAccountProfile(ctx context.Context, client *account.Client, session *account.Session) (account.FeatureFlags, string, string) {
 	flags := account.AllFeatures()
 	scope := ""
 	if got, err := client.MyPermission(ctx, session.Token); err == nil && got != nil {
@@ -868,22 +893,17 @@ func (a *App) syncAccountProfile(ctx context.Context, client *account.Client, se
 		a.logger.Printf("read feature permissions (keep all enabled): %v", err)
 	}
 	avatar := session.User.AvatarURL
+	if avatar == "" {
+		avatar = session.User.Avatar
+	}
 	if path, err := client.ProfileAvatarURL(ctx, session.Token); err == nil {
 		if path != "" {
 			avatar = absoluteAccountURL(a.config.PlatformBaseURL, path)
 		}
 	} else {
-		a.logger.Printf("read account avatar (keep %q): %v", avatar, err)
+		a.logger.Printf("read account avatar (keep existing): %v", err)
 	}
-	a.accountMu.Lock()
-	// 拉取期间可能已登出或换号：只在令牌仍是同一会话时写回。
-	if a.accountSession != nil && a.accountSession.Token == session.Token {
-		session.User.Avatar = avatar
-		a.features = flags
-		// 拉取失败时保持空串（未知），前端沿用 isAdmin 口径；不能误判成 none 把管理入口关掉。
-		a.adminScope = scope
-	}
-	a.accountMu.Unlock()
+	return flags, scope, avatar
 }
 
 // absoluteAccountURL 把控制面返回的相对地址补成可直接渲染的绝对地址。
@@ -912,14 +932,14 @@ func (a *App) accountClient() (*account.Client, *account.Session, error) {
 // updateSessionAvatar 仅在仍是同一会话时写回头像地址并落盘。
 func (a *App) updateSessionAvatar(session *account.Session, avatar string) {
 	a.accountMu.Lock()
-	if a.accountSession != nil && a.accountSession.Token == session.Token {
-		a.accountSession.User.Avatar = avatar
+	if a.accountSession != session {
+		a.accountMu.Unlock()
+		return
 	}
-	current := a.accountSession
+	a.accountRevision++
+	session.User.Avatar = avatar
 	a.accountMu.Unlock()
-	if current != nil {
-		a.saveAccountSession(current)
-	}
+	a.saveAccountSession(session)
 }
 
 // UpdateNickName 修改自己的昵称，返回更新后的登录态。
@@ -935,14 +955,14 @@ func (a *App) UpdateNickName(nickName string) (AuthUser, error) {
 		return AuthUser{}, err
 	}
 	a.accountMu.Lock()
-	if a.accountSession != nil && a.accountSession.Token == session.Token {
-		a.accountSession.User.NickName = strings.TrimSpace(nickName)
+	if a.accountSession != session {
+		a.accountMu.Unlock()
+		return AuthUser{}, staleProfileError()
 	}
-	current := a.accountSession
+	a.accountRevision++
+	session.User.NickName = strings.TrimSpace(nickName)
 	a.accountMu.Unlock()
-	if current != nil {
-		a.saveAccountSession(current)
-	}
+	a.saveAccountSession(session)
 	a.notifyAccountChanged()
 	return a.CurrentUser(), nil
 }
@@ -1020,24 +1040,10 @@ func (a *App) RefreshProfile() (AuthUser, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	fresh, err := client.SessionInfo(ctx, session.Token)
-	if err != nil {
+	if err := a.refreshAccountSession(ctx, client, session); err != nil {
 		a.reportError("refresh profile", err)
 		return AuthUser{}, err
 	}
-	a.syncAccountProfile(ctx, client, fresh)
-	a.accountMu.Lock()
-	if a.accountSession != nil && a.accountSession.Token == session.Token {
-		a.accountSession.User = fresh.User
-		a.accountSession.Roles = fresh.Roles
-		a.accountSession.Permissions = fresh.Permissions
-	}
-	current := a.accountSession
-	a.accountMu.Unlock()
-	if current != nil {
-		a.saveAccountSession(current)
-	}
-	a.notifyAccountChanged()
 	return a.CurrentUser(), nil
 }
 
@@ -1415,6 +1421,7 @@ func (a *App) AdminSetPersonalQuota(userID string, quotaBytes int64) error {
 	if err == nil {
 		a.logger.Printf("admin set personal quota for %s to %d bytes", userID, quotaBytes)
 		// 改的可能就是自己的配额：重挂一次，让副标题的数字与盘的有无立刻跟上
+		a.publishTrayUser()
 		go a.refreshSpaceMounts()
 	}
 	a.reportError("admin set personal quota", err)
@@ -1721,6 +1728,11 @@ func (a *App) driveClient() (*drive.Client, string, error) {
 		return nil, "", fmt.Errorf("请先登录后再使用网盘")
 	}
 	client := drive.New(base)
+	capabilities, err := client.Capabilities(a.ctx, session.Token)
+	if err != nil {
+		return nil, "", err
+	}
+	client.VerifyUploadCommit = capabilities.UploadCommitVerification
 	// 大文件会话持久化目录：与 config.json 同级（数据根），进程重启后同指纹
 	// 文件自动续传（断点续传的"断点"落在本机，服务端会话状态由控制面记账）
 	client.Sessions = drive.NewSessionStore(filepath.Join(filepath.Dir(a.configPath), "upload-sessions"))
@@ -2569,6 +2581,11 @@ func placeDownloadedFile(tempPath, target string) error {
 }
 
 func (a *App) CloudDelete(key string) error {
+	if handled, err := a.deleteNativeCloudKey(key); handled {
+		a.reportError("cloud delete", err)
+		a.cloudMutationChanged()
+		return err
+	}
 	client, token, err := a.driveClient()
 	if err != nil {
 		return err
@@ -2596,6 +2613,9 @@ func (a *App) CloudDelete(key string) error {
 		err = client.Delete(a.ctx, token, drive.SpacePersonal, key)
 	}
 	a.reportError("cloud delete", err)
+	if err == nil {
+		a.cloudMutationChanged()
+	}
 	return err
 }
 
@@ -2745,8 +2765,23 @@ func (a *App) CloudRecycleRestore(fileID string) error {
 	if err != nil {
 		return err
 	}
-	err = client.RecycleRestore(a.ctx, token, drive.SpacePersonal, id)
+	safe, capabilityErr := client.SupportsSafeRecycle(a.ctx, token, drive.SpacePersonal)
+	if capabilityErr != nil {
+		return capabilityErr
+	}
+	if safe {
+		result, restoreErr := client.RestoreOperation(a.ctx, token, drive.SpacePersonal, id)
+		err = restoreErr
+		if err == nil {
+			err = a.restoreNativeCloudResult(result)
+		}
+	} else {
+		err = client.RecycleRestore(a.ctx, token, drive.SpacePersonal, id)
+	}
 	a.reportError("cloud recycle restore", err)
+	if err == nil {
+		a.cloudMutationChanged()
+	}
 	return err
 }
 
@@ -2762,6 +2797,9 @@ func (a *App) CloudRecyclePurge(fileID string) error {
 	}
 	err = client.RecyclePurge(a.ctx, token, drive.SpacePersonal, id)
 	a.reportError("cloud recycle purge", err)
+	if err == nil {
+		a.cloudMutationChanged()
+	}
 	return err
 }
 

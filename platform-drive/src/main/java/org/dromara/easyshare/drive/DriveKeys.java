@@ -112,6 +112,16 @@ public final class DriveKeys {
      * @param relative 客户端相对路径
      * @return 绝对对象键
      */
+    /** 用户操作不得直接访问程序内部版本/回收正文，存储内部仍使用normalizeRelative。 */
+    public static String requireUserPath(String raw) {
+        String path = normalizeRelative(raw);
+        String first = path.split("/", 2)[0];
+        if (".recycle".equalsIgnoreCase(first) || ".versions".equalsIgnoreCase(first)) {
+            throw new ServiceException("该路径为网盘内部保留位置，不能直接操作");
+        }
+        return path;
+    }
+
     public static String absoluteKey(Long userId, String relative) {
         return userPrefix(userId) + normalizeRelative(relative);
     }

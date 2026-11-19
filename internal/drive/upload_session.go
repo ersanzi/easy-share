@@ -146,8 +146,13 @@ func (s *SessionStore) Load(space, path string, size, modTime int64) *sessionSta
 	return &state
 }
 
-// Save 落盘会话快照（原子写惯例：临时文件 + rename）。
+// Save 落盘会话快照；Windows 临时占用只有限重试同一 rename，不删目标或降级覆盖。
 func (s *SessionStore) Save(state *sessionState) error {
+	return s.saveWithRename(state, renameUploadSession)
+}
+
+// saveWithRename 仅隔离原子替换的测试注入点；序列化、指纹与临时正文在重试前固定。
+func (s *SessionStore) saveWithRename(state *sessionState, rename func(string, string) error) error {
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -157,7 +162,7 @@ func (s *SessionStore) Save(state *sessionState) error {
 	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, target)
+	return rename(tmp, target)
 }
 
 // Clear 会话终态（完成/放弃）后清理本地快照。

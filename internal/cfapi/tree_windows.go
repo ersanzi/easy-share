@@ -44,6 +44,8 @@ type CloudEntry struct {
 	Path string
 	// Size 是字节数；目录为 0。
 	Size int64
+	// Version 来自控制面当前清单，供状态投影核对已提交基线；不写进占位身份。
+	Version int64
 	// ModifiedUnix 是最后修改时间（Unix 秒）。0 表示未知。
 	ModifiedUnix int64
 	// IsDir 为 true 表示目录。

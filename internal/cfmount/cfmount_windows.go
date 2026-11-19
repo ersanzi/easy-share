@@ -137,8 +137,9 @@ func entries(objects []drive.Object, writable bool) []cfapi.CloudEntry {
 			continue
 		}
 		out = append(out, cfapi.CloudEntry{
-			Path: o.Path,
-			Size: o.Size,
+			Path:    o.Path,
+			Size:    o.Size,
+			Version: o.VersionId.Int64(),
 			// 零时间要落成 0（cfapi 的「未知」哨兵），不能直接给 time.Time{}.Unix()：
 			// 那是 -62135596800，换算成 FILETIME 会变成负数，
 			// 内核直接拒绝建占位符（0x80070057）。增量事件流只带身份不带时间，

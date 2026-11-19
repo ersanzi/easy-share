@@ -128,10 +128,7 @@ func (a *App) refreshSpaceMounts() {
 	dirStore := spacedav.NewDirStore(filepath.Join(filepath.Dir(a.configPath), "dirs.json"))
 	userID := session.User.UserID
 	// 昵称优先、退回账号名：条目名要让人一眼认出是谁的盘
-	displayName := session.User.NickName
-	if displayName == "" {
-		displayName = session.User.UserName
-	}
+	displayName := session.User.DisplayName()
 
 	var mounts []namespace.SpaceMount
 	var keep = map[string]bool{}

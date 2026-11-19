@@ -33,6 +33,14 @@ Windows 可按 `Win + R` 粘贴对应路径；macOS 可在 Finder 使用“前�
 - 对未水合/冲突/未上传文件的保护告警不能用删除pending、注销同步根、盲目重建目录消除。保存原文件、状态和日志后再诊断。
 - 真实验收必须从“此电脑”点击进入，在根目录新建/粘贴/拖入，独立从服务器回读；仅namespace注册或API测试成功不足以验收。
 
+### 桌面宠物与状态列
+
+- 先确认实际运行的是包含 `desktop_pet_windows.go` 的配套双程序，不能只编出候选不切换就宣称用户桌面可见；宠物位置记忆可按当前显示器工作区恢复。
+- 状态图标列应为 `System.StorageProviderUIStatus`，不是“可用性状态”文字列；需要WinRT提供方展示与权威CFAPI状态，不能强写其BLOB合成值。
+- Windows Search禁用可令volatile Commit报 `0x80070422`；只能在批准范围受控启动并核对实际索引规则，不自动开启全盘/业务索引。
+- Explorer导航过程中成功HRESULT仍可能尚无当前view；应等待下一次采样，不能传空vtable，不用recover掩盖。
+- 同步箭头/进度必须来自真实未确认传输或修改；未知普通项、失败/pending不得刷绿，失败详情继续从真实任务和日志查。
+
 ### 旧WebDAV入口、局域网或非Windows通路
 
 以下排查只适用于原有WebDAV路径，不适用于上述Windows个人CFAPI。EasyShare不映射固定盘符：局域网服务默认 `\\127.0.0.1@19080\DavWWWRoot`；非Windows云空间保留个人19082、共享19083服务。双击打不开或显示为空时，按顺序检查：

@@ -115,6 +115,10 @@ type Client struct {
 	// Sessions 大文件会话持久化（Multipart 断点续传）。nil 时大文件走
 	// 单请求上传，行为与 2026-09-06 之前一致；生产装配见 app.go driveClient。
 	Sessions *SessionStore
+
+	// VerifyUploadCommit 仅在装配方确认服务端 UploadCommitVerification 能力后启用。
+	// 默认 false：不增加旧服务端/旧测试的请求，也不逐次 GET capabilities。
+	VerifyUploadCommit bool
 }
 
 // SetTransferTransportForTest 替换直传/直取用的传输层（**仅供测试**）。
@@ -662,7 +666,15 @@ func (c *Client) call(ctx context.Context, method, path, token string, body []by
 	}
 	req.Header.Set("clientid", pcClientID)
 
-	resp, err := c.http.Do(req)
+	control := c.http
+	if path == "/easyshare/drive/object" && method == http.MethodDelete ||
+		strings.HasPrefix(path, "/easyshare/drive/recycle/") && method == http.MethodPost {
+		// 独立正文复制/核验可能超过普通控制面15秒；仍由请求ctx控制取消，不自动重发。
+		longOperation := *c.http
+		longOperation.Timeout = 10 * time.Minute
+		control = &longOperation
+	}
+	resp, err := control.Do(req)
 	if err != nil {
 		return fmt.Errorf("连接云盘服务失败：%w", err)
 	}
@@ -694,6 +706,10 @@ func (c *Client) call(ctx context.Context, method, path, token string, body []by
 // RecycleEntry 是回收站里的一条记录（控制面 es_file 的 recycled 行）。
 // OriginPath 是删除前的路径快照，还原落点；VersionId 是覆盖上传递增的版本号。
 type RecycleEntry struct {
+	// 新服务端的批次只返回根条目；缺失这些字段的旧回收站仍按文件显示。
+	Directory     bool   `json:"directory"`
+	BatchId       string `json:"batchId"`
+	SnapshotState string `json:"snapshotState"`
 	// 与 Object.FileId 同理：超 JS 安全整数的 Long 会被序列化成字符串，
 	// 用 FlexInt64 两种形态都收（否则整个回收站列表解析失败）。
 	FileId     FlexInt64  `json:"fileId"`
@@ -716,23 +732,29 @@ type RecycleEntry struct {
 // 这不是风格偏好，是「19 位整数在 JS 里只有字符串能无损表示」的硬约束。
 // RuoYi 自己也正是因此把这些字段序列化成字符串。
 type RecycleEntryView struct {
-	FileId     string     `json:"fileId"`
-	Path       string     `json:"path"`
-	OriginPath string     `json:"originPath"`
-	Size       int64      `json:"size"`
-	VersionId  int64      `json:"versionId"`
-	DeletedAt  *time.Time `json:"deletedAt"`
+	Directory     bool       `json:"directory"`
+	BatchId       string     `json:"batchId"`
+	SnapshotState string     `json:"snapshotState"`
+	FileId        string     `json:"fileId"`
+	Path          string     `json:"path"`
+	OriginPath    string     `json:"originPath"`
+	Size          int64      `json:"size"`
+	VersionId     int64      `json:"versionId"`
+	DeletedAt     *time.Time `json:"deletedAt"`
 }
 
 // View 转成前端形态（雪花 ID 转十进制字符串，保住精度）。
 func (e RecycleEntry) View() RecycleEntryView {
 	return RecycleEntryView{
-		FileId:     strconv.FormatInt(e.FileId.Int64(), 10),
-		Path:       e.Path,
-		OriginPath: e.OriginPath,
-		Size:       e.Size.Int64(),
-		VersionId:  e.VersionId.Int64(),
-		DeletedAt:  e.DeletedAt,
+		Directory:     e.Directory,
+		BatchId:       e.BatchId,
+		SnapshotState: e.SnapshotState,
+		FileId:        strconv.FormatInt(e.FileId.Int64(), 10),
+		Path:          e.Path,
+		OriginPath:    e.OriginPath,
+		Size:          e.Size.Int64(),
+		VersionId:     e.VersionId.Int64(),
+		DeletedAt:     e.DeletedAt,
 	}
 }
 

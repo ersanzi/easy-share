@@ -286,9 +286,12 @@ export function useEasyShare() {
   // 拉取当前登录态。Go 侧 Startup 要等 EnsureCore 返回后才恢复落盘会话，
   // 冷启动时前端可能先挂载——首次调用拿到的是未登录，必须等 Core 就绪后再取一次，
   // 否则有效会话会被显示成登录页、逼用户重登。
-  const syncAuth = () => Promise.resolve(core.currentUser())
-    .then(user => { if (!disposed && user) currentUser.value = user })
-    .catch(() => undefined)
+  const syncAuth = () => {
+    const revision = ++authRevision
+    return Promise.resolve(core.currentUser())
+      .then(user => { if (!disposed && user && authRevision === revision) currentUser.value = user })
+      .catch(() => undefined)
+  }
 
   // 桌面端后台刷新了账号态（资料修改、启动校验拿到新权限）：重新取一次。
   const handleUserUpdated = () => { void syncAuth() }
@@ -357,10 +360,11 @@ export function useEasyShare() {
     loggingIn,
     updateAvailable,
     login: async (username: string, password: string): Promise<boolean> => {
-      authRevision++
+      const revision = ++authRevision
       loggingIn.value = true
       try {
         const user = await core.login(username, password)
+        if (disposed || authRevision !== revision) return false
         currentUser.value = user
         clearError()
         return true

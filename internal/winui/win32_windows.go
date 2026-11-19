@@ -62,17 +62,20 @@ const (
 	WSExToolWindow = 0x00000080 // 不在任务栏和 Alt-Tab 中出现
 	WSExTopMost    = 0x00000008
 	WSExNoActivate = 0x08000000 // 点击不抢焦点，浮窗弹出时不打断用户输入
+	// WSExComposited 让 DWM 自底向上合成宠物，配合位图缓存抑制快速悬停时的文字抖动。
+	WSExComposited = 0x02000000
 	WSPopup        = 0x80000000
 	WSClipChildren = 0x02000000
 
 	SWHide         = 0
 	SWShowNoActive = 4
 
-	SWPNoSize     = 0x0001
-	SWPNoMove     = 0x0002
-	SWPNoActivate = 0x0010
-	SWPShowWindow = 0x0040
-	SWPNoZOrder   = 0x0004
+	SWPNoSize         = 0x0001
+	SWPNoMove         = 0x0002
+	SWPNoActivate     = 0x0010
+	SWPNoSendChanging = 0x0400 // WM_WINDOWPOSCHANGING 不再发给同层窗口，减少悬停重排抖动。
+	SWPShowWindow     = 0x0040
+	SWPNoZOrder       = 0x0004
 
 	HWNDTopMost = ^uintptr(0) // (HWND)-1
 
@@ -419,6 +422,12 @@ func NewNotifyIconData(hwnd uintptr, id uint32, tip string) *NotifyIconData {
 	}
 	copyUTF16(data.SzTip[:], tip)
 	return data
+}
+
+// SetNotifyIconTip 更新系统 tooltip，清空旧尾部并保留稳定 GUID/原 flags。
+func SetNotifyIconTip(data *NotifyIconData, text string) {
+	data.SzTip = [128]uint16{}
+	copyUTF16(data.SzTip[:], text)
 }
 
 // ShellNotifyIcon 调用 Shell_NotifyIconW。

@@ -41,3 +41,4 @@ func (a *App) CloudFreeUpSpace(string) error {
 }
 
 func (a *App) nativeDropAvailable(string) error { return nil }
+func (a *App) refreshNativeSpaceLabel()         { go a.refreshSpaceMounts() }

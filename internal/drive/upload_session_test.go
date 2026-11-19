@@ -143,7 +143,9 @@ func TestMultipartFingerprintChangeAbortsOldSession(t *testing.T) {
 		Size: int64(len(content)), ModTime: modTime.Unix(),
 		Done: []PartETag{{PartNumber: 1, ETag: "\"pre\""}},
 	}
-	_ = store.Save(state0)
+	if err := store.Save(state0); err != nil {
+		t.Fatal(err)
+	}
 
 	// 文件内容变化 → mtime 变 → 指纹不匹配：应 Create 新会话并 Abort 旧逻辑由服务端做
 	if err := os.Chtimes(localPath, time.Now(), time.Now().Add(time.Second)); err != nil {

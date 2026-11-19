@@ -14,6 +14,11 @@ import (
 var assets embed.FS
 
 func main() {
+	// Shell 菜单启动的短进程只转发给已运行实例，绝不初始化第二套客户端。
+	if platformShellCommandHandled() {
+		return
+	}
+
 	// Create an instance of the app structure
 	app := NewApp()
 

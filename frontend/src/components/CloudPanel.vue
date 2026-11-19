@@ -6,6 +6,7 @@ import RecyclePanel from './RecyclePanel.vue'
 import { buildDriveView, relativeDir } from '../utils/driveFolder'
 import type { DriveSortDir, DriveSortKey } from '../utils/driveFolder'
 import { core } from '../services/core'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 
 defineProps<{ enabled: boolean }>()
@@ -804,7 +805,9 @@ const enterFolder = (path: string) => {
   searchQuery.value = ''
 }
 
+let stopCloudChanged: (() => void) | undefined
 onMounted(() => {
+  stopCloudChanged = EventsOn('cloud:changed', () => { void loadFiles(); void loadSpaceUsage() })
   loadFiles()
   loadCfapiPath()
   loadSpaceUsage()
@@ -816,6 +819,7 @@ onMounted(() => {
   window.addEventListener('scroll', closeCtxMenu, true)
 })
 onBeforeUnmount(() => {
+  stopCloudChanged?.()
   document.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('click', closeCtxMenu)
   window.removeEventListener('resize', closeCtxMenu)

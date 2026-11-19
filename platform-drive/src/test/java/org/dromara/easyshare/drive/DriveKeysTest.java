@@ -16,6 +16,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class DriveKeysTest {
 
     @Test
+    void userPathsCannotOverwriteInternalRecycleOrVersions() {
+        for (String path : new String[]{".recycle/batch/7/v3", ".RECYCLE", ".versions/x/v1"}) {
+            assertThrows(ServiceException.class, () -> DriveKeys.requireUserPath(path));
+        }
+        assertEquals("我的 文档.txt", DriveKeys.requireUserPath("我的 文档.txt"));
+        assertEquals(".recycle/batch/7/v3", DriveKeys.normalizeRelative(".recycle/batch/7/v3"));
+    }
+
+    @Test
     void absoluteKeyCarriesUserPrefix() {
         assertEquals("users/1/a.txt", DriveKeys.absoluteKey(1L, "a.txt"));
         assertEquals("users/2/photos/2024/img.jpg", DriveKeys.absoluteKey(2L, "photos/2024/img.jpg"));

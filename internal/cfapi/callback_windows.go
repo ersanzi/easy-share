@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // 本文件实现 CfApi 的**回调侧**：连接同步根、注册 FETCH_DATA 回调、
@@ -268,7 +270,7 @@ const statusSuccess uint32 = 0x00000000
 // 用 var 而非 const：该值 > math.MaxInt32，而 CompletionStatus 字段声明为
 // int32（为与 C 布局一致）。常量的 int32() 转换会在**编译期**报溢出；
 // 变量的转换在运行期按位截断，正是我们要的语义。
-var statusCloudFileUnsuccessful = uint32(0xC000CF0C)
+var statusCloudFileUnsuccessful = uint32(windows.STATUS_CLOUD_FILE_UNSUCCESSFUL)
 
 // Session 是一次「已连接的同步根」。用 Connect 创建、Close 释放。
 //
@@ -289,6 +291,7 @@ type Session struct {
 	transferObserver  func(int64, int64, uintptr)
 	work              sync.WaitGroup
 	requests          map[fetchWorkKey]*fetchWork
+	operations        *OperationCallbacks
 }
 
 type fetchWorkKey struct{ transfer, request int64 }
@@ -304,6 +307,10 @@ type fetchWork struct{ cancel context.CancelFunc }
 // connectFlags 建议传 ConnectFlagRequireProcessInfo | ConnectFlagRequireFullFilePath，
 // 与 WPS 实测一致（取证 §3.2b）；RequireProcessInfo 是后续做读取节流的前置条件。
 func Connect(rootPath string, fetcher Fetcher, connectFlags uint32) (*Session, error) {
+	return connectWithOperations(rootPath, fetcher, connectFlags, nil)
+}
+
+func connectWithOperations(rootPath string, fetcher Fetcher, connectFlags uint32, operations *OperationCallbacks) (*Session, error) {
 	if fetcher == nil {
 		return nil, fmt.Errorf("cfapi: fetcher 不能为 nil")
 	}
@@ -312,16 +319,21 @@ func Connect(rootPath string, fetcher Fetcher, connectFlags uint32) (*Session, e
 		return nil, fmt.Errorf("cfapi: 同步根路径转换失败: %w", err)
 	}
 
-	s := &Session{rootPath: rootPath, fetcher: fetcher, requests: make(map[fetchWorkKey]*fetchWork), active: true}
+	s := &Session{rootPath: rootPath, fetcher: fetcher, operations: operations, requests: make(map[fetchWorkKey]*fetchWork), active: true}
 
-	// 回调表：两项 + 终止项。回调函数指针用 syscall.NewCallback 生成，
-	// 该 trampoline 会正确切到 Go 栈，因此回调里可以安全使用 Go 代码
-	// （包括 goroutine、互斥锁、defer）。
+	// 旧读路径保持两项；只有显式写适配器才注册需要ACK的操作回调。
 	table := []callbackRegistration{
 		{Type: int32(CallbackTypeFetchData), Callback: syscall.NewCallback(s.onFetchData)},
 		{Type: int32(CallbackTypeCancelFetchData), Callback: syscall.NewCallback(s.onCancelFetchData)},
-		{Type: int32(CallbackTypeNone), Callback: 0},
 	}
+	if operations != nil {
+		table = append(table,
+			callbackRegistration{Type: int32(CallbackTypeNotifyDelete), Callback: syscall.NewCallback(s.onNotifyDelete)},
+			callbackRegistration{Type: int32(CallbackTypeNotifyDeleteCompletion), Callback: syscall.NewCallback(s.onNotifyDeleteCompletion)},
+			callbackRegistration{Type: int32(CallbackTypeNotifyRename), Callback: syscall.NewCallback(s.onNotifyRename)},
+			callbackRegistration{Type: int32(CallbackTypeNotifyRenameCompletion), Callback: syscall.NewCallback(s.onNotifyRenameCompletion)})
+	}
+	table = append(table, callbackRegistration{Type: int32(CallbackTypeNone), Callback: 0})
 
 	p, err := proc("CfConnectSyncRoot")
 	if err != nil {

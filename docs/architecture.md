@@ -41,7 +41,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | --- | --- |
 | `main.go` | Wails 窗口创建、Frameless、DragAndDrop、OnBeforeClose 隐藏/退出 |
 | `app.go` | 前端桥接、Core 探测/启动、事件流订阅、系统通知、watchdog |
-| `tray_windows.go` + `tray_hover_windows.go` | Windows 托盘（原生 `Shell_NotifyIcon` + `NOTIFYICON_VERSION_4`，systray 已移除）与托盘悬停浮窗（独立线程 Win32 窗口内嵌 WebView2） |
+| `tray_windows.go` + `tray_hover_windows.go` + `desktop_pet_windows.go` | Windows 原生托盘菜单与常驻圆角桌面宠物；宠物/展开WebView2面板同属独立UI线程，托盘悬停不再弹富窗，双击固定面板仍可拖动，服务器上传复用原任务通路 |
 | `tray_darwin.go` + `tray_native_darwin.m` | macOS 菜单栏（NSStatusItem，不接管 AppDelegate） |
 | `cmd/core/main.go` | Core 组装、信号监听、优雅退出 |
 | `internal/api` | HTTP 路由、WebSocket eventHub、状态、资源清理 |
@@ -55,6 +55,7 @@ EasyShare 由两个进程组成（Windows 为 .exe，macOS 为无后缀二进制
 | `internal/winui` | Win32 窗口几何与工具（悬停浮窗定位/多显示器适配） |
 | `spacemount.go` + `cfmount_app_windows.go` | 登录态与平台挂载编排：Windows 个人CFAPI、非Windows原空间通路、悬浮窗空间目标 |
 | `internal/cfapi` + `internal/cfmount` | 按需读取、持久同步根、条件写回、受保护目录投影及已验证缓存回收 |
+| `internal/shellroot` + `internal/shellstatus` + `internal/explorerview` | 完整WinRT提供方展示、原生volatile活动/进度、云盘专属状态图标/默认详细视图；生命周期不破坏性注销根，不读取正文来猜状态 |
 | `appupdate.go` + `internal/update` | 客户端在线升级（检查/下载/SHA256 校验/静默安装，升级源为控制面，见第 4b 节） |
 | `internal/cloud` | 网盘视图类型与预览辅助（`File`/`Preview`/预览分类/文本限量内联），供桌面端 Wails 绑定使用；Core 直连 S3 的 Service 与路由已删（KI-5） |
 | `internal/cloud/objectstore` | S3 兼容存储抽象（s3store + memory fake，`scripts/create_bucket.go` 等控制面之外的用途仍在用） |

@@ -34,7 +34,8 @@ class DrivePresignSafetyTest {
         when(storage.presignPutAt(PREFIX, "empty.txt")).thenReturn("https://store.invalid/empty");
         controller = new DriveController(storage, spaces, mock(SpaceUsageService.class), files,
             mock(FileRoleService.class), mock(DriveUploadService.class), mock(DriveMoveService.class), mock(DriveChangeLogService.class),
-            mock(SysUserDeptMapper.class), mock(FileMarkService.class), mock(ShareService.class), versions);
+            mock(SysUserDeptMapper.class), mock(FileMarkService.class), mock(ShareService.class),
+            mock(DriveRecycleService.class), versions);
         login = mockStatic(LoginHelper.class);
         login.when(LoginHelper::getUserId).thenReturn(1L);
     }

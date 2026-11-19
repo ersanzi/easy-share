@@ -64,7 +64,7 @@ public class DriveUploadService {
     public EsUploadSession create(String spaceType, Long ownerId, Long uploadBy,
                                   String relativePath, long declaredSize, Long expectedVersion,
                                   String contentMd5) {
-        String path = DriveKeys.normalizeRelative(relativePath);
+        String path = DriveKeys.requireUserPath(relativePath);
         String prefix = EsUploadSession.TYPE_SHARED.equals(spaceType)
             ? spaceService.checkSharedWritable(uploadBy, declaredSize)
             : spaceService.checkPersonalWritable(uploadBy, declaredSize);
@@ -140,7 +140,7 @@ public class DriveUploadService {
                 session.getFilePath(), session.getExpectedVersion());
             fileService.registerOnPresign(session.getSpaceType(), session.getOwnerId(),
                 session.getUploadBy(), session.getFilePath(), session.getDeclaredSize(),
-                session.getExpectedVersion());
+                session.getExpectedVersion(), session.getContentMd5());
         } catch (RuntimeException ex) {
             // 校验没过：S3 端的分片已经没有价值了，顺手清掉，别让它白占容量。
             // 注意这里**还没有聚合**，目标键上仍是对方的内容，一个字节都没动。

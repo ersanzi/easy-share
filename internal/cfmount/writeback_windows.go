@@ -3,7 +3,9 @@
 package cfmount
 
 import (
+	"errors"
 	"os"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -82,7 +84,25 @@ func replaceWritebackState(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return windows.MoveFileEx(a, b, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return replaceWritebackStateWithRetry(func() error {
+		return windows.MoveFileEx(a, b, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	})
+}
+
+// Windows 扫描/属性查询可短暂阻止替换；仅重试同一原子操作，不删目标、降级写入或吞错。
+// 持续权限拒绝仍在有限期限内失败，上层不得继续上传未持久化的意图。
+func replaceWritebackStateWithRetry(move func() error) error {
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		err = move()
+		if err == nil || !(errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)) {
+			return err
+		}
+		if attempt < 5 {
+			time.Sleep(time.Duration(10<<attempt) * time.Millisecond)
+		}
+	}
+	return err
 }
 
 // 元数据句柄捕获身份，不读取或水合正文。

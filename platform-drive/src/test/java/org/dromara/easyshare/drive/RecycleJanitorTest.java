@@ -5,7 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.dromara.easyshare.drive.domain.EsFile;
 import org.dromara.easyshare.drive.mapper.EsFileMapper;
-import org.dromara.easyshare.drive.service.DriveFileService;
+import org.dromara.easyshare.drive.service.DriveRecycleService;
 import org.dromara.easyshare.drive.service.RecycleJanitor;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,8 +16,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -38,7 +36,7 @@ import static org.mockito.Mockito.when;
 class RecycleJanitorTest {
 
     private EsFileMapper mapper;
-    private DriveFileService fileService;
+    private DriveRecycleService recycleService;
     private RecycleJanitor janitor;
 
     @BeforeAll
@@ -53,8 +51,8 @@ class RecycleJanitorTest {
     @BeforeEach
     void setUp() {
         mapper = mock(EsFileMapper.class);
-        fileService = mock(DriveFileService.class);
-        janitor = new RecycleJanitor(mapper, fileService);
+        recycleService = mock(DriveRecycleService.class);
+        janitor = new RecycleJanitor(mapper, recycleService);
     }
 
     private static EsFile recycled(long fileId, LocalDateTime deletedAt) {
@@ -68,6 +66,10 @@ class RecycleJanitorTest {
         return row;
     }
 
+    private static DriveRecycleService.Result purged(int members) {
+        return new DriveRecycleService.Result(null, null, null, null, false, "purged", members);
+    }
+
     @Test
     void 拿到几条就清几条_返回值与条数一致() {
         LocalDateTime now = LocalDateTime.of(2026, 10, 17, 3, 30);
@@ -75,11 +77,12 @@ class RecycleJanitorTest {
             recycled(1L, now.minusDays(35)),
             recycled(2L, now.minusDays(31))
         ));
+        when(recycleService.purgeExpiredFile(any())).thenReturn(purged(1));
 
         int purged = janitor.purgeExpired(now);
 
         assertEquals(2, purged);
-        verify(fileService, times(2)).purgeFromRecycle(anyString(), anyLong(), anyLong());
+        verify(recycleService, times(2)).purgeExpiredFile(any());
     }
 
     @Test
@@ -90,20 +93,17 @@ class RecycleJanitorTest {
             recycled(2L, now.minusDays(35)),
             recycled(3L, now.minusDays(31))
         ));
-        // 中间那条抛错：既不能让它带走整批，也不能被算作「已清理」
-        when(fileService.purgeFromRecycle(anyString(), anyLong(), anyLong()))
-            .thenAnswer(invocation -> {
-                Long id = invocation.getArgument(2);
-                if (id == 2L) {
-                    throw new RuntimeException("对象存储超时");
-                }
-                return null;
-            });
+        // 中间旧条目抛错：不计数，且不妨碍后续条目。
+        when(recycleService.purgeExpiredFile(any())).thenAnswer(invocation -> {
+            EsFile row = invocation.getArgument(0);
+            if (row.getFileId() == 2L) { throw new RuntimeException("对象存储超时"); }
+            return purged(1);
+        });
 
         int purged = janitor.purgeExpired(now);
 
         assertEquals(2, purged);
-        verify(fileService, times(3)).purgeFromRecycle(anyString(), anyLong(), anyLong());
+        verify(recycleService, times(3)).purgeExpiredFile(any());
     }
 
     @Test
@@ -113,6 +113,41 @@ class RecycleJanitorTest {
         int purged = janitor.purgeExpired(LocalDateTime.of(2026, 10, 17, 3, 30));
 
         assertEquals(0, purged);
-        verify(fileService, never()).purgeFromRecycle(anyString(), anyLong(), anyLong());
+        verify(recycleService, never()).purgeExpiredFile(any());
+    }
+
+    @Test
+    void 同批只清根一次_子项不抢占批次_按成员数累计() {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 17, 3, 30);
+        EsFile child = recycled(2L, now.minusDays(35));
+        EsFile root = recycled(1L, now.minusDays(35));
+        EsFile duplicateRoot = recycled(1L, now.minusDays(35));
+        for (EsFile row : List.of(child, root, duplicateRoot)) {
+            row.setSpaceType(EsFile.TYPE_SHARED); row.setOwnerId(EsFile.SHARED_OWNER);
+            row.setRecycleBatchId("shared-batch");
+            row.setRecycleRoot(row.getFileId() == 1L);
+        }
+        when(mapper.selectList(any())).thenReturn(List.of(child, root, duplicateRoot, child));
+        when(recycleService.purgeExpiredFile(root)).thenReturn(purged(4));
+
+        assertEquals(4, janitor.purgeExpired(now));
+        verify(recycleService, times(1)).purgeExpiredFile(any());
+        verify(recycleService).purgeExpiredFile(root);
+        verify(recycleService, never()).purgeExpiredFile(child);
+    }
+
+    @Test
+    void 未确认成功或空结果不计数_继续后续条目() {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 17, 3, 30);
+        when(mapper.selectList(any())).thenReturn(List.of(
+            recycled(1L, now.minusDays(35)), recycled(2L, now.minusDays(35)),
+            recycled(3L, now.minusDays(35))
+        ));
+        when(recycleService.purgeExpiredFile(any())).thenReturn(
+            new DriveRecycleService.Result(null, null, null, null, false, "purging", 8),
+            null, purged(1));
+
+        assertEquals(1, janitor.purgeExpired(now));
+        verify(recycleService, times(3)).purgeExpiredFile(any());
     }
 }

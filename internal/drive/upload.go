@@ -91,13 +91,20 @@ func (c *Client) UploadFileIfVersion(ctx context.Context, token, space, objectPa
 	// 大文件走 Upload Session 分片（断点续传）；小文件单请求直传更省往返。
 	// 分流阈值与会话恢复逻辑都封装在包内，调用方无感。
 	if c.Sessions != nil && size >= multipartThreshold {
-		return c.uploadFileMultipart(ctx, token, space, objectPath, localPath, size, info.ModTime(),
+		err = c.uploadFileMultipart(ctx, token, space, objectPath, localPath, size, info.ModTime(),
 			expectedVersion, hash, onProgress)
+		if err == nil && c.VerifyUploadCommit {
+			_, err = c.CommitUpload(ctx, token, space, objectPath, size, hash)
+		}
+		return err
 	}
 	var body io.Reader = file
 	if onProgress != nil {
 		body = &progressReader{reader: file, total: size, onReport: onProgress}
 	}
 	_, err = c.upload(ctx, token, space, objectPath, body, size, expectedVersion, hash)
+	if err == nil && c.VerifyUploadCommit {
+		_, err = c.CommitUpload(ctx, token, space, objectPath, size, hash)
+	}
 	return err
 }

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.async.AsyncRequestBody;
+import software.amazon.awssdk.core.async.AsyncResponseTransformer;
 import software.amazon.awssdk.core.checksums.RequestChecksumCalculation;
 import software.amazon.awssdk.core.checksums.ResponseChecksumValidation;
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
@@ -17,12 +18,17 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.CompletedMultipartUpload;
 import software.amazon.awssdk.services.s3.model.CompletedPart;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -145,6 +151,44 @@ public class DriveStorage {
             }
             throw new ServiceException("对象元数据校验失败: " + cause.getMessage());
         }
+    }
+
+    /** 流式核验整对象正文；ETag（含分片 ETag）不是内容哈希。 */
+    public String sha256At(String prefix, String relative) {
+        ensureReady();
+        String key = DriveKeys.keyAt(prefix, relative);
+        try (var input = client.getObject(GetObjectRequest.builder()
+            .bucket(properties.getBucket()).key(key).build(),
+            AsyncResponseTransformer.toBlockingInputStream()).join()) {
+            return digestInput(input);
+        } catch (IOException | RuntimeException ex) {
+            // 不透传 SDK/网络错误原文，避免 URL、请求头或凭据泄露。
+            throw new ServiceException("对象 SHA-256 内容校验失败，请确认对象存在且可读后重试");
+        }
+    }
+
+    /** HEAD 大小相同还须逐字节流式哈希相同；缺对象返回 false，读取故障上抛。 */
+    public boolean sameSnapshotContent(String prefix, String source, String target) {
+        ObjectMetadata sourceMetadata = metadataAt(prefix, source);
+        ObjectMetadata targetMetadata = metadataAt(prefix, target);
+        return sourceMetadata != null && targetMetadata != null
+            && sourceMetadata.size() == targetMetadata.size()
+            && this.sha256At(prefix, source).equals(this.sha256At(prefix, target));
+    }
+
+    /** 固定大小缓冲；流的所有权归调用方，sha256At 用 try-with-resources 关闭。 */
+    static String digestInput(InputStream input) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("Java 运行环境缺少 SHA-256 算法", ex);
+        }
+        byte[] buffer = new byte[64 * 1024];
+        for (int read; (read = input.read(buffer)) != -1;) {
+            digest.update(buffer, 0, read);
+        }
+        return java.util.HexFormat.of().formatHex(digest.digest());
     }
 
     /** 单请求对象的 ETag 可核对 MD5；分片 ETag 不匹配时不采用秒传。 */

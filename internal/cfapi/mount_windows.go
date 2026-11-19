@@ -55,9 +55,10 @@ type Mount struct {
 	provider         ProviderInfo
 	syncRootIdentity []byte
 
-	syncMu sync.Mutex // serialize list/build/index publication, independently of fetch callbacks
-	mu     sync.RWMutex
-	index  map[string]string // fileId(十进制) → 云端相对路径
+	syncMu   sync.Mutex // serialize list/build/index publication, independently of fetch callbacks
+	mu       sync.RWMutex
+	index    map[string]string // fileId(十进制) → 云端相对路径
+	versions map[string]int64  // 当前清单中的版本，不凭路径或pin推断内容一致
 
 	// observer 是可选的取数观察钩子（测试与诊断用）。
 	// 放在这里而不是塞进 Fetcher：Fetcher 是「生产契约」，
@@ -67,6 +68,8 @@ type Mount struct {
 	// progress 是可选的进度观察钩子（测试与诊断用），见 SetProgressObserver。
 	// 只观察不替代——内核调用照常发生。
 	progress func(total, completed int64)
+	// fetchStatus 只投递真实取数活动，不能阻塞回填或重入同步。
+	fetchStatus func(path string, total, completed int64, err error)
 	// progressFailures / lastProgressErr 记录进度回报被内核拒绝的次数与原因
 	// （见 ProgressFailures）。
 	progressFailures int64
@@ -116,6 +119,8 @@ type MountOptions struct {
 	ProtectedPaths []string
 	// Policies 显式指定本次挂载策略；nil 保持已验证的兼容默认。
 	Policies *SyncPolicies
+	// Operations显式启用删除/作用域移动通知；nil保持原读取挂载行为。
+	Operations *OperationCallbacks
 }
 
 // DefaultFetchTimeout 是 Fetcher 的默认超时。
@@ -168,8 +173,8 @@ func mountSpace(opt MountOptions) (*Mount, error) {
 	}
 
 	// ② 连接并注册回调
-	sess, err := Connect(opt.RootPath, m.fetcher(timeout),
-		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath)
+	sess, err := connectWithOperations(opt.RootPath, m.fetcher(timeout),
+		ConnectFlagRequireProcessInfo|ConnectFlagRequireFullFilePath, opt.Operations)
 	if err != nil {
 		// 保留注册：注销会递归删除未水合文件并撤掉目录身份。
 		// 没有活动连接的根可由同身份后续重连。
@@ -244,12 +249,15 @@ func (m *Mount) syncProtected(listFn ListFunc, paths []string, conservative bool
 	// 失败的条目不进索引（否则读取时才知道它没建出来）。
 	m.mu.Lock()
 	idx := make(map[string]string, len(entries))
+	versions := make(map[string]int64, len(entries))
 	for _, e := range entries {
 		if id, ok := decodeIdentity(e.Identity); ok {
 			idx[id] = e.Path
+			versions[id] = e.Version
 		}
 	}
 	m.index = idx
+	m.versions = versions
 	m.lastSync = time.Now()
 	m.mu.Unlock()
 
@@ -331,7 +339,9 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 			}
 		}
 
-		return FetchResult{Transfer: func(send func(FetchResult) error) error {
+		return FetchResult{Transfer: func(send func(FetchResult) error) (transferErr error) {
+			m.publishFetchStatus(cloudPath, length, 0, nil)
+			defer func() { m.publishFetchStatus(cloudPath, length, length, transferErr) }()
 			const chunkSize = int64(progressChunk)
 			for pos := offset; pos < offset+length; {
 				n := min(chunkSize, offset+length-pos)
@@ -355,6 +365,7 @@ func (m *Mount) fetcher(timeout time.Duration) Fetcher {
 					return err
 				}
 				pos += n
+				m.publishFetchStatus(cloudPath, length, pos-offset, nil)
 				// 保留上游内核进度接口，但不为报告进度整文件驻留内存。
 				if length >= progressMinBytes {
 					m.reportProgress(req, length, pos-offset)
@@ -452,6 +463,22 @@ func (m *Mount) SetProgressObserver(fn func(total, completed int64)) {
 	m.mu.Lock()
 	m.progress = fn
 	m.mu.Unlock()
+}
+
+// SetFetchStatusObserver 为Shell活动提供逐文件取数旁路，不能改变读取结果。
+func (m *Mount) SetFetchStatusObserver(fn func(path string, total, completed int64, err error)) {
+	m.mu.Lock()
+	m.fetchStatus = fn
+	m.mu.Unlock()
+}
+
+func (m *Mount) publishFetchStatus(path string, total, completed int64, err error) {
+	m.mu.RLock()
+	hook := m.fetchStatus
+	m.mu.RUnlock()
+	if hook != nil {
+		hook(path, total, completed, err)
+	}
 }
 
 // ── 身份编码 ──────────────────────────────────────────────────

@@ -116,12 +116,20 @@ func (m *Mount) KeepVerifiedCache(ctx context.Context, baseline CacheBaseline) e
 	return err
 }
 
+// MarkVerifiedCacheSynced 在完整本机/云端基线确认后转换或标记同步，保留全部正文。
+// 它不是缓存回收：未满默认空闲期的文件可显示已同步而不提前脱水。
+func (m *Mount) MarkVerifiedCacheSynced(ctx context.Context, baseline CacheBaseline) error {
+	_, err := m.applyVerifiedCache(ctx, baseline, cacheMarkSynced)
+	return err
+}
+
 type verifiedCacheAction uint8
 
 const (
 	cacheAutomatic verifiedCacheAction = iota
 	cacheReleasePinned
 	cacheKeep
+	cacheMarkSynced
 )
 
 func (m *Mount) applyVerifiedCache(ctx context.Context, baseline CacheBaseline, action verifiedCacheAction) (CacheReleaseResult, error) {
@@ -365,7 +373,7 @@ func (m *Mount) applyVerifiedCache(ctx context.Context, baseline CacheBaseline, 
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	if action == cacheKeep {
+	if action == cacheKeep || action == cacheMarkSynced {
 		if !isPlaceholder {
 			convert, err := proc("CfConvertToPlaceholder")
 			if err != nil {
@@ -374,12 +382,23 @@ func (m *Mount) applyVerifiedCache(ctx context.Context, baseline CacheBaseline, 
 			var usn int64
 			hr, _, _ := convert.Call(uintptr(h), uintptr(unsafe.Pointer(&identity[0])), uintptr(len(identity)), 1, uintptr(unsafe.Pointer(&usn)), 0)
 			runtime.KeepAlive(identity)
-			if err := checkHResult(hr, "CfConvertToPlaceholder verified keep"); err != nil {
+			if err := checkHResult(hr, "CfConvertToPlaceholder verified local cache"); err != nil {
+				return result, err
+			}
+		} else {
+			setSync, err := proc("CfSetInSyncState")
+			if err != nil {
+				return result, err
+			}
+			hr, _, _ := setSync.Call(uintptr(h), 1, 0, 0)
+			if err := checkHResult(hr, "CfSetInSyncState locked verified local cache"); err != nil {
 				return result, err
 			}
 		}
-		if err := setVerifiedCachePin(h, PinStatePinned); err != nil {
-			return result, err
+		if action == cacheKeep {
+			if err := setVerifiedCachePin(h, PinStatePinned); err != nil {
+				return result, err
+			}
 		}
 		result.LogicalBytes = baseline.Size
 		return result, nil

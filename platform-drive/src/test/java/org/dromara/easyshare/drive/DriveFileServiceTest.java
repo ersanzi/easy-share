@@ -201,6 +201,30 @@ class DriveFileServiceTest {
     }
 
     @Test
+    void listNeverExposesOrReconcilesRecycleSnapshotObjectsOrMarkers() {
+        EsFile visible = row(7L, "docs/a.txt");
+        visible.setVersionId(3L);
+        when(mapper.selectList(any())).thenReturn(List.of(visible));
+        List<DriveObject> objects = List.of(
+            new DriveObject("docs/a.txt", 1L, Instant.now()),
+            new DriveObject(".recycle/batch-1/7/v3", 1L, Instant.now()),
+            new DriveObject(".recycle/batch-2/7/v0", 1L, Instant.now()),
+            new DriveObject(".recycle/", 0L, Instant.now()),
+            new DriveObject(".recycle/batch-1/", 0L, Instant.now()));
+
+        DriveFileService.Listing listing = service.list(EsFile.TYPE_PERSONAL, 1L, 1L, objects);
+
+        assertEquals(List.of("docs/a.txt"), listing.objects().stream().map(DriveObject::path).toList());
+        assertEquals(Map.of("docs/a.txt", 7L), listing.fileIds());
+        assertEquals(Map.of("docs/a.txt", visible), listing.activeByPath());
+        assertEquals(Map.of("docs/a.txt", 3L), listing.versions());
+        assertEquals(5, objects.size(), "列表过滤不能修改调用方的存储快照");
+        verify(mapper, never()).insert(any(EsFile.class));
+        verify(mapper, never()).update(any(), any());
+        org.mockito.Mockito.verifyNoInteractions(changeLog);
+    }
+
+    @Test
     void legacyMarkerIsPromotedToDirectoryWithoutBecomingAFile() {
         when(mapper.selectList(any())).thenReturn(List.of());
         when(mapper.insert(any(EsFile.class))).thenAnswer(invocation -> {
