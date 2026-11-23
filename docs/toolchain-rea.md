@@ -68,6 +68,7 @@ Ghidra 会话是**每进程临时**的（`import_mode: ephemeral-source-immutabl
 | `UNSUPPORTED_OUTPUT_COMBINATION` | `--token-limit` 与结构化输出同用 | 改 `--filter-output` |
 | 输出恒为 `{}` | `--filter-output` 的 key 路径不存在 | 去掉 filter 重跑看真实结构 |
 | 目标路径被运行中进程占用 | REA 对路径有准入检查，被占用会撞共享冲突 | 把产物复制到中性目录；**复制不改变 SHA-256**，Evidence 的 `subject.digest` 仍可比对 |
+| 并发第二轮 `analyzeHeadless` 报 `HeadlessProject.<init>` 打不开工程 | analyzeHeadless.bat 结尾有 `pause`，后台调用会**挂住进程并持有 `.rep` 工程锁** | 串行跑；或先停掉上一轮再跑（锁残留时删工程目录下 `.lock`）。此坑 2026-11-11 实测 |
 
 ## 6. 证据强度与引用方式
 

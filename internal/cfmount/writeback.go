@@ -3,6 +3,7 @@ package cfmount
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,32 @@ type WritebackConfig struct {
 	TrustedDirectory func(context.Context, string, string, string, drive.Object) (bool, error)
 	// OnStatus 只接收写回快照；不能重入引擎或阻塞上传与服务器校验。
 	OnStatus func(WritebackStatus)
+	// IdentityFor 可注入本机身份读取（默认 writebackFileIdentity）。仅测试使用。
+	IdentityFor func(string) (LocalFileIdentity, error)
+}
+
+// DeleteMover 是可选的删除/移动回传能力（对标钉盘 renameDentry/moveDentry/deleteDentry）。
+// 实现方必须保证：删除为软删（进云端回收站，可还原）、移动保留 fileId。
+// drive.Client 的 Move/Delete/DeleteTree 与本接口签名一致，天然满足。
+// 未实现时引擎保持既有「不推断删除/改名」行为，只报 issue。
+type DeleteMover interface {
+	Move(ctx context.Context, token, space, from, to string) error
+	Delete(ctx context.Context, token, space, path string) error
+	DeleteTree(ctx context.Context, token, space, path string) error
+}
+
+// localIdentity 是 NTFS 身份的可持久化形式（hex），改名/移动推断跨重启依赖它。
+// nil 表示该记录尚无可信本机身份（旧记录或身份读取失败）。
+type localIdentity struct {
+	VolumeSerial string `json:"volumeSerial,omitempty"`
+	FileID       string `json:"fileId,omitempty"`
+}
+
+func localIdentityOf(id LocalFileIdentity) *localIdentity {
+	if id.VolumeSerial == 0 && id.FileID == ([16]byte{}) {
+		return nil
+	}
+	return &localIdentity{VolumeSerial: hex.EncodeToString(binary.BigEndian.AppendUint64(nil, id.VolumeSerial)), FileID: hex.EncodeToString(id.FileID[:])}
 }
 
 type writebackRecord struct {
@@ -55,6 +82,7 @@ type writebackRecord struct {
 	Hash      string            `json:"hash"`
 	Size      int64             `json:"size"`
 	Directory bool              `json:"directory,omitempty"`
+	Identity  *localIdentity    `json:"identity,omitempty"`
 	Pending   *writebackPending `json:"pending,omitempty"`
 }
 type writebackPending struct {
@@ -88,15 +116,18 @@ type WritebackResult struct {
 	ProtectedPaths []string
 }
 
-// WritebackEngine 持久化意图和不可变上传快照。仅支持新增、编辑和目录创建；
-// 不推断删除/改名，不删除或改写任何用户文件。不支持多个进程共享同一 StateDir。
+// WritebackEngine 持久化意图和不可变上传快照。支持新增、编辑、目录创建，以及
+// 基于 NTFS 身份连续性的删除/改名/移动回传（删除一律软删进云端回收站）；
+// 不删除或改写任何用户本地文件。不支持多个进程共享同一 StateDir。
 type WritebackEngine struct {
 	mu                sync.Mutex
 	cfg               WritebackConfig
 	state             writebackState
 	seen              map[string]localObservation
+	missing           map[string]time.Time       // 连续缺席观察：路径 → 首次缺席时刻
 	cacheProof        map[string]cacheLocalProof // 仅本轮完整快照匹配已提交版本的证据
-	deletionProtected []string                   // 明确删除/还原未决路径，不推断扫描缺项为删除
+	scannedOnce       bool                       // 首轮扫描是否完成（空根守卫只挡首轮）
+	deletionProtected []string                   // 明确删除/还原未决路径，扫描差分不得接管
 }
 
 func NewWritebackEngine(cfg WritebackConfig) (*WritebackEngine, error) {
@@ -125,7 +156,7 @@ func NewWritebackEngine(cfg WritebackConfig) (*WritebackEngine, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	e := &WritebackEngine{cfg: cfg, seen: map[string]localObservation{}}
+	e := &WritebackEngine{cfg: cfg, seen: map[string]localObservation{}, missing: map[string]time.Time{}}
 	e.state = writebackState{Format: 1, Namespace: cfg.Namespace, Root: root, Space: cfg.Space, Records: map[string]*writebackRecord{}}
 	b, err := os.ReadFile(filepath.Join(dir, "pending.json"))
 	if err == nil {
@@ -222,6 +253,9 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 	local := map[string]os.FileInfo{}
 	present := map[string]bool{}
 	ordinaryDirectories := map[string]bool{}
+	// 明确删除/还原保护在目标已缺席时仍有效；不可枚举目录的后代也不能算作删除。
+	skippedSubtrees := append([]string(nil), e.deletionProtected...)
+	out.ProtectedPaths = append(out.ProtectedPaths, e.deletionProtected...)
 	err = filepath.WalkDir(e.cfg.RootPath, func(p string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -267,6 +301,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		if !safe {
 			out.Issues = append(out.Issues, WritebackIssue{rel, "skipped", "占位符未完整水合、重解析点或非普通文件，未读取"})
 			if d.IsDir() {
+				skippedSubtrees = append(skippedSubtrees, rel)
 				return filepath.SkipDir
 			}
 			return nil
@@ -277,10 +312,26 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 	if err != nil {
 		return out, fmt.Errorf("cfmount writeback: 扫描失败: %w", err)
 	}
+	firstScan := !e.scannedOnce
+	e.scannedOnce = true
+	for p, r := range e.state.Records {
+		for _, blocked := range skippedSubtrees {
+			if p == blocked || strings.HasPrefix(p, blocked+"/") || r.Directory && strings.HasPrefix(blocked, p+"/") {
+				present[p] = true // 未观察不等于缺席，禁止移动或删除这些基线及受保护祖先。
+				break
+			}
+		}
+	}
 	// 失去可读连续性（包括正文释放）后重置空闲计时。
 	for p := range e.seen {
 		if _, ok := local[p]; !ok {
 			delete(e.seen, p)
+		}
+	}
+	// 重新出现的路径清掉缺席计时；缺席计时只在引擎互斥区内使用。
+	for p := range e.missing {
+		if present[p] {
+			delete(e.missing, p)
 		}
 	}
 	objects, err := e.cfg.Client.Objects(ctx, token, e.cfg.Space)
@@ -312,6 +363,23 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		}
 		out.ProtectedPaths = protected
 	}
+	// 删除/改名/移动回传（对标钉盘 renameDentry/moveDentry/deleteDentry）。
+	// 改名解析必须先于上传循环：让目标 B 继承 A 的 fileId/版本，而不是把 B 当新文件重传。
+	mover, hasMover := e.cfg.Client.(DeleteMover)
+	// 空根守卫（只挡首轮扫描）：挂载时刻本地为空而基线还在，可能是同步根整体丢失或
+	// 占位符尚未建起，此时任何删除推断都可能演变成整盘误删，全部拒绝并提示。
+	// 首轮见到过内容之后的空根视为用户清空（可还原），按正常两轮确认回传。
+	if firstScan && len(present) == 0 && len(e.state.Records) > 0 {
+		out.Issues = append(out.Issues, WritebackIssue{".", "sync-root-empty",
+			fmt.Sprintf("同步根为空但存在 %d 条基线，拒绝推断删除/移动；若确已清空请在网盘页操作", len(e.state.Records))})
+		hasMover = false
+	}
+	noDelete := map[string]bool{}
+	if hasMover {
+		if err = e.propagateRenames(ctx, token, present, local, remote, mover, noDelete, &out); err != nil {
+			return out, err
+		}
+	}
 	paths := make([]string, 0, len(local))
 	for p := range local {
 		paths = append(paths, p)
@@ -333,6 +401,17 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		}
 		if info.IsDir() {
 			if r != nil && r.Directory {
+				// 目录记录补齐 NTFS 身份（只算一次；目录身份是改名回传的匹配键）。
+				if r.Identity == nil {
+					if dirID, idErr := e.identityFor(filepath.Join(e.cfg.RootPath, filepath.FromSlash(p))); idErr == nil {
+						if id := localIdentityOf(dirID); id != nil {
+							r.Identity = id
+							if err = e.save(); err != nil {
+								return out, err
+							}
+						}
+					}
+				}
 				continue
 			}
 			// 显式目录或清单后代均可证明目录存在；同名文件必须报冲突。
@@ -365,7 +444,14 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 				}
 				remote[p] = *created
 			}
-			e.state.Records[p] = &writebackRecord{Directory: true}
+			rec := &writebackRecord{Directory: true}
+			if o, ok := remote[p]; ok && o.Directory && o.FileId > 0 {
+				rec.FileID = o.FileId.Int64()
+			}
+			if dirID, idErr := e.identityFor(filepath.Join(e.cfg.RootPath, filepath.FromSlash(p))); idErr == nil {
+				rec.Identity = localIdentityOf(dirID)
+			}
+			e.state.Records[p] = rec
 			if err = e.save(); err != nil {
 				return out, err
 			}
@@ -376,7 +462,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 			issue("conflict", errors.New("远端同名路径是目录，禁止替换为文件"))
 			continue
 		}
-		localID, x := writebackFileIdentity(filepath.Join(e.cfg.RootPath, filepath.FromSlash(p)))
+		localID, x := e.identityFor(filepath.Join(e.cfg.RootPath, filepath.FromSlash(p)))
 		if x != nil {
 			issue("unstable", x)
 			continue
@@ -395,6 +481,15 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 		if r != nil && r.Directory {
 			issue("conflict", errors.New("已知目录变成文件，不支持类型替换"))
 			continue
+		}
+		// 记录补齐 NTFS 身份：改名/移动回传跨重启依赖它；旧记录首个观察周期后补齐。
+		if r != nil {
+			if id := localIdentityOf(localID); id != nil && (r.Identity == nil || *r.Identity != *id) {
+				r.Identity = id
+				if err = e.save(); err != nil {
+					return out, err
+				}
+			}
 		}
 		if remoteCount[p] > 1 {
 			issue("conflict", errors.New("远端路径身份不唯一，保留本地内容"))
@@ -448,7 +543,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 						issue("conflict", errors.New("已有本地内容没有可信基线，远端不同或无法校验；保留本地文件"))
 						continue
 					}
-					e.state.Records[p] = &writebackRecord{FileID: verified.FileId.Int64(), Version: verified.VersionId.Int64(), Hash: pending.Hash, Size: pending.Size}
+					e.state.Records[p] = &writebackRecord{FileID: verified.FileId.Int64(), Version: verified.VersionId.Int64(), Hash: pending.Hash, Size: pending.Size, Identity: localIdentityOf(localID)}
 					if err = e.save(); err != nil {
 						return out, err
 					}
@@ -457,7 +552,7 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 					e.publishStatus(p, WritebackSynced, pending.Size, pending.Size, "云端正文与版本已确认")
 					continue
 				}
-				r = &writebackRecord{}
+				r = &writebackRecord{Identity: localIdentityOf(localID)}
 				e.state.Records[p] = r
 			}
 			pending.Expected = r.Version
@@ -521,14 +616,231 @@ func (e *WritebackEngine) tick(ctx context.Context) (out WritebackResult, err er
 			e.cacheProof[p] = cacheLocalProof{Info: info, Identity: localID, Hash: matched.Hash, Size: matched.Size}
 		}
 	}
-	for p := range e.state.Records {
+	// 删除回传：缺席连续两轮才推断（第一轮只登记并保持保护），先核对远端身份再软删。
+	// 一切失败都保留记录与保护，下一轮重试；远端清单是幂等自愈锚点（已删则远端缺席）。
+	missingAfter := make([]string, 0, len(e.state.Records))
+	pendingDeletion := map[string]bool{}
+	for p, r := range e.state.Records {
+		if r.Pending != nil {
+			// 删除目录也不能顺带丢掉子项快照；与原生删除的 Pending 护栏保持一致。
+			for q := p; q != "."; q = filepath.ToSlash(filepath.Dir(q)) {
+				pendingDeletion[q] = true
+			}
+		}
 		if !present[p] {
-			out.ProtectedPaths = append(out.ProtectedPaths, p)
-			out.Issues = append(out.Issues, WritebackIssue{p, "missing-or-unreadable", "不推断本地删除或改名；不删除远端，也不按远端缺失删除本地"})
+			missingAfter = append(missingAfter, p)
+		}
+	}
+	sort.Strings(missingAfter)
+	now := time.Now()
+	for _, a := range missingAfter {
+		r := e.state.Records[a]
+		if r == nil {
+			continue // 已被目录树删除/改名吸收
+		}
+		keep := true // 记录保留即保持保护，树同步不得据此重建或删除
+		switch {
+		case !hasMover:
+			out.Issues = append(out.Issues, WritebackIssue{a, "missing-or-unreadable", "不推断本地删除或改名；不删除远端，也不按远端缺失删除本地"})
+		case noDelete[a]:
+			out.Issues = append(out.Issues, WritebackIssue{a, "rename-pending", "改名回传失败，本轮不升级为删除"})
+		case pendingDeletion[a]:
+			out.Issues = append(out.Issues, WritebackIssue{a, "delete-pending", "删除目标或子项存在未提交内容，保留基线与快照"})
+		default:
+			since, observed := e.missing[a]
+			switch {
+			case !observed:
+				e.missing[a] = now
+				out.Issues = append(out.Issues, WritebackIssue{a, "missing-observed", "本地缺席第 1 轮：下一轮仍缺席才回传删除"})
+			case now.Sub(since) < e.cfg.StableFor:
+				// 确认窗口内，先保持保护
+			default:
+				o, exists := remote[a]
+				switch {
+				case exists && r.FileID > 0 && o.FileId.Int64() != r.FileID:
+					// 身份护栏：远端同路径已是别的文件（另一客户端删了 A 又传了新文件）时绝不代删。
+					out.Issues = append(out.Issues, WritebackIssue{a, "delete-identity", "远端同路径文件身份与基线不符，拒绝回传删除"})
+				case exists && r.FileID == 0:
+					out.Issues = append(out.Issues, WritebackIssue{a, "delete-baseline", "记录没有已确认的远端基线，拒绝回传删除"})
+				default:
+					if exists {
+						var delErr error
+						if r.Directory {
+							delErr = mover.DeleteTree(ctx, token, e.cfg.Space, a)
+						} else {
+							delErr = mover.Delete(ctx, token, e.cfg.Space, a)
+						}
+						if delErr != nil {
+							out.Issues = append(out.Issues, WritebackIssue{a, "delete", fmt.Errorf("删除回传失败: %w", delErr).Error()})
+							break
+						}
+						if r.Directory {
+							// 服务端递归软删已覆盖子树；本地子树记录一并丢弃，防止下轮重复推断。
+							prefix := a + "/"
+							for p, cr := range e.state.Records {
+								if strings.HasPrefix(p, prefix) {
+									e.dropRecord(p, cr)
+								}
+							}
+						}
+					}
+					// 远端已缺席（上次删除已生效、或从未上传成功）＝自愈：丢弃记录，停止保护。
+					e.dropRecord(a, r)
+					keep = false
+					if err = e.save(); err != nil {
+						return out, err
+					}
+				}
+			}
+		}
+		if keep {
+			out.ProtectedPaths = append(out.ProtectedPaths, a)
 		}
 	}
 	sort.Strings(out.ProtectedPaths)
 	return out, nil
+}
+
+// identityFor 读取本机身份；测试可注入。
+func (e *WritebackEngine) identityFor(p string) (LocalFileIdentity, error) {
+	if e.cfg.IdentityFor != nil {
+		return e.cfg.IdentityFor(p)
+	}
+	return writebackFileIdentity(p)
+}
+
+// propagateRenames 用 NTFS 身份连续性把「记录 A 缺席 + 新路径 B 同身份同大小」解析为远端移动。
+// 在上传循环之前执行；目标被占或移动失败时不动远端，交给删除路径的保守语义。
+func (e *WritebackEngine) propagateRenames(ctx context.Context, token string, present map[string]bool, local map[string]os.FileInfo, remote map[string]drive.Object, mover DeleteMover, noDelete map[string]bool, out *WritebackResult) error {
+	missing := make([]string, 0, len(e.state.Records))
+	for p := range e.state.Records {
+		if !present[p] {
+			missing = append(missing, p)
+		}
+	}
+	sort.Strings(missing)
+	claimed := map[string]bool{}
+	for _, a := range missing {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		r := e.state.Records[a]
+		if r == nil || r.Identity == nil {
+			continue
+		}
+		b := e.matchRenameTarget(present, local, r, claimed)
+		if b == "" {
+			continue
+		}
+		o, aExists := remote[a]
+		_, bExists := remote[b]
+		if aExists && r.FileID > 0 && o.FileId.Int64() != r.FileID {
+			// 远端同路径已是别的文件：这不是我们的移动，删除交给删除路径的身份护栏。
+			continue
+		}
+		if bExists {
+			// 目标被另一客户端占用：既不移动也不删除（B 以新文件身份上传会被 CAS 拒绝，
+			// 删掉 A 只会让局面更糟）。保留 A 与保护，提示用户在网盘页解决同名冲突。
+			out.Issues = append(out.Issues, WritebackIssue{a, "rename-target-conflict",
+				fmt.Sprintf("改名目标 %s 在云端已存在同名文件，保留双方，请在网盘页处理", b)})
+			noDelete[a] = true
+			continue
+		}
+		if aExists {
+			if err := mover.Move(ctx, token, e.cfg.Space, a, b); err != nil {
+				out.Issues = append(out.Issues, WritebackIssue{a, "move", fmt.Errorf("改名回传失败: %w", err).Error()})
+				noDelete[a] = true // 移动失败不升级为删除
+				continue
+			}
+		}
+		// 远端源已缺席＝上次移动已生效但本机状态未及持久化，以远端清单为锚自愈采纳。
+		e.adoptRenamed(a, b, r, remote, claimed)
+		if err := e.save(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// matchRenameTarget 在本轮新出现的路径里找身份连续的改名目标。
+// 要求类型一致、文件大小一致——大小不同说明改名后已编辑，退化为删+建更诚实。
+func (e *WritebackEngine) matchRenameTarget(present map[string]bool, local map[string]os.FileInfo, r *writebackRecord, claimed map[string]bool) string {
+	candidates := make([]string, 0, len(present))
+	for p := range present {
+		if _, known := e.state.Records[p]; known || claimed[p] {
+			continue
+		}
+		candidates = append(candidates, p)
+	}
+	sort.Strings(candidates)
+	for _, p := range candidates {
+		info, ok := local[p]
+		if !ok || info.IsDir() != r.Directory {
+			continue
+		}
+		if !r.Directory && r.Size != info.Size() {
+			continue
+		}
+		id, err := e.identityFor(filepath.Join(e.cfg.RootPath, filepath.FromSlash(p)))
+		if err != nil {
+			continue
+		}
+		if cand := localIdentityOf(id); cand != nil && *cand == *r.Identity {
+			return p
+		}
+	}
+	return ""
+}
+
+// adoptRenamed 把 A 的记录改挂到 B，并同步改写本轮远端映射、缺席计时、seen 与子树前缀，
+// 让本轮后续处理与保护树同步看到一致的移动结果。
+func (e *WritebackEngine) adoptRenamed(a, b string, r *writebackRecord, remote map[string]drive.Object, claimed map[string]bool) {
+	delete(e.state.Records, a)
+	e.state.Records[b] = r
+	delete(e.missing, a)
+	delete(e.seen, a)
+	claimed[b] = true
+	if o, ok := remote[a]; ok {
+		delete(remote, a)
+		remote[b] = o
+	}
+	if !r.Directory {
+		return
+	}
+	prefix, newPrefix := a+"/", b+"/"
+	for p, cr := range e.state.Records {
+		if strings.HasPrefix(p, prefix) {
+			delete(e.state.Records, p)
+			e.state.Records[newPrefix+p[len(prefix):]] = cr
+		}
+	}
+	for p, o := range remote {
+		if strings.HasPrefix(p, prefix) {
+			delete(remote, p)
+			remote[newPrefix+p[len(prefix):]] = o
+		}
+	}
+	for p, t := range e.missing {
+		if strings.HasPrefix(p, prefix) {
+			delete(e.missing, p)
+			e.missing[newPrefix+p[len(prefix):]] = t
+		}
+	}
+	for p, obs := range e.seen {
+		if strings.HasPrefix(p, prefix) {
+			delete(e.seen, p)
+			e.seen[newPrefix+p[len(prefix):]] = obs
+		}
+	}
+}
+
+// dropRecord 丢弃一条记录及其缺席计时；待上传快照是引擎自己的临时文件，一并清理。
+func (e *WritebackEngine) dropRecord(p string, r *writebackRecord) {
+	if r != nil && r.Pending != nil {
+		os.Remove(filepath.Join(e.cfg.StateDir, r.Pending.Snapshot))
+	}
+	delete(e.state.Records, p)
+	delete(e.missing, p)
 }
 
 func (e *WritebackEngine) commit(p string, r *writebackRecord, verified drive.Object) error {
