@@ -208,6 +208,15 @@ func (client *Client) KnowledgeDocuments(ctx context.Context, limit int) (knowle
 	return result, err
 }
 
+// KnowledgeProcessDriveFile 将所选网盘版本加入知识库，冻结正文可能超过普通请求超时。
+func (client *Client) KnowledgeProcessDriveFile(ctx context.Context, fileID, versionID string) (knowledge.ProcessingJob, error) {
+	var result knowledge.ProcessingJob
+	err := client.slowRequest(ctx, http.MethodPost, "/api/knowledge/documents/process-drive", map[string]string{
+		"fileId": fileID, "versionId": versionID,
+	}, &result)
+	return result, err
+}
+
 // KnowledgeDocument 读取知识文档阅读页数据（元数据 + 结构化正文）。
 func (client *Client) KnowledgeDocument(ctx context.Context, fileID, versionID string) (knowledge.DocumentView, error) {
 	var result knowledge.DocumentView

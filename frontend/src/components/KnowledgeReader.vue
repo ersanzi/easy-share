@@ -73,9 +73,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <p v-if="meta">{{ meta }}</p>
         </div>
         <div class="reader-actions">
-          <button class="secondary-button compact" type="button" :disabled="!view || downloading" @click="emit('download')">
+          <button v-if="view?.manifest.can_download === true" class="secondary-button compact" type="button" :disabled="loading || !!error || downloading" @click="emit('download')">
             {{ downloading ? '正在保存…' : '下载原件' }}
           </button>
+          <span v-else-if="view" class="reader-kicker">仅可查看</span>
           <button class="reader-close" type="button" aria-label="关闭" @click="close">×</button>
         </div>
       </header>

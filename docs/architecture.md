@@ -117,7 +117,8 @@ Authorization: Bearer <apiToken>
 | `POST` | `/api/knowledge/logout` | 清空知识登录会话 |
 | `POST` | `/api/knowledge/health` | 探测知识服务健康度（文档数/索引块数/LLM 状态；`documents` 与 `records` 分开） |
 | `POST` | `/api/knowledge/query` | 知识问答代理（解除 30s 写超时，120s 上下文兜底；`mode=search` 仅检索不生成，供全局快搜） |
-| `GET` | `/api/knowledge/documents` | 知识库文档清单（按 `file_id` 聚合：最新任务状态 + 最近成功版本；按文档归属/部门过滤） |
+| `POST` | `/api/knowledge/documents/process-drive` | 显式将网盘所选文件/版本加入知识库；仅 SSO，Core 只透传字符串身份，知识服务向 Java 核验来源并冻结正文 |
+| `GET` | `/api/knowledge/documents` | 知识库文档清单（最新任务状态 + 最近成功版本；网盘来源实时裁决，其他来源按归属/部门过滤） |
 | `GET` | `/api/knowledge/documents/{file_id}/versions/{version_id}/view` | 知识文档阅读页数据（manifest + `document.json` 结构化正文；按文档归属/部门校验，与 `/query` 同口径） |
 | `GET` | `/api/knowledge/documents/{file_id}/versions/{version_id}/source` | 知识文档原件下载（流式透传；与阅读页同一可见性判据） |
 | `POST` | `/api/knowledge/meetings/transcribe` | 会议音频上传代理（multipart 流式透传，远端异步转写，202 回受理记录；带 `meeting_id` 时复用实时会话那条记录，不新建） |
@@ -215,6 +216,23 @@ Authorization: Bearer <apiToken>
 **桌面端权限态**：`AuthUser` 增加 `userId`/`features`/`adminScope`（`account.FeatureFlags`、all/dept/none，空串=未知）。`App.syncAccountProfile` 在登录成功、启动恢复会话、后台校验刷新三处拉取 `MyPermission`（features + adminScope + roles）与头像地址；拉取失败 fail-open 为五项全开、`adminScope` 留空（入口沿用 `isAdmin`，旧控制面行为不变），真正拦截在服务端。登出清空；管理员改权限/角色后立即 `RefreshProfile()`；`auth:user-updated` 事件驱动前端重取。新增绑定：`UpdateNickName`/`ChangePassword`/`UploadAvatar`/`RemoveAvatar`/`RefreshProfile`/`AdminPermissionMembers`/`AdminPermissionRoles`/`AdminSavePermissionRole`/`AdminDeletePermissionRole`/`AdminAssignRoles`/`AdminSavePermissions`。前端只做入口显隐（`App.vue` 的 `canAdmin`/`sectionVisible`/`sectionHome`、设置页卡片、管理页「权限」Tab）——**藏按钮不是鉴权**。管理页里角色管理与角色分配仅超管可用，子管理员只看到本部门成员的矩阵。
 
 **已知边界**：插件商城保持匿名（`/easyshare/plugins`），plugin 开关只有客户端入口显隐；桌面知识会话已于 2026-10-27 改走控制面 SSO（见 §8a），knowledge / meeting 两项在桌面端服务端闭环。子管理员范围暂为精确部门（无下级递归），数据权限范围与文档级成员角色分别留待后续切片。
+
+## 4b-4. 文件成员与知识实时权限（2026-11-23 起）
+
+共享文件成员角色由 `platform-drive/src/main/java/org/dromara/easyshare/drive/service/FileRoleService.java` · `effective` 统一裁决，manage/edit/download/read 四档覆盖默认空间角色；空间准入、功能开关和 active 文件状态仍是前置，显式文件成员不能绕过空间撤权。个人文件仅空间归属者可用，不靠同名知识账号认领。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` / `PUT` | `/easyshare/file-member/{fileId}` | 文件管理成员读取/整组替换成员角色；自己的账号行保留且不接受自改，空数组合法 |
+| `GET` | `/easyshare/file-member/{fileId}/candidates` | 先验文件 manage，再按关键词与上限返回同共享空间有效账号/部门的最小展示字段；写接口执行同一候选范围规则 |
+| `POST` | `/easyshare/knowledge/acl/access` | 根据当前登录身份批量裁决文件阅读/原件下载；无权限或非 active 文件不返回可用授权 |
+| `POST` | `/easyshare/knowledge/acl/bind` | 按文件身份＋预期版本或旧受管对象 key 核验真实源与内容，返回可信文件关联，不接受客户端声明归属 |
+
+网盘页的共享入口按服务端 `effectiveRole` 展示动作；普通上传者/manage 成员与超管管理页复用成员编辑器，所有文件/版本/主体 ID 保持字符串。个人原功能保留；共享 CFAPI、自动入库及安全水印不在本片范围。
+
+显式「加入知识库」经 `POST /documents/process-drive`，Java 核验网盘文件/版本与原件内容，Python 在入队前冻结源正文并记录 `source_binding`，后续处理及原件访问使用同一快照。知识文档 ID 与网盘 ID 不是同一域，不能直接拿 watcher/lab 的任意 ID 作为网盘身份。网盘来源的问答、清单、阅读、产物和原件访问通过统一适配器逐请求回查控制面；read 可检索和阅读，原件要求 download。控制面不可用/缺新接口/来源未登记时受管文档拒绝放行，不回退入库 owner/部门快照。旧受管文档只有原件摘要与可信来源一致时才可关联，不一致须重新入库；本地知识身份不得冒用 SSO 同名账号。
+
+升级须先投递新控制面再更新知识服务/桌面端；反向回滚到缺少 ACL 的控制面会使受管知识访问关闭。仅查看不承诺防截图/防复制，既有已下载文件或已签发存储 URL 不可远程撤回。实现与验收记录见 [`iterations/2026-11-23-权限闭环完善.md`](iterations/2026-11-23-权限闭环完善.md)。
 
 ## 4c. 插件系统与商城接口（2026-08-31 起）
 

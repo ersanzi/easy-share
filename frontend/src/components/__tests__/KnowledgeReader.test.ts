@@ -46,8 +46,18 @@ describe('KnowledgeReader', () => {
     expect(failed.text()).toContain('无权查看该文档')
   })
 
+  it('allows reading but does not offer source download without an explicit permission', () => {
+    const readView = { ...view, manifest: { ...view.manifest, can_download: false } }
+    const wrapper = mount(KnowledgeReader, { props: { view: readView, loading: false, error: '' } })
+    expect(wrapper.text()).toContain('住宿标准每晚 400 元')
+    expect(wrapper.text()).toContain('仅可查看')
+    expect(wrapper.findAll('button').some(button => button.text().includes('下载原件'))).toBe(false)
+    const unknown = mount(KnowledgeReader, { props: { view, loading: false, error: '' } })
+    expect(unknown.findAll('button').some(button => button.text().includes('下载原件'))).toBe(false)
+  })
+
   it('emits close and download from the header actions', async () => {
-    const wrapper = mount(KnowledgeReader, { props: { view, loading: false, error: '' } })
+    const wrapper = mount(KnowledgeReader, { props: { view: { ...view, manifest: { ...view.manifest, can_download: true } }, loading: false, error: '' } })
     await wrapper.get('.reader-close').trigger('click')
     await wrapper.get('.reader-actions button').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)

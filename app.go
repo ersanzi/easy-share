@@ -1764,6 +1764,78 @@ func driveObjectToFile(object drive.Object) cloud.File {
 	}
 }
 
+// FileMemberCandidates 搜索可授权成员，范围与manage门槛由控制面强制。
+func (a *App) FileMemberCandidates(fileID, keyword string, limit int) ([]drive.FileMemberCandidate, error) {
+	id, err := drive.ParseFileID(fileID)
+	if err != nil {
+		return nil, err
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.FileMemberCandidates(a.ctx, token, id, keyword, limit)
+}
+
+// KnowledgeProcessDriveFile 显式提交当前网盘版本入库，不向前端暴露原件地址。
+func (a *App) KnowledgeProcessDriveFile(fileID, versionID string) (knowledge.ProcessingJob, error) {
+	client, err := a.coreClient()
+	if err != nil {
+		return knowledge.ProcessingJob{}, err
+	}
+	return client.KnowledgeProcessDriveFile(a.ctx, fileID, versionID)
+}
+
+// DriveFileVo 前端动作身份全程按字符串传递，避免雪花ID经过JS数字。
+type DriveFileVo struct {
+	Key           string            `json:"key"`
+	Name          string            `json:"name"`
+	Size          int64             `json:"size"`
+	LastModified  time.Time         `json:"lastModified"`
+	FileID        string            `json:"fileId"`
+	VersionID     string            `json:"versionId"`
+	UploadByName  string            `json:"uploadByName"`
+	EffectiveRole string            `json:"effectiveRole,omitempty"`
+	ContentType   string            `json:"contentType"`
+	PreviewKind   cloud.PreviewKind `json:"previewKind"`
+	CreatedAt     *time.Time        `json:"createdAt,omitempty"`
+}
+
+// CloudListInSpace 列举所选空间；不复用含数字ID的旧个人盘响应。
+func (a *App) CloudListInSpace(space string) ([]DriveFileVo, error) {
+	if err := validateDriveSpace(space); err != nil {
+		return nil, err
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return nil, err
+	}
+	objects, err := client.ObjectsWithDirs(a.ctx, token, space)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]DriveFileVo, 0, len(objects))
+	for _, object := range objects {
+		key := object.Path
+		if object.Directory {
+			key = strings.TrimSuffix(key, "/") + "/"
+		}
+		files = append(files, DriveFileVo{Key: key, Name: path.Base(strings.TrimSuffix(key, "/")), Size: object.Size,
+			LastModified: object.LastModified, FileID: strconv.FormatInt(object.FileId.Int64(), 10),
+			VersionID: strconv.FormatInt(object.VersionId.Int64(), 10), UploadByName: object.UploadByName, EffectiveRole: object.EffectiveRole,
+			ContentType: cloud.ContentTypeForKey(key), PreviewKind: cloud.DetectPreviewKind(cloud.ContentTypeForKey(key), key), CreatedAt: object.CreatedAt})
+	}
+	return files, nil
+}
+
+// validateDriveSpace 只接受明确空间，不能把拼错空间默默当个人盘。
+func validateDriveSpace(space string) error {
+	if space != drive.SpacePersonal && space != drive.SpaceShared {
+		return errors.New("未知空间类型")
+	}
+	return nil
+}
+
 func (a *App) CloudList() ([]cloud.File, error) {
 	client, token, err := a.driveClient()
 	if err != nil {
@@ -2333,6 +2405,22 @@ func (a *App) CloudDownload(key string) error {
 
 // CloudDownloadAs 弹保存框让用户另选落点；取消时不创建任务。
 func (a *App) CloudDownloadAs(key string) error {
+	return a.CloudDownloadAsInSpace(drive.SpacePersonal, key)
+}
+
+// CloudDownloadInSpace 下载所选空间的原件，read在控制面被拒绝。
+func (a *App) CloudDownloadInSpace(space, key string) error {
+	if err := validateDriveSpace(space); err != nil {
+		return err
+	}
+	return a.startCloudDownloadInSpace(space, key, "", "")
+}
+
+// CloudDownloadAsInSpace 保留保存框与任务模型，只替换受控空间。
+func (a *App) CloudDownloadAsInSpace(space, key string) error {
+	if err := validateDriveSpace(space); err != nil {
+		return err
+	}
 	defaultDir, err := a.downloadDirectory()
 	if err != nil {
 		return err
@@ -2353,7 +2441,7 @@ func (a *App) CloudDownloadAs(key string) error {
 	if target == "" {
 		return nil
 	}
-	return a.startCloudDownload(key, filepath.Dir(target), filepath.Base(target))
+	return a.startCloudDownloadInSpace(space, key, filepath.Dir(target), filepath.Base(target))
 }
 
 // startCloudDownload 打开远端流并登记任务，字节复制交给后台 goroutine。
@@ -2362,6 +2450,11 @@ func (a *App) CloudDownloadAs(key string) error {
 // 调用方（前端能马上提示），而不是等用户去任务面板里发现一条失败记录。
 // dir/name 为空表示走默认接收目录，并在重名时自动加序号。
 func (a *App) startCloudDownload(key, dir, name string) error {
+	return a.startCloudDownloadInSpace(drive.SpacePersonal, key, dir, name)
+}
+
+// startCloudDownloadInSpace 个人与共享使用同一传输任务执行器。
+func (a *App) startCloudDownloadInSpace(space, key, dir, name string) error {
 	core, err := a.coreClient()
 	if err != nil {
 		return err
@@ -2370,7 +2463,7 @@ func (a *App) startCloudDownload(key, dir, name string) error {
 	if err != nil {
 		return err
 	}
-	body, size, err := client.Open(a.ctx, token, drive.SpacePersonal, key)
+	body, size, err := client.Open(a.ctx, token, space, key)
 	if err != nil {
 		a.reportError("cloud download", err)
 		return err
@@ -2619,6 +2712,28 @@ func (a *App) CloudDelete(key string) error {
 	return err
 }
 
+// CloudDeleteInSpace 共享文件删除不借用个人空间路径；目录动作暂不开放。
+func (a *App) CloudDeleteInSpace(space, key string) error {
+	if err := validateDriveSpace(space); err != nil {
+		return err
+	}
+	if space == drive.SpacePersonal {
+		return a.CloudDelete(key)
+	}
+	if strings.HasSuffix(key, "/") {
+		return errors.New("共享目录请逐文件管理")
+	}
+	client, token, err := a.driveClient()
+	if err != nil {
+		return err
+	}
+	if err = client.Delete(a.ctx, token, space, key); err != nil {
+		return err
+	}
+	a.cloudMutationChanged()
+	return nil
+}
+
 // CloudRename 重命名文件（只改同目录下的末段名），底层复用控制面 /move。
 //
 // 刻意只做「改名」不做「移动」：跨目录移动是另一个语义（会改变路径层级、
@@ -2626,6 +2741,14 @@ func (a *App) CloudDelete(key string) error {
 //
 // key 是空间内相对路径（cloud.File.Key），不是 S3 物理键。
 func (a *App) CloudRename(key, newName string) error {
+	return a.CloudRenameInSpace(drive.SpacePersonal, key, newName)
+}
+
+// CloudRenameInSpace 改名只改变所选空间中的末段文件名。
+func (a *App) CloudRenameInSpace(space, key, newName string) error {
+	if err := validateDriveSpace(space); err != nil {
+		return err
+	}
 	name := strings.TrimSpace(newName)
 	if name == "" {
 		return errors.New("文件名不能为空")
@@ -2642,7 +2765,7 @@ func (a *App) CloudRename(key, newName string) error {
 	if err != nil {
 		return err
 	}
-	err = client.Move(a.ctx, token, drive.SpacePersonal, key, target)
+	err = client.Move(a.ctx, token, space, key, target)
 	a.reportError("cloud rename", err)
 	return err
 }

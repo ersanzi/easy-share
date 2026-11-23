@@ -21,6 +21,7 @@ const adminListUsers = vi.fn()
 const sharedFileList = vi.fn()
 const fileMemberList = vi.fn()
 const fileMemberReplace = vi.fn()
+const fileMemberCandidates = vi.fn()
 
 const defaultUserRows = [{
   userId: '1761300000000000042',
@@ -53,6 +54,7 @@ vi.mock('../../services/core', () => ({
     sharedFileList: () => sharedFileList(),
     fileMemberList: () => fileMemberList(),
     fileMemberReplace: (...args: unknown[]) => fileMemberReplace(...args),
+    fileMemberCandidates: (...args: unknown[]) => fileMemberCandidates(...args),
   },
 }))
 
@@ -93,6 +95,7 @@ beforeEach(() => {
   adminListUsers.mockResolvedValue({ total: 1, rows: defaultUserRows })
   sharedFileList.mockResolvedValue([])
   fileMemberList.mockResolvedValue([])
+  fileMemberCandidates.mockResolvedValue([])
   adminPermissionRoles.mockResolvedValue([])
   adminSetPersonalQuota.mockResolvedValue(undefined)
   adminSetSharedQuota.mockResolvedValue(undefined)
@@ -443,12 +446,15 @@ describe('AdminPanel 文件访问角色', () => {
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(card.text()).toContain('仅可查看')
 
-    // 添加行：成员选小李，档位 manage
-    const addSelects = card.findAll('.role-form select')
-    await addSelects[1].setValue('1761300000000000043')
-    await addSelects[2].setValue('manage')
-    await card.findAll('button').find(b => b.text() === '添加行')!.trigger('click')
-    await card.findAll('button').find(b => b.text() === '保存成员角色')!.trigger('click')
+    // 复用编辑器从文件级候选搜索获取小李，不借管理全员列表授权。
+    fileMemberCandidates.mockResolvedValue([{ memberType:'user', memberId:'1761300000000000043', memberName:'小李', grantable:true }])
+    await card.find('input[aria-label="搜索成员或部门"]').setValue('小李')
+    await card.find('.file-member-search').trigger('submit')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await card.findAll('button').find(b => b.text() === '添加成员')!.trigger('click')
+    const roleSelects = card.findAll('.role-actions select')
+    await roleSelects[1].setValue('manage')
+    await card.find('[data-testid="save-members"]').trigger('click')
     await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(fileMemberReplace).toHaveBeenCalledWith('1761000000000000100', [
@@ -469,13 +475,15 @@ describe('AdminPanel 文件访问角色', () => {
     const card = wrapper.findAll('section').find(s => s.text().includes('文件访问角色'))!
     await card.find('select').setValue('1761000000000000101')
     await new Promise(resolve => setTimeout(resolve, 0))
-    const addSelects = card.findAll('.role-form select')
-    await addSelects[1].setValue('1761300000000000042')
-    await addSelects[2].setValue('manage')
-    await card.findAll('button').find(b => b.text() === '添加行')!.trigger('click')
-
-    // 已有行 → 全局消息区报错提示，且行数不翻倍
-    expect(wrapper.text()).toContain('该成员已有角色行')
-    expect(card.findAll('.role-row').length).toBe(1)
+    fileMemberCandidates.mockResolvedValue([{ memberType:'user', memberId:'1761300000000000042', memberName:'小张', grantable:true }])
+    await card.find('input[aria-label="搜索成员或部门"]').setValue('小张')
+    await card.find('.file-member-search').trigger('submit')
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const add = card.findAll('button').find(b => b.text() === '添加成员')!
+    expect(add.attributes('disabled')).toBeDefined()
+    await add.trigger('click')
+    // 既有主体不能重复添加；候选结果不是成员行。
+    expect(card.findAll('.file-member-editor > .role-row').length).toBe(2)
+    expect(card.findAll('.role-actions').length).toBe(1)
   })
 })

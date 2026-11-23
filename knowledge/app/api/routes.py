@@ -16,6 +16,7 @@ from app.api.schemas import (
     IngestRequest,
     IngestResponse,
     ProcessDocumentRequest,
+    ProcessDriveDocumentRequest,
     ProcessingJobResponse,
     QueryRequest,
     QueryResponse,
@@ -24,6 +25,7 @@ from app.api.schemas import (
 from app.kb.chunker import chunk_text
 from app.parsing.extractor import extract_text
 from app.parsing.rules import load_rules
+from app.rag.access import KnowledgeAccess, managed_key
 from app.rag.permissions import can_view_document, effective_doc_ids, visible_doc_ids
 from app.services import AppServices
 
@@ -59,8 +61,8 @@ def _visible_manifest(request: Request, file_id: str, version_id: str) -> dict:
         if _is_missing_object(exc):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "派生产物不存在") from exc
         raise
-    if not can_view_document(manifest, getattr(request.state, "user", None)):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "无权查看该文档")
+    KnowledgeAccess(services, request).require(manifest)
+    manifest["can_download"] = KnowledgeAccess(services, request).decisions([manifest], "download")[0]
     return manifest
 
 
@@ -125,9 +127,14 @@ def list_documents(request: Request, limit: int = 200) -> dict:
     services = _services(request)
     user = getattr(request.state, "user", None)
     documents = []
-    for jobs in services.job_store.list_documents(limit=limit):
+    groups = services.job_store.list_documents(limit=limit)
+    access = KnowledgeAccess(services, request)
+    metadata = [jobs[0].to_dict() for jobs in groups]
+    readable = access.decisions(metadata)
+    downloadable = access.decisions(metadata, "download")
+    for index, jobs in enumerate(groups):
         latest = jobs[0]
-        if not can_view_document({"owner": latest.owner, "visible_depts": latest.visible_depts}, user):
+        if not readable[index]:
             continue
         last_completed = next((job for job in jobs if job.status == "completed"), None)
         result = (last_completed.result if last_completed else None) or {}
@@ -142,6 +149,7 @@ def list_documents(request: Request, limit: int = 200) -> dict:
             "error_code": latest.error_code,
             "error_message": latest.error_message,
             "owner": latest.owner,
+            "can_download": downloadable[index],
             "updated_at": latest.updated_at,
             "ready": last_completed is not None,
             "read_version_id": last_completed.version_id if last_completed else None,
@@ -153,6 +161,30 @@ def list_documents(request: Request, limit: int = 200) -> dict:
     return {"documents": documents}
 
 
+def _guard_legacy_write(services, request, file_id, object_key=None):
+    """非网盘入口不得占用受管身份，也不得覆盖他人的知识文档。"""
+    if file_id.startswith("drive-") or services.job_store.source_binding(file_id):
+        raise HTTPException(403, "网盘文档只能经可信来源入口更新")
+    if object_key:
+        if (object_key != object_key.strip() or "\\" in object_key or object_key.startswith("/")
+            or any(part in ("", ".", "..") for part in object_key.split("/"))):
+            raise HTTPException(403, "来源键不是规范路径")
+        if object_key.split("/", 1)[0].lower() in ("derived", ".recycle", ".versions"):
+            raise HTTPException(403, "派生产物不能充当入库来源")
+    access = KnowledgeAccess(services, request)
+    for record in services.vector_store.get_doc(file_id):
+        metadata = record.get("metadata") or {}
+        if metadata.get("source_binding") or managed_key(metadata.get("object_key")):
+            raise HTTPException(403, "不能替换受管知识来源")
+        access.require(metadata)
+    for jobs in services.job_store.list_documents(limit=2000):
+        if jobs[0].file_id == file_id:
+            if jobs[0].source_binding or managed_key(jobs[0].object_key):
+                raise HTTPException(403, "不能替换受管知识来源")
+            access.require(jobs[0].to_dict())
+            break
+
+
 @router.post(
     "/documents/process",
     response_model=ProcessingJobResponse,
@@ -160,6 +192,13 @@ def list_documents(request: Request, limit: int = 200) -> dict:
 )
 def process_document(req: ProcessDocumentRequest, request: Request) -> ProcessingJobResponse:
     services = _services(request)
+    _guard_legacy_write(services, request, req.file_id, req.object_key)
+    if managed_key(req.object_key):
+        # 历史入口只按完整源键由控制面解析，知识 ID 不参与权限绑定。
+        access = KnowledgeAccess(services, request)
+        binding, _ = access.bind(object_key=req.object_key)
+        return process_drive_document(ProcessDriveDocumentRequest(file_id=binding["file_id"],
+            version_id=binding["version_id"]), request)
     filename = req.filename or PurePosixPath(req.object_key.replace("\\", "/")).name
     if not filename:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "无法从 object_key 推断文件名")
@@ -167,6 +206,10 @@ def process_document(req: ProcessDocumentRequest, request: Request) -> Processin
     # 2b 文件归属：带令牌时以令牌用户为准（防伪造他人归属）；仅无令牌的
     # 内部/测试调用可显式指定 owner；两者皆无为共享文档（None）
     token_user = getattr(request.state, "user", None)
+    # 受管命名空间不能沿用匿名共享口径；后续绑定只信控制面身份。
+    key = req.object_key.replace("\\", "/").lstrip("/")
+    if key.startswith(("shared/", "users/")) and not (token_user or {}).get("authority") == "ruoyi":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "网盘来源需要控制面登录和可信绑定")
     owner = (token_user or {}).get("username") or req.owner
     if token_user and req.owner and req.owner != owner:
         logger.info("入库归属以令牌用户为准: token=%s 请求 owner=%s 被忽略", owner, req.owner)
@@ -177,10 +220,28 @@ def process_document(req: ProcessDocumentRequest, request: Request) -> Processin
         object_key=req.object_key,
         filename=filename,
         owner=owner,
+        owner_authority="ruoyi" if (token_user or {}).get("authority") == "ruoyi" else "local",
         # 声明者即归属者（owner 已被令牌锁定），部门串归一为逗号分隔
         visible_depts=",".join(req.visible_depts) if req.visible_depts else None,
         force=req.force,
     )
+    if created or job.status == "queued":
+        services.job_runner.submit(job.id)
+    return _job_response(job)
+
+
+@router.post("/documents/process-drive", response_model=ProcessingJobResponse, status_code=202)
+def process_drive_document(req: ProcessDriveDocumentRequest, request: Request):
+    """网盘入库：定位参数由控制面验身份、版本与来源，入队前冻结核验正文。"""
+    services = _services(request)
+    access = KnowledgeAccess(services, request)
+    binding, filename = access.bind(file_id=req.file_id, version_id=req.version_id)
+    file_id = f"drive-{binding['file_id']}"
+    version_id = f"v{binding['version_id']}-{binding['source_sha256'][:16]}"
+    snapshot = access.freeze(binding, file_id, version_id)
+    job, created = services.job_store.create_or_get(file_id=file_id, version_id=version_id,
+        object_key=binding["object_key"], filename=filename or PurePosixPath(binding["object_key"]).name,
+        source_binding=binding, source_snapshot_key=snapshot)
     if created or job.status == "queued":
         services.job_runner.submit(job.id)
     return _job_response(job)
@@ -192,6 +253,7 @@ def get_job(job_id: str, request: Request) -> ProcessingJobResponse:
         job = _services(request).job_store.get(job_id)
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在") from exc
+    KnowledgeAccess(_services(request), request).require(job.to_dict())
     return _job_response(job)
 
 
@@ -199,7 +261,8 @@ def get_job(job_id: str, request: Request) -> ProcessingJobResponse:
 def retry_job(job_id: str, request: Request) -> ProcessingJobResponse:
     services = _services(request)
     try:
-        services.job_store.get(job_id)
+        existing = services.job_store.get(job_id)
+        KnowledgeAccess(services, request).require(existing.to_dict(), "download")
     except KeyError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "任务不存在") from exc
     try:
@@ -241,7 +304,11 @@ def get_document_source(file_id: str, version_id: str, request: Request) -> Resp
     """下载入库原件；可见性判据与阅读页一致。"""
     services = _services(request)
     manifest = _visible_manifest(request, file_id, version_id)
-    object_key = manifest.get("object_key")
+    KnowledgeAccess(services, request).require(manifest, "download")
+    binding = KnowledgeAccess(services, request).binding_of(manifest)
+    object_key = manifest.get("source_snapshot_key") or manifest.get("object_key")
+    if binding and not manifest.get("source_snapshot_key"):
+        raise HTTPException(403, "来源快照缺失，请重新入库")
     if not object_key:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "原件不存在")
     try:
@@ -298,6 +365,10 @@ def ingest(req: IngestRequest, request: Request) -> IngestResponse:
     """保留旧同步接口供手工验证；正式文件管线使用 /documents/process。"""
     services = _services(request)
     doc_id = req.doc_id or str(uuid.uuid4())
+    _guard_legacy_write(services, request, doc_id, req.key)
+    if managed_key(req.key):
+        # 同步接口不接收受管来源正文；迁移到异步可信绑定入口，避免洗掉 ACL。
+        raise HTTPException(403, "网盘来源请使用 documents/process-drive 入库")
 
     if req.source == "text":
         if not req.content:
@@ -323,7 +394,9 @@ def ingest(req: IngestRequest, request: Request) -> IngestResponse:
             "id": f"{doc_id}:{index}",
             "doc_id": doc_id,
             "text": chunk,
-            "metadata": {"filename": filename},
+            "metadata": {"filename": filename, "object_key": req.key,
+                "owner": (getattr(request.state, "user", None) or {}).get("username"),
+                "owner_authority": "ruoyi" if (getattr(request.state, "user", None) or {}).get("authority") == "ruoyi" else "local"},
             "embedding": embedding,
         }
         for index, (chunk, embedding) in enumerate(zip(chunks, embeddings))
@@ -339,7 +412,14 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
     # 2c 权限感知：从请求令牌解析用户，服务端裁剪可见文档集合；
     # 与显式 doc_ids 求交集，交集为空时短路（不进检索层，避免空列表被当作不过滤）
     user = getattr(request.state, "user", None)
-    doc_ids = effective_doc_ids(req.doc_ids, visible_doc_ids(services.vector_store, user))
+    access = KnowledgeAccess(services, request)
+    # 双索引后端共用元数据快照；绑定按文档/版本查，绝不只看 owner 快照。
+    scope = {}
+    for record in services.vector_store.snapshot_records():
+        scope[record["doc_id"]] = {**(record.get("metadata") or {}), "file_id": record.get("file_id") or record["doc_id"],
+            "version_id": record.get("version_id")}
+    allowed = [doc_id for doc_id, visible in zip(scope, access.decisions(list(scope.values()))) if visible]
+    doc_ids = effective_doc_ids(req.doc_ids, allowed)
     outcome = (
         services.orchestrator.retrieve(req.question, top_k=req.top_k, doc_ids=doc_ids)
         if doc_ids != []
@@ -373,6 +453,10 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
             answer="（未配置 LLM，以下为检索到的相关片段）", contexts=chunks, strategy=strategy, degraded=degraded
         )
     result = services.generator.generate(req.question, contexts)
+    # 生成可能耗时，响应前再实时复核；撤权后的正文不进入回答或引用。
+    checked = [scope.get(c.get("doc_id"), {}) for c in contexts]
+    if not all(access.decisions(checked)):
+        return QueryResponse(answer="知识来源权限已变化，请重新查询。", strategy=strategy, degraded=degraded)
     # 生产生成日志：用量与命中可观测（逐句忠实度分析属驾驶舱职责，生产链路不重复调 LLM）
     try:
         services.query_log.log_generation(

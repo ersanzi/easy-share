@@ -134,12 +134,24 @@ export function CloudDelete(arg1) {
   return window['go']['main']['App']['CloudDelete'](arg1);
 }
 
+export function CloudDeleteInSpace(arg1, arg2) {
+  return window['go']['main']['App']['CloudDeleteInSpace'](arg1, arg2);
+}
+
 export function CloudDownload(arg1) {
   return window['go']['main']['App']['CloudDownload'](arg1);
 }
 
 export function CloudDownloadAs(arg1) {
   return window['go']['main']['App']['CloudDownloadAs'](arg1);
+}
+
+export function CloudDownloadAsInSpace(arg1, arg2) {
+  return window['go']['main']['App']['CloudDownloadAsInSpace'](arg1, arg2);
+}
+
+export function CloudDownloadInSpace(arg1, arg2) {
+  return window['go']['main']['App']['CloudDownloadInSpace'](arg1, arg2);
 }
 
 export function CloudFreeUpSpace(arg1) {
@@ -152,6 +164,10 @@ export function CloudKeepOnDevice(arg1) {
 
 export function CloudList() {
   return window['go']['main']['App']['CloudList']();
+}
+
+export function CloudListInSpace(arg1) {
+  return window['go']['main']['App']['CloudListInSpace'](arg1);
 }
 
 export function CloudMkdir(arg1, arg2) {
@@ -184,6 +200,10 @@ export function CloudRecycleRestore(arg1) {
 
 export function CloudRename(arg1, arg2) {
   return window['go']['main']['App']['CloudRename'](arg1, arg2);
+}
+
+export function CloudRenameInSpace(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CloudRenameInSpace'](arg1, arg2, arg3);
 }
 
 export function CloudRestoreVersion(arg1, arg2) {
@@ -242,6 +262,10 @@ export function DeleteTask(arg1) {
   return window['go']['main']['App']['DeleteTask'](arg1);
 }
 
+export function FileMemberCandidates(arg1, arg2, arg3) {
+  return window['go']['main']['App']['FileMemberCandidates'](arg1, arg2, arg3);
+}
+
 export function FileMemberList(arg1) {
   return window['go']['main']['App']['FileMemberList'](arg1);
 }
@@ -296,6 +320,10 @@ export function KnowledgeLogin(arg1, arg2, arg3) {
 
 export function KnowledgeLogout() {
   return window['go']['main']['App']['KnowledgeLogout']();
+}
+
+export function KnowledgeProcessDriveFile(arg1, arg2) {
+  return window['go']['main']['App']['KnowledgeProcessDriveFile'](arg1, arg2);
 }
 
 export function KnowledgeStatus() {

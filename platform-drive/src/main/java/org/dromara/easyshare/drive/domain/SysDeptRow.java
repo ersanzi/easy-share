@@ -12,6 +12,7 @@ import lombok.Data;
 @TableName("sys_dept")
 public class SysDeptRow {
 
+    @com.baomidou.mybatisplus.annotation.TableId("dept_id")
     private Long deptId;
 
     private Long parentId;

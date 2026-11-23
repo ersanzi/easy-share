@@ -764,11 +764,18 @@ const avatarText = computed(() => {
               <span class="section-label">云端</span>
               <h1>网盘</h1>
               <p>将文件安全存储到云端，随时随地下载和分享。</p>
+              <div class="drive-space-switch" aria-label="网盘空间">
+                <button class="secondary-button compact" type="button" :aria-pressed="app.selectedDriveSpace.value === 'personal'" @click="app.selectedDriveSpace.value = 'personal'">个人空间</button>
+                <button v-if="app.sharedDriveAvailable.value" class="secondary-button compact" type="button" :aria-pressed="app.selectedDriveSpace.value === 'shared'" @click="app.selectedDriveSpace.value = 'shared'">共享空间</button>
+              </div>
             </div>
           </header>
           <CloudPanel
             ref="cloudRef"
             :enabled="app.snapshot.value.status.cloudEnabled"
+            :user="app.currentUser.value"
+            :spaces="app.driveSpaces.value"
+            :selected-space="app.selectedDriveSpace.value"
             @upload="handleCloudUpload"
             @upload-folder="handleCloudUploadFolder"
             @download="handleCloudDownload"

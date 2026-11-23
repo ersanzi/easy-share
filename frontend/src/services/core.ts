@@ -15,6 +15,13 @@ import {
   AdminDeletePermissionRole,
   AdminSavePermissionRole,
   FileMemberList,
+  FileMemberCandidates,
+  CloudListInSpace,
+  CloudDownloadInSpace,
+  CloudDownloadAsInSpace,
+  CloudRenameInSpace,
+  CloudDeleteInSpace,
+  KnowledgeProcessDriveFile,
   FileMemberRemove,
   FileMemberReplace,
   SharedFileList,
@@ -152,6 +159,8 @@ import type {
   AdminMember,
   AdminRole,
   FileMemberRole,
+  FileMemberCandidate,
+  DriveFileEntry,
   SharedFileEntry,
   FeatureFlags,
   KnowledgeStats,
@@ -349,6 +358,15 @@ export const core = {
   adminDeletePermissionRole: (roleID: string) => AdminDeletePermissionRole(roleID),
   adminAssignRoles: (userID: string, roleIDs: string[]) => AdminAssignRoles(userID, roleIDs),
   // 文档级成员角色（企业权限第三片）：上传者/manage 档读写，控制面按四档梯子裁决
+  // 空间感知动作：服务端权限是裁决源，前端不拼对象存储前缀。
+  cloudListInSpace: (space: string) => CloudListInSpace(space) as Promise<DriveFileEntry[]>,
+  cloudDownloadInSpace: CloudDownloadInSpace,
+  cloudDownloadAsInSpace: CloudDownloadAsInSpace,
+  cloudRenameInSpace: CloudRenameInSpace,
+  cloudDeleteInSpace: CloudDeleteInSpace,
+  knowledgeProcessDriveFile: KnowledgeProcessDriveFile,
+  fileMemberCandidates: (fileId: string, keyword: string, limit = 20) =>
+    FileMemberCandidates(fileId, keyword, limit) as Promise<FileMemberCandidate[]>,
   sharedFileList: () => SharedFileList() as Promise<SharedFileEntry[]>,
   fileMemberList: (fileID: string) => FileMemberList(fileID) as Promise<FileMemberRole[]>,
   fileMemberReplace: (fileID: string, members: FileMemberRole[]) =>

@@ -117,12 +117,13 @@ type Document struct {
 
 // DocumentManifest 阅读页需要的文档级元数据子集。
 type DocumentManifest struct {
-	FileID    string  `json:"file_id"`
-	VersionID string  `json:"version_id"`
-	Filename  string  `json:"filename"`
-	ObjectKey string  `json:"object_key"`
-	MediaType string  `json:"media_type"`
-	Owner     *string `json:"owner"`
+	CanDownload bool    `json:"can_download"`
+	FileID      string  `json:"file_id"`
+	VersionID   string  `json:"version_id"`
+	Filename    string  `json:"filename"`
+	ObjectKey   string  `json:"object_key"`
+	MediaType   string  `json:"media_type"`
+	Owner       *string `json:"owner"`
 	// 知识服务 manifest 存的是 CSV（与 es_file 同表示），不是 JSON 数组
 	VisibleDepts string   `json:"visible_depts"`
 	SourceBytes  int64    `json:"source_bytes"`
@@ -141,6 +142,7 @@ type DocumentView struct {
 
 // DocumentSummary 知识库清单一行：最新任务状态 + 最近一次成功版本。
 type DocumentSummary struct {
+	CanDownload   bool    `json:"can_download"`
 	JobID         string  `json:"job_id"`
 	FileID        string  `json:"file_id"`
 	VersionID     string  `json:"version_id"`
@@ -346,6 +348,26 @@ func (client *Client) Documents(ctx context.Context, token string, limit int) (D
 	}
 	var result DocumentList
 	err := client.call(ctx, http.MethodGet, fmt.Sprintf("/documents?limit=%d", limit), token, nil, &result)
+	return result, err
+}
+
+// ProcessingJob 网盘文件入库任务；只返回任务展示字段，不向前端透出令牌或签名源地址。
+type ProcessingJob struct {
+	ID        string `json:"id"`
+	FileID    string `json:"file_id"`
+	VersionID string `json:"version_id"`
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Stage     string `json:"stage"`
+	Progress  int    `json:"progress"`
+}
+
+// ProcessDriveFile 按稳定文件身份与预期版本请求入库，来源和权限均由服务端核验。
+func (client *Client) ProcessDriveFile(ctx context.Context, token, fileID, versionID string) (ProcessingJob, error) {
+	var result ProcessingJob
+	err := client.call(ctx, http.MethodPost, "/documents/process-drive", token, map[string]string{
+		"file_id": fileID, "version_id": versionID,
+	}, &result)
 	return result, err
 }
 

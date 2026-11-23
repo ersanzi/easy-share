@@ -21,6 +21,7 @@ from app.parsing.models import ParsedDocument
 from app.parsing.pdf_router import PdfInspectorRouter
 from app.parsing.renderer import render_markdown
 from app.parsing.rules import load_rules
+from app.rag.access import managed_key
 from app.storage.base import ObjectStorage
 
 PIPELINE_VERSION = "2026-09-05.1"
@@ -80,8 +81,15 @@ class DocumentPipeline:
         # 入库时间：chunk metadata 与 manifest 使用同一时间戳，保证检索侧与产物侧一致
         processed_at = datetime.now(UTC).isoformat()
         report("downloading", 10)
-        content = self.storage.read(job.object_key, max_bytes=self.max_source_bytes)
+        if (job.file_id.startswith("drive-") or job.object_key.lower().startswith("derived/")) and not job.source_binding:
+            raise ValueError("保留文档身份与派生产物不能由非受管任务入库")
+        if (job.source_binding or managed_key(job.object_key)) and not (job.source_binding and job.source_snapshot_key):
+            raise ValueError("受管来源未核验，请重新入库")
+        content = self.storage.read(job.source_snapshot_key or job.object_key, max_bytes=self.max_source_bytes)
         source_sha256 = hashlib.sha256(content).hexdigest()
+        if job.source_binding and (source_sha256 != job.source_binding["source_sha256"]
+            or len(content) != job.source_binding["source_bytes"]):
+            raise ValueError("来源快照校验失败，请重新入库")
 
         report("parsing", 30)
         document, parsing_meta = self._parse_routed(job.filename, content)
@@ -164,6 +172,9 @@ class DocumentPipeline:
                     "filename": job.filename,
                     "object_key": job.object_key,
                     "owner": job.owner,
+                    "source_binding": job.source_binding,
+                    "source_snapshot_key": job.source_snapshot_key,
+                    "owner_authority": job.owner_authority,
                     "visible_depts": job.visible_depts,
                     "pipeline_version": PIPELINE_VERSION,
                     "ingested_at": processed_at,
@@ -187,6 +198,9 @@ class DocumentPipeline:
             "filename": job.filename,
             "object_key": job.object_key,
             "owner": job.owner,
+                    "source_binding": job.source_binding,
+                    "source_snapshot_key": job.source_snapshot_key,
+                    "owner_authority": job.owner_authority,
             "visible_depts": job.visible_depts,
             "source_sha256": source_sha256,
             "source_bytes": len(content),

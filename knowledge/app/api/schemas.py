@@ -71,6 +71,12 @@ class ProcessDocumentRequest(BaseModel):
     force: bool = False
 
 
+class ProcessDriveDocumentRequest(BaseModel):
+    # 仅定位参数，必须由控制面按登录身份核验，不接受客户端来源键与归属。
+    file_id: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+    version_id: str = Field(pattern=r"^[0-9]{1,19}$")
+
+
 class ProcessingJobResponse(BaseModel):
     id: str
     file_id: str
@@ -113,6 +119,7 @@ class DocumentSummary(BaseModel):
     characters: int = 0
     processed_at: str | None = None
     source_bytes: int = 0
+    can_download: bool = True
 
 
 class DocumentListResponse(BaseModel):
@@ -138,4 +145,7 @@ class ArtifactManifestResponse(BaseModel):
     cleaning: dict[str, Any] | None = None
     ocr: dict[str, Any] | None = None
     artifacts: dict[str, str]
+    source_binding: dict[str, Any] | None = None
+    source_snapshot_key: str | None = None
+    can_download: bool = True
     processed_at: str

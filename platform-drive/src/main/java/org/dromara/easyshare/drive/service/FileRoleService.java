@@ -172,10 +172,12 @@ public class FileRoleService {
         List<DriveObject> visible = new ArrayList<>(objects.size());
         for (DriveObject object : objects) {
             EsFile row = rowsByPath.get(object.path());
-            if (row == null
-                || ladder(row, userId, deptId, spacePermission,
-                    userRows.get(row.getFileId()), deptRows.get(row.getFileId())) != null) {
-                visible.add(object);
+            String role = row == null
+                ? (EsSpaceMember.PERM_WRITE.equals(spacePermission) ? ROLE_MANAGE : ROLE_DOWNLOAD)
+                : ladder(row, userId, deptId, spacePermission,
+                    userRows.get(row.getFileId()), deptRows.get(row.getFileId()));
+            if (role != null) {
+                visible.add(new DriveObject(object.path(), object.size(), object.lastModified(), role));
             }
         }
         return visible;
@@ -230,6 +232,59 @@ public class FileRoleService {
 
     // ── 成员角色管理（授权面） ──────────────────────────────────────
 
+    /** 最小候选投影；所有标识固定为字符串，不依赖Jackson大数阈值。 */
+    public record Candidate(String memberType, String memberId, String memberName, boolean grantable) { }
+
+    /** 先校验文件manage，再按关键词有限搜索；超管也不绕过共享空间范围。 */
+    public List<Candidate> candidatesOf(Long fileId, Long operatorId, String keyword, int limit) {
+        requireManageable(fileId, operatorId);
+        String query = keyword == null ? "" : keyword.trim();
+        if (query.isEmpty() || query.length() > 64) {
+            throw new ServiceException("搜索关键词需为1至64个字符");
+        }
+        int cap = Math.max(1, Math.min(limit, 50));
+        List<Candidate> result = new ArrayList<>();
+        for (SysUserDept user : sysUserDeptMapper.searchSharedCandidates(query, cap)) {
+            EsFileMember subject = new EsFileMember(); subject.setMemberType("user"); subject.setMemberId(user.getUserId());
+            if (grantable(subject)) {
+                result.add(new Candidate("user", user.getUserId().toString(), displayName(user), true));
+            }
+        }
+        if (result.size() < cap) {
+            for (SysDeptRow dept : sysDeptRowMapper.searchSharedCandidates(query, cap - result.size())) {
+                EsFileMember subject = new EsFileMember(); subject.setMemberType("dept"); subject.setMemberId(dept.getDeptId());
+                if (grantable(subject)) result.add(new Candidate("dept", dept.getDeptId().toString(), dept.getDeptName(), true));
+            }
+        }
+        return result.stream().limit(cap).toList();
+    }
+
+    /** 现有行仅补显示名，不让旧授权主体变成可枚举的候选范围。 */
+    public List<MemberView> memberViewsOf(Long fileId, Long operatorId) {
+        return membersOf(fileId, operatorId).stream().map(row -> {
+            String name = "#" + row.getMemberId();
+            if (EsFileMember.TYPE_USER.equals(row.getMemberType())) {
+                SysUserDept user = sysUserDeptMapper.selectById(row.getMemberId());
+                if (user != null) name = displayName(user);
+            } else {
+                SysDeptRow dept = sysDeptRowMapper.selectById(row.getMemberId());
+                if (dept != null) name = dept.getDeptName();
+            }
+            return new MemberView(row.getMemberType(), row.getMemberId().toString(), row.getRole(), name, grantable(row));
+        }).toList();
+    }
+
+    public record MemberView(String memberType, String memberId, String role, String memberName, boolean grantable) { }
+
+    private boolean grantable(EsFileMember row) {
+        try { validateSubject(row); return true; }
+        catch (ServiceException e) { return false; }
+    }
+
+    private static String displayName(SysUserDept user) {
+        return user.getNickName() == null || user.getNickName().isBlank() ? user.getUserName() : user.getNickName();
+    }
+
     /** 某文件的成员角色行（manage 门） */
     public List<EsFileMember> membersOf(Long fileId, Long operatorId) {
         requireManageable(fileId, operatorId);
@@ -251,6 +306,10 @@ public class FileRoleService {
     public void replaceMembers(Long fileId, List<EsFileMember> members, Long operatorId) {
         requireManageable(fileId, operatorId);
         String keepOperatorRole = memberMapper.selectRole(fileId, EsFileMember.TYPE_USER, operatorId);
+        Map<String, String> existing = new HashMap<>();
+        for (EsFileMember row : memberMapper.selectByFile(fileId)) {
+            existing.put(row.getMemberType() + ":" + row.getMemberId(), row.getRole());
+        }
         Set<String> seen = new HashSet<>();
         List<EsFileMember> rows = new ArrayList<>();
         for (EsFileMember member : members == null ? List.<EsFileMember>of() : members) {
@@ -260,7 +319,12 @@ public class FileRoleService {
                 && Objects.equals(operatorId, member.getMemberId())) {
                 throw new ServiceException("不能修改自己的角色");
             }
-            validateSubject(member);
+            // 已失效主体可原样保留或删除，不可借编辑角色重新授权。
+            String oldRole = existing.get(member.getMemberType() + ":" + member.getMemberId());
+            if (!Objects.equals(oldRole, member.getRole())) {
+                validateSubject(member);
+            }
+            member.setFileId(fileId);
             if (!seen.add(member.getMemberType() + ":" + member.getMemberId())) {
                 throw new ServiceException("同一主体重复出现，请合并为一行");
             }
@@ -318,13 +382,29 @@ public class FileRoleService {
         }
         if (EsFileMember.TYPE_USER.equals(member.getMemberType())) {
             SysUserDept user = sysUserDeptMapper.selectById(member.getMemberId());
-            if (user == null || "2".equals(user.getDelFlag())) {
-                throw new ServiceException("账号不存在或已删除");
+            if (user == null || !"0".equals(user.getDelFlag()) || !"0".equals(user.getStatus())) {
+                throw new ServiceException("账号不存在或已停用");
+            }
+            if (user.getDeptId() != null && user.getDeptId() > 0) {
+                SysDeptRow dept = sysDeptRowMapper.selectById(user.getDeptId());
+                if (dept == null || !"0".equals(dept.getDelFlag()) || !"0".equals(dept.getStatus())) {
+                    throw new ServiceException("账号所属部门已停用");
+                }
+            }
+            if (spaceService.sharedPermissionOf(member.getMemberId()) == null) {
+                throw new ServiceException("只能授权同一共享空间的有效成员");
             }
         } else if (EsFileMember.TYPE_DEPT.equals(member.getMemberType())) {
             SysDeptRow dept = sysDeptRowMapper.selectById(member.getMemberId());
-            if (dept == null || "2".equals(dept.getDelFlag())) {
-                throw new ServiceException("部门不存在或已删除");
+            if (dept == null || !"0".equals(dept.getDelFlag()) || !"0".equals(dept.getStatus())) {
+                throw new ServiceException("部门不存在或已停用");
+            }
+            boolean shared = spaceService.listSharedMembers().stream().anyMatch(row ->
+                EsSpaceMember.TYPE_DEPT.equals(row.getMemberType())
+                    && Objects.equals(row.getUserId(), member.getMemberId())
+                    && (EsSpaceMember.PERM_READ.equals(row.getPermission()) || EsSpaceMember.PERM_WRITE.equals(row.getPermission())));
+            if (!shared) {
+                throw new ServiceException("只能授权同一共享空间的有效部门");
             }
         } else {
             throw new ServiceException("未知的主体类型：" + member.getMemberType());

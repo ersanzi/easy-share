@@ -83,7 +83,7 @@ export interface CloudFile {
    * 一旦要用它调后端（如按 fileId 删除/还原），必须先在 Go 侧转成字符串
    * ——参见 RecycleEntry.fileId 与本文件 known-issues KI-21。
    */
-  fileId: number
+  fileId: string | number
   /**
    * 创建时间（控制面 `es_file.create_time`，ISO 串）。
    * 旧控制面未返回该字段时为 undefined —— 详情面板按「没有就不显示」处理，不编造。
@@ -92,7 +92,7 @@ export interface CloudFile {
   /** 上传者显示名（控制面 join sys_user.nick_name）；旧控制面缺失 */
   uploadByName?: string
   /** 覆盖上传递增的版本号；0 或缺失表示首次登记 */
-  versionId?: number
+  versionId?: string | number
 }
 
 /**
@@ -256,6 +256,7 @@ export interface KnowledgeDocument {
 }
 
 export interface KnowledgeDocumentManifest {
+  can_download?: boolean
   file_id?: string
   version_id?: string
   filename?: string
@@ -278,6 +279,7 @@ export interface KnowledgeDocumentView {
 
 // 知识库清单：最新任务状态与“最近一次成功版本”分开表达
 export interface KnowledgeDocumentSummary {
+  can_download?: boolean
   job_id: string
   file_id: string
   version_id: string
@@ -568,6 +570,21 @@ export interface FileMemberRole {
   memberId: string
   // manage=可管理（含授权/删除） / edit=可编辑（无删除） / download=可查看下载 / read=仅可查看
   role: 'manage' | 'edit' | 'download' | 'read'
+  memberName?: string
+  grantable?: boolean
+}
+
+export interface FileMemberCandidate {
+  memberType: 'user' | 'dept'
+  memberId: string
+  memberName: string
+  grantable: boolean
+}
+
+export interface DriveFileEntry extends Omit<CloudFile, 'fileId' | 'versionId'> {
+  fileId: string
+  versionId: string
+  effectiveRole?: FileMemberRole['role']
 }
 
 // 共享空间文件条目（管理页「文件访问角色」卡选文件用）。

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { core } from '../services/core'
+import FileMemberEditor from './FileMemberEditor.vue'
 import { useConfirm } from '../composables/useConfirm'
-import { ADMIN_SCOPE_LABELS, QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminMember, type AdminRole, type AdminSharedMember, type AuthUser, type Capacity, type FeatureFlags, type FileMemberRole, type KnowledgeStats, type ManagedUser, type SharedFileEntry, type Space } from '../types/core'
+import { ADMIN_SCOPE_LABELS, QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminMember, type AdminRole, type AdminSharedMember, type AuthUser, type Capacity, type FeatureFlags, type KnowledgeStats, type ManagedUser, type SharedFileEntry, type Space } from '../types/core'
 
 type Tab = 'overview' | 'accounts' | 'spaces' | 'permissions'
 
@@ -43,18 +44,6 @@ const spacesLoading = ref(false)
 // 护栏在服务端（不能修改自己的角色、仅 manage 档可授权），前端只做可用的编辑器。
 const sharedFiles = ref<SharedFileEntry[]>([])
 const memberFileId = ref('')
-const memberRows = ref<FileMemberRole[]>([])
-const memberLoading = ref(false)
-const memberBusy = ref(false)
-const memberAdd = ref<{ memberType: 'user' | 'dept'; memberId: string; role: FileMemberRole['role'] }>({
-  memberType: 'user', memberId: '', role: 'read',
-})
-const FILE_ROLE_LABELS: Record<FileMemberRole['role'], string> = {
-  manage: '可管理（含授权/删除）',
-  edit: '可编辑（无删除）',
-  download: '可查看下载',
-  read: '仅可查看',
-}
 
 const loadSharedFiles = async () => {
   try { sharedFiles.value = (await core.sharedFileList()) ?? [] } catch (e) { fail(e) }
@@ -62,51 +51,7 @@ const loadSharedFiles = async () => {
 
 const memberFileName = computed(() =>
   sharedFiles.value.find(f => f.fileId === memberFileId.value)?.name ?? '')
-
-// 成员行展示名：账号取昵称（回退登录名），部门取部门名；查不到按 ID 兜底
-const memberLabel = (row: FileMemberRole) => {
-  const name = row.memberType === 'user'
-    ? users.value.find(u => u.userId === row.memberId)?.nickName
-      || users.value.find(u => u.userId === row.memberId)?.userName
-    : depts.value.find(d => d.deptId === row.memberId)?.deptName
-  return name || `#${row.memberId}`
-}
-
-const pickMemberFile = async (fileId: string) => {
-  memberFileId.value = fileId
-  memberRows.value = []
-  if (!fileId) return
-  memberLoading.value = true
-  try { memberRows.value = (await core.fileMemberList(fileId)) ?? [] } catch (e) { fail(e) } finally { memberLoading.value = false }
-}
-
-const addMemberRow = () => {
-  if (!memberAdd.value.memberId) return
-  const dup = memberRows.value.some(m =>
-    m.memberType === memberAdd.value.memberType && m.memberId === memberAdd.value.memberId)
-  if (dup) { fail(new Error('该成员已有角色行，直接改档位即可')); return }
-  memberRows.value = [...memberRows.value, { ...memberAdd.value }]
-  memberAdd.value = { memberType: 'user', memberId: '', role: 'read' }
-}
-
-const removeMemberRow = (row: FileMemberRole) => {
-  memberRows.value = memberRows.value.filter(m =>
-    !(m.memberType === row.memberType && m.memberId === row.memberId))
-}
-
-const saveMemberRows = async () => {
-  if (!memberFileId.value) return
-  memberBusy.value = true
-  try {
-    await core.fileMemberReplace(memberFileId.value, memberRows.value)
-    notify(`已保存「${memberFileName.value}」的成员角色（${memberRows.value.length} 条）`)
-    await pickMemberFile(memberFileId.value)
-  } catch (e) {
-    fail(e)
-  } finally {
-    memberBusy.value = false
-  }
-}
+const pickMemberFile = (fileId: string) => { memberFileId.value = fileId }
 // 每个账号的配额输入框各自的草稿值（GB），键是 userId；共享空间用 'shared'。
 // 值可能是 number：Vue 的 v-model 对 <input type="number"> 会自动做数字转换，
 // 清空输入框时又会给回空串，所以两种类型都要接。
@@ -1019,7 +964,7 @@ const roleSummary = (role: AdminRole) => {
             <h2>按文件给成员配权限</h2>
           </div>
           <div class="card-actions">
-            <button class="secondary-button compact" type="button" :disabled="memberLoading" @click="void loadSharedFiles()">
+            <button class="secondary-button compact" type="button" :disabled="spacesLoading" @click="void loadSharedFiles()">
               <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
               刷新文件
             </button>
@@ -1039,63 +984,7 @@ const roleSummary = (role: AdminRole) => {
             </option>
           </select>
         </div>
-        <template v-if="memberFileId">
-          <div v-if="memberLoading" class="admin-empty">正在读取成员角色…</div>
-          <div v-else-if="!memberRows.length" class="admin-empty">还没有显式成员角色，此文件按默认规则生效。</div>
-          <div v-else class="role-list">
-            <div v-for="row in memberRows" :key="row.memberType + row.memberId" class="role-row">
-              <div class="role-main">
-                <strong>{{ memberLabel(row) }}</strong>
-                <span class="role-tag">{{ row.memberType === 'user' ? '账号' : '部门' }}</span>
-                <span class="role-meta">{{ FILE_ROLE_LABELS[row.role] }}</span>
-              </div>
-              <div class="role-actions">
-                <select
-                  class="role-select" :value="row.role" :aria-label="`${memberLabel(row)} 的角色`"
-                  @change="row.role = ($event.target as HTMLSelectElement).value as FileMemberRole['role']"
-                >
-                  <option v-for="(label, value) in FILE_ROLE_LABELS" :key="value" :value="value">{{ label }}</option>
-                </select>
-                <button class="secondary-button compact" type="button" @click="removeMemberRow(row)">移除</button>
-              </div>
-            </div>
-          </div>
-          <div class="role-form">
-            <label class="role-field">
-              <span>主体类型</span>
-              <select v-model="memberAdd.memberType">
-                <option value="user">账号</option>
-                <option value="dept">部门</option>
-              </select>
-            </label>
-            <label class="role-field">
-              <span>成员</span>
-              <select v-model="memberAdd.memberId">
-                <option value="">— 选择 —</option>
-                <template v-if="memberAdd.memberType === 'user'">
-                  <option v-for="u in users.filter(u => u.userId !== currentUser?.userId)" :key="u.userId" :value="u.userId">
-                    {{ u.nickName || u.userName }}
-                  </option>
-                </template>
-                <template v-else>
-                  <option v-for="d in depts" :key="d.deptId" :value="d.deptId">{{ d.deptName }}</option>
-                </template>
-              </select>
-            </label>
-            <label class="role-field">
-              <span>角色</span>
-              <select v-model="memberAdd.role">
-                <option v-for="(label, value) in FILE_ROLE_LABELS" :key="value" :value="value">{{ label }}</option>
-              </select>
-            </label>
-            <div class="role-form-actions">
-              <button class="secondary-button compact" type="button" :disabled="!memberAdd.memberId" @click="addMemberRow">添加行</button>
-              <button class="primary-button compact" type="button" :disabled="memberBusy || !memberRows.length" @click="void saveMemberRows()">
-                {{ memberBusy ? '保存中…' : '保存成员角色' }}
-              </button>
-            </div>
-          </div>
-        </template>
+        <FileMemberEditor v-if="memberFileId" :file-id="memberFileId" :file-name="memberFileName" :operator-id="currentUser?.userId ?? ''" @saved="notify('成员角色已保存')" />
       </section>
 
       <section class="card">

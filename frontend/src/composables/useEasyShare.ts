@@ -1,7 +1,7 @@
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { core } from '../services/core'
 import { useConfirm } from './useConfirm'
-import type { AuthUser, CoreSnapshot, TransferTask } from '../types/core'
+import type { AuthUser, CoreSnapshot, TransferTask, Space, SpaceType } from '../types/core'
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
 const emptySnapshot = (): CoreSnapshot => ({
@@ -52,6 +52,23 @@ export function useEasyShare() {
     features: { knowledge: false, meeting: false, drive: false, shared: false, plugin: false },
   }
   const currentUser = ref<AuthUser>({ ...emptyUser })
+  // 网盘空间独立于挂载开关；仅显示控制面mine返回且功能已开通的空间。
+  const driveSpaces = ref<Space[]>([])
+  const selectedDriveSpace = ref<SpaceType>('personal')
+  let spaceRevision = 0
+  const sharedDriveAvailable = computed(() => currentUser.value.features?.drive && currentUser.value.features?.shared
+    && driveSpaces.value.some(space => space.spaceType === 'shared' && !!space.permission))
+  const refreshDriveSpaces = async () => {
+    const revision = ++spaceRevision
+    driveSpaces.value = []
+    if (!currentUser.value.loggedIn || !currentUser.value.features?.drive) { selectedDriveSpace.value = 'personal'; return }
+    try {
+      const spaces = await core.mySpaces()
+      if (!disposed && revision === spaceRevision) driveSpaces.value = spaces ?? []
+    } catch { /* 无权或服务离线时不猜共享空间可用。 */ }
+    if (revision === spaceRevision && !sharedDriveAvailable.value) selectedDriveSpace.value = 'personal'
+  }
+  watch(currentUser, () => { void refreshDriveSpaces() })
   const loggingIn = ref(false)
   // 在线升级：启动自动检查（Go 侧 24h 节流）发现新版本时记录版本号，
   // 设置入口据此打红点；用户检查/下载后由设置页自身状态接管。
@@ -357,6 +374,9 @@ export function useEasyShare() {
     activeView,
     activeTasks,
     currentUser,
+    driveSpaces,
+    selectedDriveSpace,
+    sharedDriveAvailable,
     loggingIn,
     updateAvailable,
     login: async (username: string, password: string): Promise<boolean> => {

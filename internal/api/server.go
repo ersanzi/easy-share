@@ -118,6 +118,7 @@ func (server *Server) routes() http.Handler {
 	mux.Handle("POST /api/knowledge/query", server.auth(http.HandlerFunc(server.knowledgeQuery)))
 	// 知识阅读页：清单/视图走 JSON 代理，原件下载走流式透传
 	mux.Handle("GET /api/knowledge/documents", server.auth(http.HandlerFunc(server.knowledgeDocuments)))
+	mux.Handle("POST /api/knowledge/documents/process-drive", server.auth(http.HandlerFunc(server.knowledgeProcessDriveFile)))
 	mux.Handle("GET /api/knowledge/documents/{file_id}/versions/{version_id}/view", server.auth(http.HandlerFunc(server.knowledgeDocumentView)))
 	mux.Handle("GET /api/knowledge/documents/{file_id}/versions/{version_id}/source", server.auth(http.HandlerFunc(server.knowledgeDocumentSource)))
 	// 会议听记：列表/详情/管理走 JSON 代理，上传与音频回放走流式透传

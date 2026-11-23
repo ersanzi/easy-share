@@ -288,12 +288,57 @@ func (server *Server) writeKnowledgeDocumentError(writer http.ResponseWriter, op
 			}
 			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_auth_expired", Message: "登录已失效，请重新登录"})
 			return
-		case http.StatusForbidden, http.StatusNotFound, http.StatusRequestEntityTooLarge:
+		case http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusRequestEntityTooLarge, http.StatusServiceUnavailable:
 			writeJSON(writer, remote.Status, ErrorResponse{Code: "knowledge_document_error", Message: remote.Detail})
 			return
 		}
 	}
 	writeKnowledgeError(writer, operation, err)
+}
+
+// knowledgeProcessDriveFile 仅透传文件身份与预期版本，不接受客户端声明来源或归属。
+func (server *Server) knowledgeProcessDriveFile(writer http.ResponseWriter, request *http.Request) {
+	if server.knowledgeUnavailable(writer) {
+		return
+	}
+	session, ok := server.knowledgeSession(writer)
+	if !ok {
+		return
+	}
+	if session.Mode != knowledge.ModeSSO {
+		writeJSON(writer, http.StatusForbidden, ErrorResponse{Code: "knowledge_sso_required", Message: "请使用统一登录后将网盘文件加入知识库"})
+		return
+	}
+	var input struct {
+		FileID    string `json:"fileId"`
+		VersionID string `json:"versionId"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "文件身份与版本无效，请刷新网盘后重试"})
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "请求只能包含一份文件身份与版本"})
+		return
+	}
+	fileID, fileErr := strconv.ParseInt(input.FileID, 10, 64)
+	versionID, versionErr := strconv.ParseInt(input.VersionID, 10, 64)
+	if fileErr != nil || versionErr != nil || fileID <= 0 || versionID <= 0 {
+		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_request", Message: "文件身份与版本无效，请刷新网盘后重试"})
+		return
+	}
+	controller := http.NewResponseController(writer)
+	_ = controller.SetWriteDeadline(time.Time{})
+	ctx, cancel := context.WithTimeout(request.Context(), knowledgeUploadTimeout)
+	defer cancel()
+	job, err := knowledge.NewClient(session.ServerURL).ProcessDriveFile(ctx, session.Token, input.FileID, input.VersionID)
+	if err != nil {
+		server.writeKnowledgeDocumentError(writer, "process drive file", err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, job)
 }
 
 // knowledgeDocuments 代理知识库文档清单（最新任务状态 + 最近成功版本）。

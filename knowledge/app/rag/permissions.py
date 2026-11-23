@@ -65,13 +65,19 @@ def can_view_document(manifest: dict, user: ScopeUser) -> bool:
     产物体（clean.md/document.json/原件）以前只验登录不验文档归属，知道 file_id
     就能读别人文档；阅读页把这条路径变成常规能力，必须在入口处补齐判据。
     """
+    authority = manifest.get("owner_authority")
+    if authority == "ruoyi" and (user or {}).get("authority") != "ruoyi":
+        return False
+    if authority == "local" and (user or {}).get("authority") == "ruoyi" and manifest.get("owner"):
+        return False
     if user is None:
         return True
-    if user.get("role") == "admin":
+    role = user.get("authorization_role") if user.get("authority") == "ruoyi" else user.get("role")
+    if role == "admin":
         return True
     username = user.get("username")
     if not username:
-        return True
+        return False
     owner = manifest.get("owner")
     if owner is not None:
         return owner == username

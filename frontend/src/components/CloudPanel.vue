@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink, VersionEntry } from '../types/core'
+import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink, VersionEntry, AuthUser, Space, SpaceType } from '../types/core'
+import SharedDrivePanel from './SharedDrivePanel.vue'
 import CloudPreviewView from './CloudPreview.vue'
 import RecyclePanel from './RecyclePanel.vue'
 import { buildDriveView, relativeDir } from '../utils/driveFolder'
@@ -9,7 +10,10 @@ import { core } from '../services/core'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 
-defineProps<{ enabled: boolean }>()
+const props = defineProps<{ enabled: boolean; user?: AuthUser; spaces?: Space[]; selectedSpace?: SpaceType }>()
+const sharedRef = ref<InstanceType<typeof SharedDrivePanel> | null>(null)
+const sharedAvailable = computed(() => props.user?.features.drive && props.user?.features.shared && props.spaces?.some(space => space.spaceType === 'shared' && space.permission))
+const sharedSelected = computed(() => props.selectedSpace === 'shared' && sharedAvailable.value)
 const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir: string]; download: [key: string]; downloadAs: [key: string]; delete: [key: string, subCount?: number, subDirCount?: number]; share: [key: string] }>()
 
 const files = ref<CloudFile[]>([])
@@ -90,7 +94,7 @@ const view = computed(() =>
 const loadFiles = async () => {
   loading.value = true
   try {
-    files.value = await core.cloudList()
+    files.value = await core.cloudListInSpace('personal')
   } catch {
     files.value = []
   } finally {
@@ -468,6 +472,19 @@ const runCtx = (action: (file: CloudFile) => void) => {
   if (file) action(file)
 }
 
+const knowledgeBusy = ref(false)
+// 个人文件同样显式入库；只接受Go下发的字符串身份，不把已舍入数字转回字符串。
+const processKnowledge = async (file: CloudFile) => {
+  if (knowledgeBusy.value || typeof file.fileId !== 'string' || typeof file.versionId !== 'string') return
+  knowledgeBusy.value = true
+  try {
+    await core.knowledgeProcessDriveFile(file.fileId, file.versionId)
+    showNotice('已提交加入知识库，可在「知识 → 文档」查看处理进度')
+  } catch (e) { showNotice(e instanceof Error ? e.message : String(e)) }
+  finally { knowledgeBusy.value = false }
+}
+const ctxKnowledge = () => runCtx(file => { void processKnowledge(file) })
+
 const ctxPreview = () => runCtx(file => openFile(file))
 // 下载走应用内任务：默认落接收目录，进度出现在「活动」；另存为只换落点。
 const requestDownload = (key: string) => {
@@ -523,6 +540,7 @@ const selectByOffset = (delta: number) => {
 }
 
 const onGlobalKeydown = (event: KeyboardEvent) => {
+  if (sharedSelected.value) return
   const target = event.target as HTMLElement | null
   // 输入框 / 可编辑区内的按键不归列表管
   if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return
@@ -826,11 +844,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', closeCtxMenu, true)
 })
 // openRecycle：供外壳的「网盘」面板当一等入口（状态仍是本组件的 recycleOpen，不复制一份）
-defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true } })
+defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() : loadFiles(), openRecycle: () => { if (!sharedSelected.value) recycleOpen.value = true } })
 </script>
 
 <template>
-  <section class="card cloud-panel" :class="{ 'detail-open': detailOpen }">
+  <SharedDrivePanel v-if="sharedSelected" ref="sharedRef" :operator-id="user?.userId ?? ''" :knowledge-enabled="user?.features.knowledge" />
+  <section v-show="!sharedSelected" class="card cloud-panel" :class="{ 'detail-open': detailOpen }">
     <!-- 左栏：工具条 + 列表。详情面板展开时本列收窄，列表仍吃满剩余宽度 -->
     <div class="cloud-browser">
     <header class="card-header">
@@ -1091,6 +1110,7 @@ defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true
           <button v-if="detail.previewKind !== 'unsupported'" class="secondary-button compact" type="button" @click="openPreview(detail)">预览</button>
           <button class="secondary-button compact" type="button" title="下载到接收目录，可在「活动」中查看进度" @click="requestDownload(detail.key)">下载</button>
           <button class="secondary-button compact" type="button" @click="requestShare(detail.key)">分享</button>
+          <button v-if="user?.features.knowledge" class="secondary-button compact" type="button" :disabled="knowledgeBusy" @click="processKnowledge(detail)">加入知识库</button>
           <button class="secondary-button compact" type="button" @click="openMove">移动</button>
         </div>
 
@@ -1120,6 +1140,7 @@ defineExpose({ refresh: loadFiles, openRecycle: () => { recycleOpen.value = true
     <button v-if="ctxMenu.file.previewKind !== 'unsupported'" class="ctx-item" type="button" @click="ctxPreview">预览</button>
     <button class="ctx-item" type="button" @click="ctxDownload">下载到接收目录</button>
     <button class="ctx-item" type="button" @click="ctxDownloadAs">另存为…</button>
+    <button v-if="user?.features.knowledge" class="ctx-item" type="button" :disabled="knowledgeBusy" @click="ctxKnowledge">加入知识库</button>
     <button class="ctx-item" type="button" @click="ctxShare">分享链接</button>
     <button class="ctx-item" type="button" @click="ctxStar">{{ ctxMenu.file && isStarred(ctxMenu.file.key) ? '取消星标' : '添加星标' }}</button>
     <div class="ctx-sep"></div>

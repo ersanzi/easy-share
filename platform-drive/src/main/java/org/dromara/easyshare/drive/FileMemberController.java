@@ -46,8 +46,16 @@ public class FileMemberController {
      * @return 成员行
      */
     @GetMapping("/{fileId}/members")
-    public R<List<EsFileMember>> members(@PathVariable Long fileId) {
-        return R.ok(fileRoleService.membersOf(fileId, LoginHelper.getUserId()));
+    public R<List<FileRoleService.MemberView>> members(@PathVariable Long fileId) {
+        return R.ok(fileRoleService.memberViewsOf(fileId, LoginHelper.getUserId()));
+    }
+
+    /** 文件级候选搜索：授权服务先裁决manage，关键词与上限不提供空搜索兜底。 */
+    @GetMapping("/{fileId}/candidates")
+    public R<List<FileRoleService.Candidate>> candidates(@PathVariable Long fileId,
+        @org.springframework.web.bind.annotation.RequestParam String keyword,
+        @org.springframework.web.bind.annotation.RequestParam(defaultValue = "20") int limit) {
+        return R.ok(fileRoleService.candidatesOf(fileId, LoginHelper.getUserId(), keyword, limit));
     }
 
     /**

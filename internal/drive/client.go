@@ -65,6 +65,8 @@ type Object struct {
 	// UploadByName 是上传者显示名（控制面批量 join sys_user，nickName 优先）。
 	// 未登记行或用户已删为空串，界面按「没有就不显示」处理。
 	UploadByName string `json:"uploadByName"`
+	// EffectiveRole 由控制面下发，仅用于动作展示，服务端仍逐请求裁决。
+	EffectiveRole string `json:"effectiveRole"`
 }
 
 // FlexInt64 是能同时接受 **JSON 数字与 JSON 字符串**的 int64。
@@ -847,6 +849,27 @@ type FileMemberRole struct {
 	MemberType string `json:"memberType"`
 	MemberID   string `json:"memberId"`
 	Role       string `json:"role"`
+	MemberName string `json:"memberName,omitempty"`
+	Grantable  *bool  `json:"grantable,omitempty"`
+}
+
+// FileMemberCandidate 是文件级范围内的最小主体投影。
+type FileMemberCandidate struct {
+	MemberType string `json:"memberType"`
+	MemberID   string `json:"memberId"`
+	MemberName string `json:"memberName"`
+	Grantable  bool   `json:"grantable"`
+}
+
+// FileMemberCandidates 只访问先验manage的文件候选端点，不调用全员管理接口。
+func (c *Client) FileMemberCandidates(ctx context.Context, token string, fileID int64, keyword string, limit int) ([]FileMemberCandidate, error) {
+	query := url.Values{"keyword": {keyword}, "limit": {strconv.Itoa(limit)}}
+	var rows []FileMemberCandidate
+	endpoint := fmt.Sprintf("/easyshare/file-member/%d/candidates?%s", fileID, query.Encode())
+	if err := c.call(ctx, http.MethodGet, endpoint, token, nil, &rows); err != nil {
+		return nil, fmt.Errorf("搜索文件成员失败：%w", err)
+	}
+	return rows, nil
 }
 
 // FileMembers 取某文件的成员角色行。读取与替换都由控制面按 manage 档裁决；

@@ -76,7 +76,9 @@ class ControlPlaneSSO:
             return None
         user = self._ensure_local_user(info)
         # features 只随本次解析结果走，不回写本地档案：档案是身份，权限是控制面的活
-        user = {**user, "features": info.get("features") or all_features_enabled()}
+        user = {**user, "features": info.get("features") or all_features_enabled(),
+                "authority": "ruoyi", "subject_id": info.get("subject_id"),
+                "authorization_role": "admin" if info.get("is_admin") else "member", "dept": info.get("dept") or ""}
         self._cache_put(token, user)
         return user
 

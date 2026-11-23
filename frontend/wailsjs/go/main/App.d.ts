@@ -77,15 +77,23 @@ export function ClearHistory():Promise<void>;
 
 export function CloudDelete(arg1:string):Promise<void>;
 
+export function CloudDeleteInSpace(arg1:string,arg2:string):Promise<void>;
+
 export function CloudDownload(arg1:string):Promise<void>;
 
 export function CloudDownloadAs(arg1:string):Promise<void>;
+
+export function CloudDownloadAsInSpace(arg1:string,arg2:string):Promise<void>;
+
+export function CloudDownloadInSpace(arg1:string,arg2:string):Promise<void>;
 
 export function CloudFreeUpSpace(arg1:string):Promise<void>;
 
 export function CloudKeepOnDevice(arg1:string):Promise<void>;
 
 export function CloudList():Promise<Array<cloud.File>>;
+
+export function CloudListInSpace(arg1:string):Promise<Array<main.DriveFileVo>>;
 
 export function CloudMkdir(arg1:string,arg2:string):Promise<void>;
 
@@ -102,6 +110,8 @@ export function CloudRecyclePurge(arg1:string):Promise<void>;
 export function CloudRecycleRestore(arg1:string):Promise<void>;
 
 export function CloudRename(arg1:string,arg2:string):Promise<void>;
+
+export function CloudRenameInSpace(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CloudRestoreVersion(arg1:string,arg2:number):Promise<void>;
 
@@ -131,6 +141,8 @@ export function CurrentUser():Promise<main.AuthUser>;
 
 export function DeleteTask(arg1:string):Promise<void>;
 
+export function FileMemberCandidates(arg1:string,arg2:string,arg3:number):Promise<Array<drive.FileMemberCandidate>>;
+
 export function FileMemberList(arg1:string):Promise<Array<drive.FileMemberRole>>;
 
 export function FileMemberRemove(arg1:string,arg2:string,arg3:string):Promise<void>;
@@ -158,6 +170,8 @@ export function KnowledgeHealth():Promise<knowledge.Health>;
 export function KnowledgeLogin(arg1:string,arg2:string,arg3:string):Promise<knowledge.StatusView>;
 
 export function KnowledgeLogout():Promise<void>;
+
+export function KnowledgeProcessDriveFile(arg1:string,arg2:string):Promise<knowledge.ProcessingJob>;
 
 export function KnowledgeStatus():Promise<knowledge.StatusView>;
 

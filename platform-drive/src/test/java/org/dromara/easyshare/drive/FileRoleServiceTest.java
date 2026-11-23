@@ -168,6 +168,8 @@ class FileRoleServiceTest {
         SysUserDept user = new SysUserDept();
         user.setUserId(8L);
         user.setDelFlag("0");
+        user.setStatus("0");
+        when(spaceService.sharedPermissionOf(8L)).thenReturn(EsSpaceMember.PERM_READ);
         when(sysUserDeptMapper.selectById(8L)).thenReturn(user);
 
         service.replaceMembers(100L, List.of(member("user", 8L, FileRoleService.ROLE_READ)), 7L);

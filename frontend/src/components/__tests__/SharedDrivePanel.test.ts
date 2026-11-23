@@ -1,0 +1,41 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import { beforeEach, expect, it, vi } from 'vitest'
+import SharedDrivePanel from '../SharedDrivePanel.vue'
+const api = vi.hoisted(() => ({ cloudListInSpace: vi.fn(), cloudDownloadInSpace: vi.fn(), cloudDownloadAsInSpace: vi.fn(), cloudRenameInSpace: vi.fn(), cloudDeleteInSpace: vi.fn(), fileMemberList: vi.fn(), fileMemberReplace: vi.fn(), fileMemberCandidates: vi.fn(), knowledgeProcessDriveFile: vi.fn() }))
+vi.mock('../../services/core', () => ({ core: api }))
+beforeEach(() => { vi.clearAllMocks(); api.fileMemberList.mockResolvedValue([]) })
+it('共享read只说明阅读权限，不提供原件下载或假预览', async () => {
+  api.cloudListInSpace.mockResolvedValue([{ fileId:'9007199254740993', versionId:'2', key:'合同.pdf', name:'合同.pdf', size:12, effectiveRole:'read' }])
+  const w = mount(SharedDrivePanel, { props: { operatorId:'7', knowledgeEnabled:true } })
+  await flushPromises()
+  expect(api.cloudListInSpace).toHaveBeenCalledWith('shared')
+  expect(w.text()).toContain('仅可查看')
+  expect(w.text()).not.toContain('下载')
+  expect(w.text()).not.toContain('预览')
+  expect(w.text()).not.toContain('加入知识库')
+})
+it('manage可键盘到达成员入口且知识入库传原始字符串文件版本', async () => {
+  api.cloudListInSpace.mockResolvedValue([{ fileId:'9007199254740993', versionId:'9007199254740995', key:'合同.pdf', name:'合同.pdf', size:12, effectiveRole:'manage' }])
+  api.knowledgeProcessDriveFile.mockResolvedValue({ status:'queued' })
+  const w = mount(SharedDrivePanel, { props: { operatorId:'7', knowledgeEnabled:true } })
+  await flushPromises()
+  await w.find('[data-testid="manage-members"]').trigger('click')
+  await flushPromises()
+  expect(api.fileMemberList).toHaveBeenCalledWith('9007199254740993')
+  await w.find('[data-testid="close-members"]').trigger('click')
+  await w.find('[data-testid="process-knowledge"]').trigger('click')
+  await flushPromises()
+  expect(api.knowledgeProcessDriveFile).toHaveBeenCalledWith('9007199254740993','9007199254740995')
+})
+it('切换账号清空旧文件并忽略旧请求迟到结果', async () => {
+  let oldResolve!: (rows: unknown[]) => void
+  api.cloudListInSpace.mockImplementationOnce(() => new Promise(resolve => { oldResolve = resolve }))
+    .mockResolvedValueOnce([{ fileId:'20', versionId:'2', key:'B.txt', name:'B.txt', effectiveRole:'download' }])
+  const w = mount(SharedDrivePanel, { props: { operatorId:'A' } })
+  await w.setProps({ operatorId:'B' })
+  await flushPromises()
+  oldResolve([{ fileId:'10', versionId:'1', key:'A.txt', name:'A.txt', effectiveRole:'manage' }])
+  await flushPromises()
+  expect(w.text()).toContain('B.txt')
+  expect(w.text()).not.toContain('A.txt')
+})

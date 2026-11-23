@@ -450,10 +450,30 @@ export namespace discovery {
 
 export namespace drive {
 	
+	export class FileMemberCandidate {
+	    memberType: string;
+	    memberId: string;
+	    memberName: string;
+	    grantable: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new FileMemberCandidate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memberType = source["memberType"];
+	        this.memberId = source["memberId"];
+	        this.memberName = source["memberName"];
+	        this.grantable = source["grantable"];
+	    }
+	}
 	export class FileMemberRole {
 	    memberType: string;
 	    memberId: string;
 	    role: string;
+	    memberName?: string;
+	    grantable?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileMemberRole(source);
@@ -464,6 +484,8 @@ export namespace drive {
 	        this.memberType = source["memberType"];
 	        this.memberId = source["memberId"];
 	        this.role = source["role"];
+	        this.memberName = source["memberName"];
+	        this.grantable = source["grantable"];
 	    }
 	}
 	export class RecycleEntryView {
@@ -898,6 +920,7 @@ export namespace knowledge {
 	}
 	
 	export class DocumentSummary {
+	    can_download: boolean;
 	    job_id: string;
 	    file_id: string;
 	    version_id: string;
@@ -922,6 +945,7 @@ export namespace knowledge {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.can_download = source["can_download"];
 	        this.job_id = source["job_id"];
 	        this.file_id = source["file_id"];
 	        this.version_id = source["version_id"];
@@ -972,6 +996,7 @@ export namespace knowledge {
 		}
 	}
 	export class DocumentManifest {
+	    can_download: boolean;
 	    file_id: string;
 	    version_id: string;
 	    filename: string;
@@ -992,6 +1017,7 @@ export namespace knowledge {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.can_download = source["can_download"];
 	        this.file_id = source["file_id"];
 	        this.version_id = source["version_id"];
 	        this.filename = source["filename"];
@@ -1464,6 +1490,30 @@ export namespace knowledge {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
+	export class ProcessingJob {
+	    id: string;
+	    file_id: string;
+	    version_id: string;
+	    filename: string;
+	    status: string;
+	    stage: string;
+	    progress: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ProcessingJob(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.file_id = source["file_id"];
+	        this.version_id = source["version_id"];
+	        this.filename = source["filename"];
+	        this.status = source["status"];
+	        this.stage = source["stage"];
+	        this.progress = source["progress"];
+	    }
+	}
 	
 	export class StatusView {
 	    configured: boolean;
@@ -1550,6 +1600,58 @@ export namespace main {
 	        this.features = this.convertValues(source["features"], account.FeatureFlags);
 	    }
 	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DriveFileVo {
+	    key: string;
+	    name: string;
+	    size: number;
+	    // Go type: time
+	    lastModified: any;
+	    fileId: string;
+	    versionId: string;
+	    uploadByName: string;
+	    effectiveRole?: string;
+	    contentType: string;
+	    previewKind: string;
+	    // Go type: time
+	    createdAt?: any;
+
+	    static createFrom(source: any = {}) {
+	        return new DriveFileVo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.lastModified = this.convertValues(source["lastModified"], null);
+	        this.fileId = source["fileId"];
+	        this.versionId = source["versionId"];
+	        this.uploadByName = source["uploadByName"];
+	        this.effectiveRole = source["effectiveRole"];
+	        this.contentType = source["contentType"];
+	        this.previewKind = source["previewKind"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	    }
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

@@ -21,7 +21,7 @@ from app.wps_addon.routes import router as wps_router
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # AUTH_ENABLED=true 时要求登录的业务前缀；/auth、/health、/docs、/lab、/debug（回环守卫）不受令牌保护
-_PROTECTED_PREFIXES = ("/documents", "/query", "/ingest", "/lab/api/uploads", "/meetings")
+_PROTECTED_PREFIXES = ("/documents", "/jobs", "/query", "/ingest", "/lab/api/uploads", "/meetings")
 
 # 控制面功能权限矩阵对这些前缀生效：知识问答（knowledge）、会议听记（meeting）。
 # 只在令牌解析出了控制面身份时生效——本地账号的档案在本地，不受矩阵管辖（行为与引入前一致）。
@@ -82,6 +82,8 @@ def create_app(services: AppServices | None = None) -> FastAPI:
                 user = await run_in_threadpool(resolved_services.sso.resolve, token)
             if user:
                 request.state.user = user
+                if user.get("authority") == "ruoyi":
+                    request.state.control_plane_token = token
         if (
             resolved_services.config.auth_enabled
             and request.url.path.startswith(_PROTECTED_PREFIXES)

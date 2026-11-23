@@ -159,7 +159,7 @@ public class DriveController {
                 FileVo file = toFileVo(object, listing, activeRows, uploaderNames);
                 return includeDirs && file.directory()
                     ? new FileVo(file.path() + "/", file.size(), file.lastModified(), file.fileId(),
-                        file.versionId(), file.contentMd5(), file.createdAt(), file.uploadByName(), true)
+                        file.versionId(), file.contentMd5(), file.createdAt(), file.uploadByName(), true, file.effectiveRole())
                     : file;
             })
             .toList());
@@ -185,7 +185,7 @@ public class DriveController {
             row == null ? null : row.getContentMd5(),
             row == null ? null : toInstant(row.getCreateTime()),
             row == null || row.getUploadBy() == null ? null : uploaderNames.get(row.getUploadBy()),
-            row != null && row.directoryEntry());
+            row != null && row.directoryEntry(), object.effectiveRole());
     }
 
     /**
@@ -1019,7 +1019,13 @@ public class DriveController {
      * @param uploadByName 上传者显示名（nickName 优先，退回 userName）；未知为 null
      */
     public record FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId,
-                         String contentMd5, Instant createdAt, String uploadByName, boolean directory) {
+                         String contentMd5, Instant createdAt, String uploadByName, boolean directory,
+                         String effectiveRole) {
+        /** 个人盘与创建目录旧调用保持同构；共享角色由唯一列表装配点补齐。 */
+        public FileVo(String path, long size, Instant lastModified, Long fileId, Long versionId,
+                      String contentMd5, Instant createdAt, String uploadByName, boolean directory) {
+            this(path, size, lastModified, fileId, versionId, contentMd5, createdAt, uploadByName, directory, null);
+        }
     }
 
     /**

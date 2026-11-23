@@ -14,5 +14,9 @@ import java.time.Instant;
  * @param lastModified 最后修改时间
  * @author EasyShare
  */
-public record DriveObject(String path, long size, Instant lastModified) {
+public record DriveObject(String path, long size, Instant lastModified, String effectiveRole) {
+    /** 存储层不参与授权，保留三参数构造；角色由列表裁决层补齐。 */
+    public DriveObject(String path, long size, Instant lastModified) {
+        this(path, size, lastModified, null);
+    }
 }

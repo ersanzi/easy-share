@@ -137,6 +137,9 @@ async def upload_document(
 
     resolved_file_id = _validate_id(file_id or f"lab-{uuid.uuid4().hex}", "file_id")
     resolved_version_id = _validate_id(version_id, "version_id")
+    # 实验台不能借同名文档覆盖网盘或他人来源，沿用公开入库护栏。
+    from app.api.routes import _guard_legacy_write
+    _guard_legacy_write(services, request, resolved_file_id)
 
     if not force:
         existing = services.job_store.find_latest(
@@ -179,6 +182,7 @@ async def upload_document(
         # 2b 文件归属：lab 上传要求登录（auth 开启时），谁传的归谁；未登录（本地
         # auth 关闭场景）落 None = 共享文档
         owner=(getattr(request.state, "user", None) or {}).get("username"),
+        owner_authority="ruoyi" if (getattr(request.state, "user", None) or {}).get("authority") == "ruoyi" else "local",
         force=force,
     )
     if created or job.status == "queued":

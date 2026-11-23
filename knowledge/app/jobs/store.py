@@ -39,6 +39,10 @@ class ProcessingJob:
     owner: str | None = None
     # 文档可见部门（CSV，部门 ID 串；NULL/空=共享空间全体可见）
     visible_depts: str | None = None
+    # 服务端钉住的来源与冻结正文；不保存用户令牌或 ACL 快照。
+    source_binding: dict | None = None
+    source_snapshot_key: str | None = None
+    owner_authority: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,6 +101,9 @@ class JobStore:
             # 片 2b 文档级可见性：旧库补列（NULL/空 = 全体可见）
             if "visible_depts" not in columns:
                 self.connection.execute("ALTER TABLE processing_jobs ADD COLUMN visible_depts TEXT")
+            for column in ("source_binding_json", "source_snapshot_key", "owner_authority"):
+                if column not in columns:
+                    self.connection.execute(f"ALTER TABLE processing_jobs ADD COLUMN {column} TEXT")
 
     def close(self) -> None:
         with self.lock:
@@ -111,6 +118,9 @@ class JobStore:
         filename: str,
         owner: str | None = None,
         visible_depts: str | None = None,
+        source_binding: dict | None = None,
+        source_snapshot_key: str | None = None,
+        owner_authority: str | None = None,
         force: bool = False,
     ) -> tuple[ProcessingJob, bool]:
         with self.lock, self.connection:
@@ -137,7 +147,25 @@ class JobStore:
                 """,
                 (job_id, file_id, version_id, object_key, filename, owner, visible_depts, now, now),
             )
+            self.connection.execute(
+                "UPDATE processing_jobs SET source_binding_json = ?, source_snapshot_key = ?, owner_authority = ? WHERE id = ?",
+                (json.dumps(source_binding) if source_binding else None, source_snapshot_key, owner_authority, job_id))
             return self.get(job_id), True
+
+    def source_binding(self, file_id: str, version_id: str | None = None) -> dict | None:
+        """版本级来源映射；权限结果永不落库。"""
+        with self.lock:
+            row = self.connection.execute(
+                "SELECT source_binding_json FROM processing_jobs WHERE file_id = ? "
+                "AND (? IS NULL OR version_id = ?) AND source_binding_json IS NOT NULL "
+                "ORDER BY created_at DESC LIMIT 1", (file_id, version_id, version_id)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def pin_source(self, job_id: str, binding: dict, snapshot_key: str) -> None:
+        with self.lock, self.connection:
+            self.connection.execute(
+                "UPDATE processing_jobs SET source_binding_json = ?, source_snapshot_key = ? WHERE id = ?",
+                (json.dumps(binding), snapshot_key, job_id))
 
     def get(self, job_id: str) -> ProcessingJob:
         with self.lock:
@@ -334,6 +362,9 @@ class JobStore:
             filename=row["filename"],
             owner=row["owner"],
             visible_depts=row["visible_depts"],
+            source_binding=json.loads(row["source_binding_json"]) if row["source_binding_json"] else None,
+            source_snapshot_key=row["source_snapshot_key"],
+            owner_authority=row["owner_authority"],
             status=row["status"],
             stage=row["stage"],
             progress=row["progress"],
