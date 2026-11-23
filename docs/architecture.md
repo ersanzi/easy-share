@@ -166,7 +166,9 @@ Authorization: Bearer <apiToken>
 | `GET` | `/easyshare/app/admin/releases` | superadmin | 版本列表（管理/回滚决策） |
 | `DELETE` | `/easyshare/app/admin/releases/{releaseId}` | superadmin | 删除版本（回滚：记录+对象一并删） |
 
-桌面端升级链路：启动 24h 节流自动检查（`update-state.json`）→ 设置页「关于与更新」手动检查 → 下载（SHA256 校验，`%LOCALAPPDATA%\EasyShare\updates\`）→ Windows 安装版「重启并更新」（`installer /S /update` → 优雅停 Core → NSIS taskkill 残留 → 覆盖安装 → 自动重启）；macOS 与绿色版仅引导下载。发布入口 `scripts/publish-release.ps1`。
+桌面端升级链路：启动 24h 节流自动检查（`update-state.json`）→ 设置页「关于与更新」手动检查 → 下载（SHA256 校验，`%LOCALAPPDATA%\EasyShare\updates\`）→ Windows 安装版「重启并更新」（`installer /S /update` → 优雅停 Core → NSIS taskkill 残留 → 覆盖安装 → 自动重启）；macOS 与绿色版仅引导下载。
+
+发布链路（2026-11-23 起）：正式 `vX.Y.Z` tag → 对应平台 CI 构建 → 版本/提交/目标/摘要绑定的资产 → 独立发布任务 → `scripts/publish-release.mjs` 登录控制面、直传 RustFS、发布、匿名清单与实际下载摘要回验。Windows/macOS 发布串行但各自依赖自己的构建，不需要双平台都成功才给单个平台上线；预发布 tag/手动构建只生成 GitHub 分发产物，不进入普通更新源。同版本不同正文拒绝覆盖，旧版补发不得覆盖更高版本；这些护栏在发布器实现，管理 API 本身仍保留原兼容语义。PowerShell 入口 `scripts/publish-release.ps1` 共用该发布器，作为隔离部署/恢复通道。CI secrets/网络前置与发版验收见 [开发手册发布章节](development.md#在线更新发布首次配置)。
 
 ## 4b-2. 租户服务配置下发（2026-09-06 起）
 

@@ -132,6 +132,7 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 
 | 日期 | 主题 | 状态 |
 | --- | --- | --- |
+| 2026-11-23 | **正式 tag 自动发布到在线更新源** — Windows/macOS 独立发布任务接通 tag→本次构建资产→控制面；三处版本/tag/提交/目标/摘要绑定，实际产品版本核验；统一 Node 发布器 + PS5.1 兼容入口，正式同版防覆盖、旧 tag 防回退、凭据隔离、匿名清单及实际下载回验 | 已完成·代码（发布/版本 **89 项**全过含真实 PS5.1 wrapper→loopback；Go 全仓测试/编译、前端 **91**/类型/构建、YAML/脚本语法/文档全绿；**真实 secrets/网络配置、tag CI 和生产发布未执行**；详见 [`iterations/2026-11-23-tag自动发布在线更新.md`](iterations/2026-11-23-tag自动发布在线更新.md)） |
 | 2026-11-12 | **桌宠滑出 + 网盘删除/Windows Ctrl+Z 还原一致性** — 桌宠外形 144×96 DIP、悬停/固定面板 400×360 DIP；动效为固定裁剪宿主内完整 WebView 从 `-100%` 到 `0`（原生等价 `overflow:hidden`+`translateY`），350ms `cubic-bezier(.22,1,.36,1)` 双向，中途反转连续，双击固定展开仍可拖。悬停用宠物+可见面板并集，离开 80ms 去抖防闪。删除链路：已缓存/未上传走 Windows Delete→Ctrl+Z，仅云端走「删除（可撤销）」，恢复云端同 fileId；服务端 purge 改比冻结 SHA256 防分片 ETag 漂移。宠物文字快速悬停抖动用位图缓存修复；桌宠动画不继承系统 `ClientAreaAnimations=0`。私有哈希/PID/服务器地址留本机 evidence | 已完成（Go 全包 / vitest 91 / vue-tsc 0 / Java 云盘模块 218 / 真机切换+小文件上传回读；混合 DPI 多屏与完整并发撤销矩阵未全覆盖；详见 [`iterations/2026-11-12-pet-slide-undo.md`](iterations/2026-11-12-pet-slide-undo.md)） |
 | 2026-11-11 | **网盘企业级差距分析 + 资源管理器删除/改名回传** — 差距清单八项（删除改名回传 P0 / 远端更新刷缓存 P1 / 共享 CfAPI P1 / 批量目录 P1 / 版本 UI·Office 预览·FileProvider·manage 档入口 P2）；REA 取证：钉盘企业否决删除→远端权威、恢复重设 PinState（`ev_b61b1f94`）、清理也进回收站、WPS CfUpdatePlaceholder 元数据投影；实现：写回引擎扫描差分回传（改名 `/move` 保 fileId 零重传、删除两轮确认软删回收站、身份护栏 + 空根守卫只挡首轮 + 远端清单幂等自愈、身份持久化跨重启） | 已完成·代码（go build/vet 绿、cfmount -count=3 绿 +10 单测、全仓测试一例负载超时隔离复跑过；真机未点验，清单见迭代文档；详见 [`iterations/2026-11-11-网盘企业级差距与删除改名回传.md`](iterations/2026-11-11-网盘企业级差距与删除改名回传.md)） |
 | 2026-11-05 | **企业权限 · 文档级成员角色（第三片，三层精细化收官）** — 共享空间文件支持成员级四档角色 manage/edit/download/read，新表 `es_file_member`（user/dept 双主体）；裁决一处收口 `FileRoleService.ladder`（上传者 manage → 成员行取高 → visible_depts=download → 空间默认 write=manage/read=download → 不可见），列表/下载签发/删除（manage 独占，对齐钉钉）/改名与覆盖上传（edit 起步）/改可见性/授权端点六处全部走同一份梯子；护栏对齐钉钉（不能修改自己的角色、仅上传者/manage 档授权、授权者既有行整组替换时保留）；purge 随行清理防孤儿。**兼容前提守住**：未配角色文件行为零变化（默认档按行为对账修正过设计稿两处：空间 write 默认 manage、visible_depts=download）。Go/前端级联（三绑定 + FileMemberRole + SharedFileList fileId 字符串下发）。**管理页「空间」Tab「文件访问角色」卡落地**（文件下拉 + 成员行表 + 四档编辑 + 整组保存，KI-21 口径）。对标依据：钉钉文档权限取证（67 动作枚举/护栏错误码），设计定稿 plans/2026-11-05-doc-member-roles.md | 已完成（Java **132** / Go 全包 / vue-tsc 0 / vitest 全过 / 文档闸门 96 引用 0 失败；已知边界=非超管 manage 档成员暂无 UI 入口，留下一片；真机点验清单见迭代记录；详见 [`iterations/2026-11-05-文档级成员角色.md`](iterations/2026-11-05-文档级成员角色.md)） |
@@ -252,6 +253,8 @@ EasyShare 有两条互相支撑的产品主线，通过统一账号与统一对�
 | 2026-07-23 | 知识平台管线架构选型（Unstructured + PaddleOCR + Milvus + 自写薄编排） | 已完成 |
 
 ## 进行中
+
+**正式 tag 自动发布到在线更新源（2026-11-23，代码与本地回归完成，真实发布待验收）**——修复「tag 构建已发 GitHub Release，但客户端控制面升级点未更新」断链；正式 tag 的对应平台构建成功后独立发布，版本/资产/目标/摘要校验、幂等防覆盖及匿名下载回验已接通，发布/版本89项、Go/前端/文档回归通过。**尚未配置真实 CI secrets/runner 网络、推送或运行正式 tag 发布**；缺配置会报红，不将本地 mock 宣称上线。首次配置和真实验收见 [`development.md`](development.md#在线更新发布首次配置)，详见 [`iterations/2026-11-23-tag自动发布在线更新.md`](iterations/2026-11-23-tag自动发布在线更新.md)。
 
 > 提交状态勘误（2026-11-19）：11-11/11-12 的“不提交/未推送”等限制仅描述各自原阶段。用户现已要求将基线 `590b69a` 后的完整更新整理为合并提交，11-11 内容现随本轮完整提交范围一并纳入；当前以 `dev` 分支为准，尚不据此声称本轮已经提交或推送。范围见 [`iterations/2026-11-19-submission-audit.md`](iterations/2026-11-19-submission-audit.md)。以下及迭代表测试统计均为此前实测证据，不是本次文档审核重跑结果；本次未重跑 Java。
 

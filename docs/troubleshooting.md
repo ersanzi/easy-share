@@ -367,6 +367,9 @@ knowledge/.venv/Scripts/python.exe -m pytest knowledge/tests/integration -q -m i
 3. **静默升级后开机自启被悄悄打开**：NSIS 静默模式下 `MessageBox MB_YESNO` 返回默认按钮 IDYES。凡是静默安装路径会经过的询问弹窗，必须包 `${IfNot} ${Silent}`。
 4. **检查更新一直转圈/报错**：控制面（`config.json` 的 platformBaseUrl）不可达，或 `security.excludes` 白名单没放行 `/easyshare/app/latest`（RuoYi 路由级 checkLogin 不认 `@SaIgnore`，只认白名单；且列表是整体替换，漏带基线条目会连登录都挂）。
 5. **下载完成但「重启并更新」不出现**：绿色版/非安装目录运行（注册表 `HKCU\Software\EasyShare\EasyShare\InstallDir` 与 exe 目录不一致）或 macOS——按设计只引导手动安装。
+6. **tag 已有 GitHub Release，但客户端仍拿不到新版**：2026-11-23 起必须检查对应平台的 `publish-update` 任务，不只看构建/GitHub Release。缺 `EASYSHARE_RELEASE_USERNAME/PASSWORD`、账号无 superadmin、runner 不能访问控制面或预签名 RustFS 都会在发布阶段报红。修配置后重跑失败任务；详见 [发布首次配置](development.md#在线更新发布首次配置)。本轮只交付代码配置，未设置真实 secrets 或验证生产发布。
+7. **正式版本重跑报「已发布资产不一致」或旧 tag 拒绝**：正式正文不可同版本覆盖；相同摘要只回验，不重传。包内版本和 tag 不一致先修三处版本，再打**新**正式 tag；不要删除重打旧 tag。服务端发布接口保持兼容，保护由统一发布器落实。
+8. **发布上传成功但匿名回验失败**：发布器检查平台/kind/assetId/大小/摘要，并实际下载核对 SHA256；不能仅以 latest.version 相等判成功。检查匿名白名单、RustFS endpoint 是否为 runner 和员工都可达的地址、对象是否被同名覆盖。排障不要粘贴令牌或完整预签名 URL。
 
 ## 14. 插件系统相关（2026-08-31 起）
 

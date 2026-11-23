@@ -36,6 +36,12 @@ if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
 
 # ── 闸门：写在文档里的纪律必须能被机器复算，否则「已收口」只是一句自述 ──
 # 顺序按「便宜且会先红」排：文档证据引用 → Go 测试 → 前端（vitest 内含设计 token 守卫，npm run build 内含 vue-tsc 类型检查）
+node scripts/check-release-version.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/diag/check-release-pipeline.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node --test scripts/diag/release-version.test.mjs scripts/diag/publish-release.test.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/diag/check-doc-refs.mjs --self-test
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/diag/check-doc-refs.mjs docs

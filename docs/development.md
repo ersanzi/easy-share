@@ -245,12 +245,41 @@ git push origin dev
 git push github dev
 ```
 
-版本阶段约定：`test` 仅用于流水线冒烟，`preview` 用于功能仍在完善且尚未完成全部真机验收的公开预览，`beta` 用于主要功能稳定后的扩大测试，`rc` 用于正式版候选。所有带 `-` 的 SemVer 预发布 tag（如 `v0.1.0-preview.1`）自动标记为 GitHub Prerelease。发布正式版：改三处版本号（`internal/version/version.go`、`wails.json`、`frontend/package.json`）→ `scripts/build.ps1` → `scripts/publish-release.ps1` 上传控制面。
+版本阶段约定：`test` 仅用于流水线冒烟，`preview` 用于功能仍在完善且尚未完成全部真机验收的公开预览，`beta` 用于主要功能稳定后的扩大测试，`rc` 用于正式版候选。所有带 `-` 的 SemVer 预发布 tag（如 `v0.1.0-preview.1`）自动标记为 GitHub Prerelease，**不发布到普通客户端更新源**。
+
+**正式 tag 是常规发版唯一入口（2026-11-23 起）**：先投递兼容的控制面/SQL → 同步 `internal/version/version.go`、`wails.json`、`frontend/package.json` 三处版本 → 本地验证 → 用户要求时提交并推送双仓库 → 推送对应的 `vX.Y.Z` tag。GitHub Windows/macOS 各自构建成功后，独立 `publish-update` 任务下载**本次 run** 的资产，核验版本/tag/提交/目标控制面/文件 SHA256，再调用 `scripts/publish-release.mjs` 自动发布到 RuoYi。发布后用匿名 latest 和实际下载 SHA256 回验；发布任务成功才表示该平台已进入在线更新源。不再要求每次手动运行发布脚本；单个平台失败不阻塞另一平台，macOS 仍是下载后手动安装。
+
+### 在线更新发布首次配置
+
+GitHub 仓库 Settings → Secrets and variables → Actions：
+
+- **Variable `PLATFORM_URL`**：同一地址用于烘焙客户端和控制面发布，禁止发布到另一个服务器却给用户发原服务器的包。沿用工作流现有公网兜底仅为兼容；正式部署应显式设置真实目标，推荐 HTTPS。
+- **Secrets `EASYSHARE_RELEASE_USERNAME` / `EASYSHARE_RELEASE_PASSWORD`**：控制面专用发布账号（现有发布 API 要求 `superadmin`），不要沿用默认 `admin/admin123`，不要在命令、日志或仓库中填写真值。凭据只注入发布步骤，不给构建步骤；不需要向 CI 配置任何 RustFS 静态密钥。
+- runner 必须能访问**控制面及预签名 URL 所指向的 RustFS**。GitHub-hosted runner 不能直接访问公司 `192.168.*`；纯内网部署须安排受控的内网发布 runner/可达通路，不能只把 `PLATFORM_URL` 改成内网地址就认为已接通。本轮未配置或验证真实网络与 secrets。
+
+缺凭据、版本不一致、错包、上传失败或匿名回验失败都使发布任务报红；已有 GitHub Release **不代表**控制面发布成功。失败后修配置并重跑失败任务；同版本同平台相同摘要的已发布包只做回验，禁止覆盖不同正文。不要删除重打正式 tag；变更正文须升新版本。补发旧 tag 不得抢占更高版本。
+
+手工发布仅作为隔离部署/故障恢复入口，PowerShell 参数保持兼容，但去掉 localhost/默认口令回退，内部共用 Node 22 发布器与校验：
+
+```powershell
+# 先在当前进程安全注入 EASYSHARE_RELEASE_USERNAME/PASSWORD，不在命令里写密码。
+powershell -ExecutionPolicy Bypass -File scripts/publish-release.ps1 -PlatformUrl https://<控制面域名> -Version 0.5.3 -Notes "更新说明"
+```
+
+本地发布回归（仅 loopback mock，不发布真实资产）：
+
+```bash
+node scripts/check-release-version.mjs
+node scripts/diag/check-release-pipeline.mjs
+node --test scripts/diag/release-version.test.mjs scripts/diag/publish-release.test.mjs
+```
+
+证据：`scripts/check-release-version.mjs` · `checkReleaseVersion`；`scripts/check-release-artifact.mjs` · `releaseArtifact`；`scripts/publish-release.mjs` · `publishRelease`。
 
 ### CI 触发规则
 
 - `dev` 推送：触发 Knowledge Tests（Python 知识面测试，按 `knowledge/**` 路径过滤）与 Quality Gates（`quality-gates.yml`：文档证据引用 + 设计 token 守卫 + `vue-tsc` 类型检查，不设路径过滤）；桌面构建只在打 `v*` tag 时跑，日常验证靠本地 `scripts/build.ps1`。
-- Windows / macOS CI（`build-windows.yml` / `build-mac.yml`）：仅 `v*` tag 推送自动触发，另有手动触发逃生通道；`master` 推送与 PR 不再触发。
+- Windows / macOS CI（`build-windows.yml` / `build-mac.yml`）：仅 `v*` tag 推送自动触发，另有手动触发逃生通道；`master` 推送与 PR 不再触发。正式 tag 的 `publish-update` 独立任务自动把本次平台资产发布到控制面；预发布和手动构建不触发该任务。
 - Rolling Release（`rolling-release.yml`）：跟随上述 tag 构建跑，双平台对同一 tag 成功后删除重建 `latest` Release；手动触发的构建不重建 latest。注意 tag 触发的 run `head_branch` 是 tag 名，本工作流不能再用 `branches` 过滤，改用 job 级 `if` 判定 `v*` 前缀。
 
 ### 服务端联调（控制面栈）

@@ -10,6 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 不让错版本的本地包绕过 tag 发布门禁。
+node scripts/check-release-version.mjs
+
 PLATFORM="${WAILS_PLATFORM:-darwin/universal}"
 PLATFORM_URL="${EASYSHARE_PLATFORM_URL:-}"
 

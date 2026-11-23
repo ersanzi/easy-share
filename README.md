@@ -100,6 +100,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 环境细节、服务端联调、macOS 构建、CI 与版本约定见[**开发手册**](docs/development.md)；代码结构与改动入口见[架构文档](docs/architecture.md)。
 
+**正式发版**：三处版本与 `vX.Y.Z` tag 一致 → CI 构建 → 自动发布到控制面在线更新源；预发布 tag 不进入普通用户更新。首次需配置发布账号 secrets 和 runner 可达的控制面/RustFS，详见[在线更新发布配置](docs/development.md#在线更新发布首次配置)。客户端仍从控制面检查，不依赖 GitHub 下载；对应平台发布任务成功才表示在线更新已上线。
+
 ## 📚 文档导航
 
 | 我想… | 去哪 |

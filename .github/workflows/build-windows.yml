@@ -45,6 +45,14 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      - name: 校验发布版本与 tag
+        run: node scripts/check-release-version.mjs
+
+      - name: 发布链路回归
+        run: |
+          node scripts/diag/check-release-pipeline.mjs
+          node --test scripts/diag/release-version.test.mjs scripts/diag/publish-release.test.mjs
+
       - name: 安装 NSIS
         shell: pwsh
         run: |
@@ -127,6 +135,19 @@ jobs:
             Write-Warning "二进制中仍存在 http://localhost:8090 字符串（可能是无关代码路径），请人工确认"
           }
 
+      - name: 核验安装包实际产品版本
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+        shell: pwsh
+        run: |
+          $expected = $env:GITHUB_REF_NAME.Substring(1)
+          foreach ($file in @('build/bin/easyshare.exe', 'build/bin/EasyShare-amd64-installer.exe')) {
+            $actual = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $file).Path).ProductVersion
+            if ($actual -ne $expected) { throw "安装资产产品版本与 tag 不一致：$file" }
+          }
+
+      - name: 记录在线更新资产证据
+        run: node scripts/check-release-artifact.mjs --write windows
+
       - name: 上传产物
         uses: actions/upload-artifact@v6
         with:
@@ -137,9 +158,9 @@ jobs:
             build/bin/easyshare.exe
             build/bin/easyshare-core.exe
             build/bin/*-installer.exe
+            build/bin/release-metadata.json
 
-      # 滚动 Release 由 rolling-release.yml 在双平台构建成功后统一删除重建，
-      # 本工作流只上传产物，不再直接发布（避免双流水线并发互删资产）。
+      # 版本 tag Release 沿用原通道；滚动 latest 由 rolling-release.yml 统一负责。
 
       - name: Publish prerelease Release
         if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
@@ -161,3 +182,43 @@ jobs:
             build/bin/easyshare.exe
             build/bin/easyshare-core.exe
             build/bin/*-installer.exe
+
+  publish-update:
+    name: 发布 Windows 在线更新
+    needs: build-windows
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    # 双平台发布串行，避免同版本在控制面并发登记；失败可重跑，但不取消正在上传的包。
+    concurrency:
+      group: control-plane-update
+      cancel-in-progress: false
+    env:
+      PLATFORM_URL: ${{ vars.PLATFORM_URL || 'http://47.96.128.231:11054' }}
+    steps:
+      - name: 检出本次 tag
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: 安装 Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: 下载本次构建的安装资产
+        uses: actions/download-artifact@v6
+        with:
+          name: EasyShare-Windows-${{ github.run_number }}
+          path: build/bin
+      - name: 核验发布资产
+        run: node scripts/check-release-artifact.mjs --verify windows
+      - name: 发布到客户端控制面更新源
+        env:
+          EASYSHARE_RELEASE_USERNAME: ${{ secrets.EASYSHARE_RELEASE_USERNAME }}
+          EASYSHARE_RELEASE_PASSWORD: ${{ secrets.EASYSHARE_RELEASE_PASSWORD }}
+        run: |
+          node scripts/publish-release.mjs --installer-path build/bin/EasyShare-amd64-installer.exe --platform windows --kind installer --version "${GITHUB_REF_NAME#v}"
+      - name: 记录发布结果
+        run: printf 'Windows 正式安装包已发布到控制面，并通过匿名清单与下载摘要回验。\n' >> "$GITHUB_STEP_SUMMARY"

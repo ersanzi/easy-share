@@ -124,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -PlatformUrl http://<
 | --- | --- | --- |
 | knowledge/（Python） | 服务器：`bash /opt/easyshare/repo/deploy/server-linux/update.sh` | ~10s，失败自动回退 |
 | platform-drive / 控制面（Java） | 开发机：`ship-control-plane.ps1 -SshTarget ...`（改完先推 git 存档） | ~30s |
-| 客户端（Go/Vue） | 开发机：`build.ps1 -PlatformUrl ...` → `publish-release.ps1 -PlatformUrl ...` | 无（同事端自动升级） |
+| 客户端（Go/Vue） | 常规：同步产品版本后推正式 `vX.Y.Z` tag → 对应平台 CI 构建及 `publish-update` 自动发布；内网隔离/恢复：`build.ps1 -PlatformUrl ...` → `publish-release.ps1 -PlatformUrl ...`（环境注入发布凭据） | 服务端无停机；员工端确认更新后重启安装 |
 | PG 增量 SQL（deploy/ruoyi-db/*.sql） | 服务器手动：`docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < 文件`（**灌前备份**） | — |
 
 数据安全：`.env`、`repo/knowledge/data/`、RustFS/PG 的 docker volume 都不在 git 里，
