@@ -4,6 +4,33 @@
 // 数据全部来自宿主能力 API（clipboard.*），收藏列表存插件私有 KV（storage）。
 (function () {
   'use strict';
+  // 内容先落到最终态；动画只作提示，可取消，宿主不支持 WAAPI 时直接可见。
+  var stateMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: no-preference)') : null;
+  var stateMotions = [];
+  function revealState(element) {
+    stateMotions.slice().forEach(function (entry) {
+      if (entry.element === element) entry.animation.cancel();
+    });
+    if (!stateMotionQuery || !stateMotionQuery.matches || !element.animate) return;
+    var tokens = getComputedStyle(document.documentElement);
+    var animation = element.animate([{ opacity: .55 }, { opacity: 1 }], {
+      duration: parseFloat(tokens.getPropertyValue('--motion-enter')) || 200,
+      easing: tokens.getPropertyValue('--motion-ease').trim() || 'cubic-bezier(.2,0,0,1)'
+    });
+    var entry = { element: element, animation: animation };
+    stateMotions.push(entry);
+    animation.onfinish = animation.oncancel = function () {
+      var index = stateMotions.indexOf(entry);
+      if (index >= 0) stateMotions.splice(index, 1);
+    };
+  }
+  if (stateMotionQuery) {
+    var stopStateMotion = function () {
+      if (!stateMotionQuery.matches) stateMotions.slice().forEach(function (entry) { entry.animation.cancel(); });
+    };
+    if (stateMotionQuery.addEventListener) stateMotionQuery.addEventListener('change', stopStateMotion);
+    else if (stateMotionQuery.addListener) stateMotionQuery.addListener(stopStateMotion);
+  }
 
   if (typeof eshare === 'undefined') {
     // 纯浏览器调试（无宿主）：按完整形态渲染布局，数据区空转。
@@ -190,46 +217,59 @@
   // ══════════ 数据加载 ══════════
 
   // 常规视图：宿主分页直出。过滤视图（链接/收藏）：客户端过滤 + 自动续页。
-  function load(append) {
-    if (!append) {
-      state.offset = 0;
-      state.entries = [];
-      fetchPages = 0;
-    }
-    var filtered = state.favOnly || state.kind === 'url';
-    if (!filtered) {
-      return eshare.clipboard.history({
-        limit: PAGE, offset: state.offset, kind: state.kind, query: state.query
-      }).then(function (items) {
-        items = items || [];
-        state.entries = append ? state.entries.concat(items) : items;
-        state.offset += items.length;
-        state.hasMore = items.length >= PAGE;
-        renderCurrent();
-      }).catch(function (err) { toast(err && err.message || '加载失败'); });
-    }
-    return loadFiltered(append);
+  var loadRevision = 0, loading = false;
+  function setLoading(busy, message) {
+    loading = busy;
+    var list = IS_PANEL ? panelListEl : flowEl;
+    list.setAttribute('aria-busy', String(busy));
+    if (busy) list.setAttribute('inert', ''); else list.removeAttribute('inert');
+    moreBtn.disabled = busy;
+    $(IS_PANEL ? 'panelLoadStatus' : 'loadStatus').textContent = message || '';
+    if (busy) { emptyEl.hidden = true; panelEmptyEl.hidden = true; }
   }
 
-  function loadFiltered(append) {
-    var want = (append ? state.entries.length : 0) + PAGE * 2;
+  function load(append) {
+    if (append && loading) return Promise.resolve();
+    var revision = ++loadRevision;
+    var offset = append ? state.offset : 0;
+    var entries = append ? state.entries.slice() : [];
+    var pages = append ? fetchPages : 0;
+    var filtered = state.favOnly || state.kind === 'url';
+    var want = entries.length + PAGE * 2;
+    var hasMore = false;
+    setLoading(true, '正在读取记录…');
     function step() {
-      fetchPages++;
+      pages++;
       return eshare.clipboard.history({
-        limit: PAGE, offset: state.offset, kind: fetchKind(), query: state.query
+        limit: PAGE, offset: offset, kind: fetchKind(), query: state.query
       }).then(function (items) {
+        if (revision !== loadRevision) return;
         items = items || [];
-        state.offset += items.length;
-        state.hasMore = items.length >= PAGE;
-        items.forEach(function (e) {
-          if (matchesFilter(e)) state.entries.push(e);
+        offset += items.length;
+        hasMore = items.length >= PAGE;
+        items.forEach(function (entry) {
+          if (!filtered || matchesFilter(entry)) entries.push(entry);
         });
-        var exhausted = !state.hasMore || fetchPages >= FETCH_CAP;
-        if (state.entries.length < want && !exhausted) return step();
+        if (filtered && entries.length < want && hasMore && pages < FETCH_CAP) return step();
+        state.entries = entries;
+        state.offset = offset;
+        state.hasMore = hasMore;
+        fetchPages = pages;
         renderCurrent();
+        setLoading(false);
+        if (!append) revealState(IS_PANEL ? panelListEl : flowEl);
       });
     }
-    return step().catch(function (err) { toast(err && err.message || '加载失败'); });
+    return step().catch(function (err) {
+      if (revision !== loadRevision) return;
+      if (!append) { state.entries = []; state.hasMore = false; renderCurrent(); }
+      setLoading(false, err && err.message || '读取失败，请重试');
+      if (!append) {
+        if (IS_PANEL) panelEmptyEl.textContent = '暂时无法读取记录，请重新搜索或切换分类';
+        else { $('emptyTitle').textContent = '暂时无法读取记录'; $('emptyHint').textContent = '请重新搜索或切换分类重试'; }
+      }
+      toast(err && err.message || '加载失败');
+    });
   }
 
   function loadMore() {
@@ -265,11 +305,14 @@
 
   function toggleAutoStart() {
     var sw = $('autoStartSwitch');
+    if (sw.getAttribute('aria-disabled') === 'true') return;
+    sw.setAttribute('aria-disabled', 'true');
     var next = !sw.classList.contains('on');
     eshare.clipboard.settings({ autoStart: next }).then(function (st) {
       setAutoStart(!!(st && st.autoStart), true);
       toast(next ? '已开启开机自动记录' : '已关闭开机自动记录');
-    }).catch(function (err) { toast(err && err.message || '设置失败'); });
+    }).catch(function (err) { toast(err && err.message || '设置失败'); })
+      .then(function () { sw.setAttribute('aria-disabled', 'false'); });
   }
 
   function setStatus(paused) {
@@ -289,7 +332,7 @@
     $('countFav').textContent = state.favs.length || '';
     $('quotaUsed').textContent = stats.total || 0;
     $('quotaMax').textContent = maxEntries;
-    $('quotaFill').style.width = Math.min(100, (stats.total / maxEntries) * 100) + '%';
+    $('quotaFill').style.transform = 'scaleX(' + Math.max(0, Math.min(1, (stats.total || 0) / Math.max(1, maxEntries))) + ')';
   }
 
   // ══════════ 渲染：完整形态 ══════════
@@ -453,7 +496,7 @@
   }
 
   function moveSel(delta) {
-    if (!state.entries.length) return;
+    if (loading || !state.entries.length) return;
     state.sel += delta;
     if (state.sel < 0) state.sel = 0;
     if (state.sel >= state.entries.length) state.sel = state.entries.length - 1;
@@ -465,6 +508,7 @@
   }
 
   function copySel() {
+    if (loading) return;
     var e = state.entries[state.sel];
     if (e) pickEntry(e);
   }
@@ -473,6 +517,8 @@
 
   function onRealtime(e) {
     if (!matchesFilter(e)) return;
+    if (loading) { load(false); refreshStats(); return; }
+    if (state.entries.some(function (item) { return item.id === e.id; })) return;
     state.entries.unshift(e);
     state.offset += 1;
     refreshStats();
@@ -517,11 +563,15 @@
     moreBtn.addEventListener('click', loadMore);
 
     $('pauseBtn').addEventListener('click', function () {
+      var button = this;
+      if (button.disabled) return;
+      button.disabled = true;
       var paused = !$('status').classList.contains('paused');
       eshare.clipboard.settings({ paused: paused }).then(function () {
         setStatus(paused);
         toast(paused ? '已暂停记录' : '已恢复记录');
-      }).catch(function (err) { toast(err && err.message || '设置失败'); });
+      }).catch(function (err) { toast(err && err.message || '设置失败'); })
+        .then(function () { button.disabled = false; });
     });
 
     var asRow = $('autoStartRow');
@@ -535,7 +585,10 @@
     $('clearBtn').addEventListener('click', function () {
       if (!confirm('确定清空全部剪切板记录？收藏与图片将一并删除。')) return;
       eshare.clipboard.clear().then(function () {
+        ++loadRevision;
+        setLoading(false);
         state.entries = [];
+        state.hasMore = false;
         state.favs = [];
         saveFavs();
         renderCurrent();
@@ -589,6 +642,10 @@
       if (ev.key === 'ArrowDown') { ev.preventDefault(); moveSel(1); }
       else if (ev.key === 'ArrowUp') { ev.preventDefault(); moveSel(-1); }
       else if (ev.key === 'Enter') {
+        // 分类与行操作按钮保留原生激活，避免同一次 Enter 同时触发复制。
+        if (ev.target.closest && ev.target.closest('button, a, [role="button"]')) return;
+        ev.preventDefault();
+        if (loading) return;
         // 焦点在搜索框时 Enter 也复制当前选中项（无选中则选第一项）
         if (state.sel < 0 && state.entries.length) state.sel = 0;
         copySel();
@@ -603,6 +660,7 @@
     // 每次面板弹出：重置搜索与选中、重拉数据、聚焦搜索框（Win+V 体验的关键）
     if (eshare.window && eshare.window.onShown) {
       eshare.window.onShown(function () {
+        clearTimeout(debounce);
         searchEl.value = '';
         state.query = '';
         state.sel = -1;

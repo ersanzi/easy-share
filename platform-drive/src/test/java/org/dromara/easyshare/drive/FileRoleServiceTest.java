@@ -14,6 +14,8 @@ import org.dromara.easyshare.drive.service.FileRoleService;
 import org.dromara.easyshare.drive.service.SpaceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.dromara.easyshare.drive.service.PermissionSubjectService;
+import org.dromara.easyshare.drive.service.PermissionWriteService;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
@@ -65,7 +67,9 @@ class FileRoleServiceTest {
         sysUserDeptMapper = mock(SysUserDeptMapper.class);
         sysDeptRowMapper = mock(SysDeptRowMapper.class);
         service = new FileRoleService(memberMapper, fileMapper, spaceService,
-            sysUserDeptMapper, sysDeptRowMapper);
+            sysUserDeptMapper, sysDeptRowMapper, mock(PermissionWriteService.class));
+        when(spaceService.sharedPermissionOf(anyLong())).thenReturn("write");
+        when(fileMapper.lockForPermissionUpdate(anyLong())).thenAnswer(call -> call.getArgument(0));
     }
 
     private void viewerContext(Long userId, Long deptId, String spacePermission) {
@@ -100,7 +104,7 @@ class FileRoleServiceTest {
     void userAndDeptRowsTakeHigher() {
         // 用户行 read + 部门行 edit → 取高 edit
         assertEquals(FileRoleService.ROLE_EDIT,
-            FileRoleService.ladder(file(1L, null), 7L, 10L, null,
+            FileRoleService.ladder(file(1L, null), 7L, 10L, EsSpaceMember.PERM_READ,
                 FileRoleService.ROLE_READ, FileRoleService.ROLE_EDIT));
     }
 
@@ -117,7 +121,7 @@ class FileRoleServiceTest {
     void memberRowGrantsVisibilityOnRestrictedFile() {
         // 部门不在名单，但显式给了 read 档 → 可见（仅预览）
         assertEquals(FileRoleService.ROLE_READ,
-            FileRoleService.ladder(file(1L, "20"), 7L, 30L, null, FileRoleService.ROLE_READ, null));
+            FileRoleService.ladder(file(1L, "20"), 7L, 30L, EsSpaceMember.PERM_READ, FileRoleService.ROLE_READ, null));
     }
 
     @Test

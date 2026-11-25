@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import type { CloudPreview } from '../types/core'
 
 defineProps<{
@@ -35,7 +36,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         <button class="preview-close" type="button" aria-label="关闭预览" @click="close">×</button>
       </header>
 
-      <div class="preview-body" :class="preview ? `preview-body--${preview.kind}` : ''">
+      <div v-content-motion="loading ? 'loading' : error || preview" class="preview-body" :aria-busy="loading" :class="preview ? `preview-body--${preview.kind}` : ''">
         <div v-if="loading" class="preview-status">
           <span class="preview-spinner" aria-hidden="true" />
           <strong>正在加载预览…</strong>
@@ -55,9 +56,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         </template>
       </div>
 
-      <footer v-if="preview?.truncated" class="preview-footer">
+      <Transition v-bind="presenceMotion" name="es-fade">
+      <footer v-if="!loading && !error && preview?.truncated" class="preview-footer">
         仅显示前 1 MiB 内容，可下载查看完整文件。
       </footer>
+      </Transition>
     </article>
   </div>
 </template>

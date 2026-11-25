@@ -31,6 +31,8 @@ public class SpaceService {
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper sysUserDeptMapper;
     private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper sysDeptRowMapper;
     private final FeaturePermissionService featurePermission;
+    private final PermissionSubjectService subjects;
+    private final PermissionWriteService writes;
 
     /**
      * 取个人空间，未开通返回 null。
@@ -136,6 +138,8 @@ public class SpaceService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void grantSharedTo(String memberType, Long memberId, String permission) {
+        writes.begin(EsSpaceMember.TYPE_USER.equals(memberType) ? memberId : null);
+        writes.requireSuperAdmin();
         if (!EsSpaceMember.TYPE_USER.equals(memberType) && !EsSpaceMember.TYPE_DEPT.equals(memberType)) {
             throw new ServiceException("授权主体类型非法");
         }
@@ -146,15 +150,19 @@ public class SpaceService {
             .eq(EsSpaceMember::getSpaceId, EsSpace.SHARED_SPACE_ID)
             .eq(EsSpaceMember::getMemberType, memberType)
             .eq(EsSpaceMember::getUserId, memberId));
+        String before = existing == null ? null : existing.getPermission();
         if (permission == null || permission.isBlank()) {
             if (existing != null) {
                 memberMapper.deleteById(existing.getId());
             }
+            writes.audit("space.revoke", memberType + ":" + memberId, before, null);
             return;
         }
         if (!EsSpaceMember.PERM_READ.equals(permission) && !EsSpaceMember.PERM_WRITE.equals(permission)) {
             throw new ServiceException("权限取值只能是 read 或 write");
         }
+        if (EsSpaceMember.TYPE_USER.equals(memberType)) subjects.requireActiveUser(memberId);
+        else if (!subjects.activeDept(memberId)) throw new ServiceException("部门不存在或已停用");
         if (existing == null) {
             EsSpaceMember member = new EsSpaceMember();
             member.setSpaceId(EsSpace.SHARED_SPACE_ID);
@@ -162,10 +170,11 @@ public class SpaceService {
             member.setUserId(memberId);
             member.setPermission(permission);
             memberMapper.insert(member);
-            return;
+        } else {
+            existing.setPermission(permission);
+            memberMapper.updateById(existing);
         }
-        existing.setPermission(permission);
-        memberMapper.updateById(existing);
+        writes.audit("space.grant", memberType + ":" + memberId, before, permission);
     }
 
     /**
@@ -182,7 +191,7 @@ public class SpaceService {
      * 用户所属部门 ID；无部门（超管/独立账号）返回 null。
      */
     public Long deptIdOf(Long userId) {
-        org.dromara.easyshare.drive.domain.SysUserDept user = sysUserDeptMapper.selectById(userId);
+        org.dromara.easyshare.drive.domain.SysUserDept user = subjects.activeUser(userId);
         return user == null ? null : user.getDeptId();
     }
 
@@ -207,9 +216,11 @@ public class SpaceService {
      * @return read / write / null（未授权或功能未开通）
      */
     public String sharedPermissionOf(Long userId) {
-        if (!featurePermission.sharedFeatureEnabled(userId)) {
+        if (subjects.activeUser(userId) == null || !featurePermission.sharedFeatureEnabled(userId)) {
             return null;
         }
+        EsSpace shared = findShared();
+        if (!"0".equals(shared.getStatus())) return null;
         String effective = memberPermissionOf(EsSpaceMember.TYPE_USER, userId);
         Long deptId = deptIdOf(userId);
         if (deptId != null && deptId > 0) {
@@ -223,7 +234,10 @@ public class SpaceService {
             .eq(EsSpaceMember::getSpaceId, EsSpace.SHARED_SPACE_ID)
             .eq(EsSpaceMember::getMemberType, memberType)
             .eq(EsSpaceMember::getUserId, memberId));
-        return member == null ? null : member.getPermission();
+        if (member == null) return null;
+        String permission = member.getPermission();
+        return EsSpaceMember.PERM_READ.equals(permission) || EsSpaceMember.PERM_WRITE.equals(permission)
+            ? permission : null;
     }
 
     private static String widen(String current, String candidate) {

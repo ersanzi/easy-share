@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { EventsOn } from '../../wailsjs/runtime/runtime'
 import type { RecycleEntry } from '../types/core'
@@ -139,7 +140,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="card cloud-panel recycle-panel">
+  <section v-content-motion="loading ? 'loading' : error ? 'error' : entries.length ? 'ready' : 'empty'" :aria-busy="loading" class="card cloud-panel recycle-panel">
     <header class="card-header">
       <div>
         <span class="section-label">云端</span>
@@ -154,6 +155,11 @@ onUnmounted(() => {
 
     <div v-if="loading" class="empty-state compact-empty">
       <strong>加载中…</strong>
+    </div>
+
+    <div v-else-if="error && !entries.length" class="empty-state compact-empty">
+      <strong>回收站加载失败</strong>
+      <p>请重试以确认回收站中的文件。</p>
     </div>
 
     <div v-else-if="!entries.length" class="empty-state compact-empty">
@@ -181,11 +187,12 @@ onUnmounted(() => {
       </article>
     </div>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <div v-if="error" class="share-bar">
       <span class="share-label">{{ error }}</span>
       <button class="primary-button compact" type="button" @click="error = ''">知道了</button>
     </div>
-  </section>
+    </Transition>
 
   <ConfirmDialog
     :open="pendingPurge !== null"
@@ -196,4 +203,5 @@ onUnmounted(() => {
     @confirm="confirmPurge"
     @update:open="value => { if (!value) pendingPurge = null }"
   />
+  </section>
 </template>

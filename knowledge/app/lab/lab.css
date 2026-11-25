@@ -1,5 +1,9 @@
 ﻿:root {
   --paper: #f7f8fa;
+  --motion-fast: 120ms;
+  --motion-enter: 200ms;
+  --motion-exit: 120ms;
+  --motion-ease: cubic-bezier(.2,0,0,1);
   --surface: rgba(255, 255, 255, 0.84);
   --ink: #172033;
   --muted: #687287;
@@ -18,6 +22,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-width: 320px; background:
   radial-gradient(circle at 12% 8%, rgba(77, 183, 197, 0.10), transparent 28rem),
   radial-gradient(circle at 86% 18%, rgba(53, 106, 230, 0.10), transparent 30rem),
@@ -60,16 +65,16 @@ h2 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
 .format-chip, .artifact-context { color: var(--muted); font: 650 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .05em; }
 .format-chip { padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap; }
 
-.drop-zone { display: grid; place-items: center; min-height: 265px; padding: 26px; border: 1.5px dashed #aebbd0; border-radius: 19px; background: linear-gradient(145deg, rgba(53,106,230,.05), rgba(77,183,197,.04)); text-align: center; cursor: pointer; transition: border-color .2s, transform .2s, background .2s; }
-.drop-zone:hover, .drop-zone:focus-visible, .drop-zone.is-dragging { outline: none; border-color: var(--blue); background: rgba(53,106,230,.075); transform: translateY(-2px); }
+.drop-zone { display: grid; place-items: center; min-height: 265px; padding: 26px; border: 1.5px dashed #aebbd0; border-radius: 19px; background: linear-gradient(145deg, rgba(53,106,230,.05), rgba(77,183,197,.04)); text-align: center; cursor: pointer; }
+.drop-zone:hover, .drop-zone:focus-visible, .drop-zone.is-dragging { outline: none; border-color: var(--blue); background: rgba(53,106,230,.075); }
 .drop-zone input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .upload-mark { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 18px; border-radius: 18px; color: white; background: var(--blue); font-size: 31px; box-shadow: 0 12px 28px rgba(53,106,230,.24); }
 .drop-zone strong { font-size: 18px; }
 .drop-zone > span:last-child { max-width: 340px; margin-top: 9px; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .upload-actions { display: grid; gap: 13px; margin-top: 16px; }
 .selected-file { overflow: hidden; color: var(--muted); font: 12px/1.4 ui-monospace, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.primary-button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 15px 18px; border: 0; border-radius: 14px; color: #fff; background: var(--blue); font-weight: 700; cursor: pointer; box-shadow: 0 10px 25px rgba(53,106,230,.22); transition: background .2s, transform .2s; }
-.primary-button:hover:not(:disabled) { background: var(--blue-dark); transform: translateY(-1px); }
+.primary-button { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 15px 18px; border: 0; border-radius: 14px; color: #fff; background: var(--blue); font-weight: 700; cursor: pointer; box-shadow: 0 10px 25px rgba(53,106,230,.22); }
+.primary-button:hover:not(:disabled) { background: var(--blue-dark); }
 .primary-button:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
 .form-message { min-height: 20px; margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 .form-message.is-error { color: var(--red); }
@@ -86,7 +91,7 @@ h2 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
 .progress-readout span { color: var(--muted); font: 11px/1 ui-monospace, Consolas, monospace; }
 .progress-readout strong { font: 760 28px/1 ui-monospace, Consolas, monospace; }
 .progress-bar { height: 5px; overflow: hidden; margin-bottom: 31px; border-radius: 999px; background: #e7eaf0; }
-.progress-bar span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); transition: width .35s ease; }
+.progress-bar span { display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); transform: scaleX(0); transform-origin: left; }
 
 .pipeline-track { display: grid; grid-template-columns: repeat(8, minmax(74px, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; overflow-x: auto; }
 .pipeline-track li { position: relative; min-width: 74px; padding: 36px 7px 5px 0; color: #929bab; }
@@ -133,7 +138,7 @@ h2 { margin: 0; font-size: 23px; letter-spacing: -.025em; }
 .ask-grid { margin-top: 18px; }
 .ask-mode { padding: 8px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 650 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .05em; white-space: nowrap; }
 .ask-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; }
-.ask-form input { min-width: 0; padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: #fff; transition: border-color .2s, box-shadow .2s; }
+.ask-form input { min-width: 0; padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: #fff; }
 .ask-form input:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 4px rgba(53,106,230,.12); }
 .ask-button { width: auto; gap: 12px; white-space: nowrap; }
 .ask-result { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 24px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
@@ -175,6 +180,12 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 26px
   .ask-form { grid-template-columns: 1fr; }
   footer { flex-direction: column; }
 }
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+/* 拖放高亮即时响应；轮询保留节点，不给任务列表反复播放入场。 */
+button { transition: opacity var(--motion-fast) var(--motion-ease); }
+button:active:not(:disabled) { opacity: .75; }
+button:disabled, .drop-zone[aria-disabled="true"] { cursor: wait; }
+.artifact-viewer { transition: opacity var(--motion-fast) var(--motion-ease); }
+.artifact-viewer[aria-busy="true"] { opacity: .65; }
+@media (prefers-reduced-motion: no-preference) {
+  .progress-bar span.is-updating { transition: transform var(--motion-enter) var(--motion-ease); }
 }

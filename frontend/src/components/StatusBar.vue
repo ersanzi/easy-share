@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { vContentMotion } from '../directives/contentMotion'
 import type { ServiceStatus } from '../types/core'
 
 const props = defineProps<{ status: ServiceStatus; loading?: boolean }>()
@@ -38,7 +39,7 @@ const runningCount = () => services.filter(({ key }) => props.status[key]).lengt
           <svg v-else viewBox="0 0 24 24"><path d="M4 7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3Z"/><path d="M4 15h16M16 17.5h.01"/></svg>
         </span>
         <div><strong>{{ service.label }}</strong><small>{{ service.detail }}</small></div>
-        <span :class="['state-text', status[service.key] ? 'online' : '']">
+        <span v-content-motion="status[service.key]" :class="['state-text', status[service.key] ? 'online' : '']">
           {{ status[service.key] ? '运行中' : '未启动' }}
         </span>
       </div>

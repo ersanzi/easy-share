@@ -23,6 +23,11 @@ public record PermissionVo(
     boolean plugin
 ) {
 
+    /** 无效主体与损坏授权统一关闭全部功能。 */
+    public static PermissionVo none(Long userId) {
+        return new PermissionVo(userId, false, false, false, false, false);
+    }
+
     /** 缺行账号的默认值：五项全开 */
     public static PermissionVo all(Long userId) {
         return new PermissionVo(userId, true, true, true, true, true);
@@ -45,11 +50,11 @@ public record PermissionVo(
         boolean shared = false;
         boolean plugin = false;
         for (EsPermissionRole role : roles) {
-            knowledge |= !Boolean.FALSE.equals(role.getKnowledge());
-            meeting |= !Boolean.FALSE.equals(role.getMeeting());
-            drive |= !Boolean.FALSE.equals(role.getDrive());
-            shared |= !Boolean.FALSE.equals(role.getShared());
-            plugin |= !Boolean.FALSE.equals(role.getPlugin());
+            knowledge |= Boolean.TRUE.equals(role.getKnowledge());
+            meeting |= Boolean.TRUE.equals(role.getMeeting());
+            drive |= Boolean.TRUE.equals(role.getDrive());
+            shared |= Boolean.TRUE.equals(role.getShared());
+            plugin |= Boolean.TRUE.equals(role.getPlugin());
         }
         return new PermissionVo(userId, knowledge, meeting, drive, shared, plugin);
     }
@@ -57,10 +62,10 @@ public record PermissionVo(
     public static PermissionVo of(EsUserPermission row) {
         return new PermissionVo(
             row.getUserId(),
-            !Boolean.FALSE.equals(row.getKnowledge()),
-            !Boolean.FALSE.equals(row.getMeeting()),
-            !Boolean.FALSE.equals(row.getDrive()),
-            !Boolean.FALSE.equals(row.getShared()),
-            !Boolean.FALSE.equals(row.getPlugin()));
+            Boolean.TRUE.equals(row.getKnowledge()),
+            Boolean.TRUE.equals(row.getMeeting()),
+            Boolean.TRUE.equals(row.getDrive()),
+            Boolean.TRUE.equals(row.getShared()),
+            Boolean.TRUE.equals(row.getPlugin()));
     }
 }

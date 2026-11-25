@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { QUOTA_UNSET } from '../types/core'
 import type { AuthUser, McpConnection, Space, UpdateCheckResult, UpdateProgress } from '../types/core'
 import { usePlugins } from '../composables/usePlugins'
 import { useConfirm } from '../composables/useConfirm'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 
 const { confirm } = useConfirm()
 
@@ -21,6 +22,10 @@ interface SettingsForm {
 const form = ref<SettingsForm>({ deviceName: '', receiveDir: '', webdavRoot: '' })
 const saving = ref(false)
 const saved = ref(false)
+let savedTimer: ReturnType<typeof setTimeout> | undefined
+let copyTimer: ReturnType<typeof setTimeout> | undefined
+let disposed = false
+const stopEvents: Array<() => void> = []
 const loadError = ref('')
 
 // ─── 插件管理 ───
@@ -214,12 +219,14 @@ const pickShareDir = async () => {
 const save = async () => {
   if (saving.value) return
   saving.value = true
+  clearTimeout(savedTimer)
   saved.value = false
   loadError.value = ''
   try {
     await core.saveSettings(form.value.deviceName, form.value.receiveDir, form.value.webdavRoot)
+    if (disposed) return
     saved.value = true
-    setTimeout(() => { saved.value = false }, 2500)
+    savedTimer = setTimeout(() => { saved.value = false }, 2500)
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -325,9 +332,15 @@ const loadMcp = async () => {
 
 const copyMcp = async (field: 'url' | 'token') => {
   if (!mcpInfo.value) return
-  await navigator.clipboard.writeText(mcpInfo.value[field])
-  mcpCopied.value = field
-  window.setTimeout(() => { if (mcpCopied.value === field) mcpCopied.value = '' }, 2000)
+  try {
+    await navigator.clipboard.writeText(mcpInfo.value[field])
+    if (disposed) return
+    clearTimeout(copyTimer)
+    mcpCopied.value = field
+    copyTimer = setTimeout(() => { mcpCopied.value = '' }, 2000)
+  } catch (e) {
+    if (!disposed) loadError.value = errorText(e)
+  }
 }
 
 const regenerateMcp = async () => {
@@ -344,6 +357,9 @@ const regenerateMcp = async () => {
 }
 
 onMounted(async () => {
+  stopEvents.push(EventsOn('update:progress', onProgress))
+  stopEvents.push(EventsOn('update:downloaded', onDownloaded))
+  stopEvents.push(EventsOn('update:error', onUpdateError))
   load()
   try { appVersion.value = await core.appVersion() } catch { appVersion.value = '' }
   try {
@@ -360,14 +376,12 @@ onMounted(async () => {
     spacesError.value = e instanceof Error ? e.message : String(e)
   }
   loadMcp()
-  EventsOn('update:progress', onProgress)
-  EventsOn('update:downloaded', onDownloaded)
-  EventsOn('update:error', onUpdateError)
 })
 onBeforeUnmount(() => {
-  EventsOff('update:progress')
-  EventsOff('update:downloaded')
-  EventsOff('update:error')
+  disposed = true
+  clearTimeout(savedTimer)
+  clearTimeout(copyTimer)
+  stopEvents.forEach(stop => stop())
 })
 </script>
 
@@ -381,11 +395,13 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <div v-if="loadError" class="alert" role="alert">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
       <span class="alert-copy"><b>{{ loadError }}</b></span>
       <button type="button" aria-label="关闭" @click="loadError = ''">×</button>
     </div>
+    </Transition>
 
     <div class="settings-columns">
       <div class="settings-column">
@@ -444,7 +460,9 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="settings-body">
+          <Transition v-bind="presenceMotion" name="es-fade">
           <p v-if="pluginError" class="update-error">{{ pluginError }}</p>
+          </Transition>
           <p v-if="!pluginSys.plugins.value.length" class="setting-hint">
             暂无插件。可从插件包（zip）安装，内置插件会随程序自动提供。
           </p>
@@ -533,6 +551,7 @@ onBeforeUnmount(() => {
           <div class="setting-row">
             <label class="setting-label">登录密码</label>
             <p class="setting-hint">修改后请用新密码重新登录其他设备</p>
+            <Transition v-bind="presenceMotion" name="es-disclosure">
             <button v-if="!passwordOpen" class="secondary-button compact" type="button" @click="openPassword">修改密码</button>
             <div v-else class="password-form">
               <input v-model="passwordForm.oldPassword" class="setting-input" type="password" placeholder="当前密码" autocomplete="current-password" />
@@ -545,10 +564,13 @@ onBeforeUnmount(() => {
                 <button class="secondary-button compact" type="button" :disabled="profileBusy === 'password'" @click="closePassword">取消</button>
               </div>
             </div>
+            </Transition>
           </div>
 
+          <Transition v-bind="presenceMotion" name="es-fade">
           <p v-if="profileError" class="update-error profile-feedback" role="alert">{{ profileError }}</p>
           <p v-else-if="profileNotice" class="profile-notice" role="status">{{ profileNotice }}</p>
+          </Transition>
 
           <div v-if="spacesError" class="setting-row">
             <p class="update-error">空间信息读取失败：{{ spacesError }}</p>
@@ -578,12 +600,12 @@ onBeforeUnmount(() => {
             <div class="setting-row mcp-row">
               <label class="setting-label">服务地址</label>
               <code class="mcp-value">{{ mcpInfo.url }}</code>
-              <button class="text-button" type="button" @click="copyMcp('url')">{{ mcpCopied === 'url' ? '已复制' : '复制' }}</button>
+              <button v-content-motion="mcpCopied" class="text-button" type="button" @click="copyMcp('url')">{{ mcpCopied === 'url' ? '已复制' : '复制' }}</button>
             </div>
             <div class="setting-row mcp-row">
               <label class="setting-label">配对令牌</label>
               <code class="mcp-value">{{ mcpInfo.token }}</code>
-              <button class="text-button" type="button" @click="copyMcp('token')">{{ mcpCopied === 'token' ? '已复制' : '复制' }}</button>
+              <button v-content-motion="mcpCopied" class="text-button" type="button" @click="copyMcp('token')">{{ mcpCopied === 'token' ? '已复制' : '复制' }}</button>
             </div>
             <p class="setting-hint">
               客户端鉴权选 Bearer Token（即请求头 Authorization: Bearer + 令牌）；使用前需在「知识」页登录。
@@ -613,9 +635,11 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <Transition v-bind="presenceMotion" name="es-fade">
           <div v-if="updateError" class="setting-row">
             <p class="update-error">{{ updateError }}</p>
           </div>
+          </Transition>
 
           <div v-if="checkResult && !checkResult.hasUpdate" class="setting-row">
             <p class="setting-hint">已是最新版本（{{ checkResult.latestVersion }}）</p>
@@ -631,12 +655,13 @@ onBeforeUnmount(() => {
               <pre v-if="checkResult.notes" class="update-notes">{{ checkResult.notes }}</pre>
             </div>
             <div class="setting-row">
+              <Transition v-bind="presenceMotion" name="es-content">
               <div v-if="downloadState === 'idle'" class="update-actions">
                 <button class="primary-button compact" type="button" @click="download">下载更新</button>
               </div>
               <div v-else-if="downloadState === 'downloading'" class="update-progress">
                 <div class="progress-track">
-                  <div class="progress-fill" :style="{ width: `${progressPercent ?? 0}%` }"></div>
+                  <div class="progress-fill" :style="{ transform: `scaleX(${Math.max(0, Math.min(100, progressPercent ?? 0)) / 100})` }"></div>
                 </div>
                 <span class="setting-hint">
                   {{ progressPercent !== null ? `${progressPercent}%` : '下载中…' }}{{ formatSpeed(progress?.speed) ? ` · ${formatSpeed(progress?.speed)}` : '' }}
@@ -651,10 +676,13 @@ onBeforeUnmount(() => {
                 </button>
                 <button class="secondary-button compact" type="button" @click="openUpdatesFolder">打开下载目录</button>
               </div>
+              </Transition>
               <p v-if="downloadState === 'downloaded' && !checkResult.canAutoInstall" class="setting-hint">
                 {{ checkResult.installedMode ? '当前版本不支持自动安装，可从下载目录手动运行安装包' : 'macOS / 绿色版请手动安装：下载目录中双击安装包，或从浏览器下载后替换' }}
               </p>
+              <Transition v-bind="presenceMotion" name="es-fade">
               <p v-if="applyError" class="update-error">{{ applyError }}</p>
+              </Transition>
             </div>
           </template>
         </div>
@@ -663,10 +691,10 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="settings-footer">
-      <transition name="fade">
+        <Transition v-bind="presenceMotion" name="es-fade">
         <span v-if="saved" class="save-success">已保存</span>
-      </transition>
-      <button class="primary-button" type="button" :disabled="saving" @click="save">
+        </Transition>
+      <button v-content-motion="saving" class="primary-button" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存设置' }}
       </button>
     </div>

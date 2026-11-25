@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 // 思维导图：真正画出来的放射状导图（对标钉钉听记的思维导图区块）。
@@ -29,6 +30,8 @@ const svg = ref<SVGSVGElement | null>(null)
 const empty = ref(false)
 const error = ref('')
 const zoom = ref(100)
+const loading = ref(false)
+const motionPreference = window.matchMedia?.('(prefers-reduced-motion: reduce)')
 
 let view: import('markmap-view').Markmap | null = null
 let transformer: import('markmap-lib').Transformer | null = null
@@ -62,21 +65,21 @@ let renderSeq = 0
 
 const render = async () => {
   const seq = ++renderSeq
+  view?.destroy?.()
+  view = null
   const source = (props.markdown || '').trim()
   error.value = ''
   empty.value = !source
-  if (!source) {
-    view?.destroy?.()
-    view = null
-    return
-  }
+  loading.value = !!source
+  if (!source) return
   ensureResizeObserver()
   // 关键：等一帧，让样式与布局落定（容器尺寸为 0 时 markmap 会算出 NaN 坐标，画出来就是空白）
   await nextFrame()
   if (seq !== renderSeq) return // 等待期间又有新的渲染请求，本次作废
-  if (!svg.value) return
+  if (!svg.value) { loading.value = false; return }
   const box = host.value?.getBoundingClientRect()
   if (!box || box.width < 40 || box.height < 40) {
+    loading.value = false
     error.value = '导图容器尺寸异常，请稍后重试'
     return
   }
@@ -88,7 +91,8 @@ const render = async () => {
     if (!view) {
       view = viewer.Markmap.create(svg.value, {
         // duration 由外部可调：无头/测试环境没有真实 transform 矩阵，d3 过渡插值会抛 baseVal 错误
-        duration: props.duration ?? 200,
+        // SVG 节点重排保持即时，整体内容淡入由共享动效负责。
+        duration: motionPreference?.matches ? 0 : props.duration ?? 0,
         maxWidth: 320,
         spacingHorizontal: 90,
         spacingVertical: 12,
@@ -101,12 +105,17 @@ const render = async () => {
     const instance = view
     if (!instance) throw new Error('markmap 视图创建失败')
     await instance.setData(root)
+    if (seq !== renderSeq || view !== instance) return
     await instance.fit()
+    if (seq !== renderSeq || view !== instance) return
     zoom.value = currentZoom()
   } catch (e) {
+    if (seq !== renderSeq) return
     // 把内部错误暴露到界面上：当初的"空白"就是异常被吞掉、只看到一片白
     error.value = e instanceof Error ? e.message : String(e)
     console.error('[MindMap] 渲染失败', e, (e as Error)?.stack)
+  } finally {
+    if (seq === renderSeq) loading.value = false
   }
 }
 
@@ -116,16 +125,26 @@ const currentZoom = () => {
   return Math.round((node?.__zoom?.k || 1) * 100)
 }
 
+const syncMotionPreference = () => {
+  view?.setOptions({ duration: motionPreference?.matches ? 0 : props.duration ?? 0 })
+  if (motionPreference?.matches) {
+    view?.svg.interrupt()
+    view?.svg.selectAll('*').interrupt()
+  }
+}
+
 const zoomBy = async (factor: number) => {
-  if (!view) return
-  await view.rescale?.(factor)
-  zoom.value = currentZoom()
+  const instance = view
+  if (!instance || loading.value) return
+  await instance.rescale?.(factor)
+  if (view === instance) zoom.value = currentZoom()
 }
 
 const resetView = async () => {
-  if (!view) return
-  await view.fit()
-  zoom.value = currentZoom()
+  const instance = view
+  if (!instance || loading.value) return
+  await instance.fit()
+  if (view === instance) zoom.value = currentZoom()
 }
 
 const downloadSvg = () => {
@@ -140,12 +159,17 @@ const downloadSvg = () => {
   URL.revokeObjectURL(url)
 }
 
-onMounted(render)
+onMounted(() => {
+  motionPreference?.addEventListener?.('change', syncMotionPreference)
+  void render()
+})
 // 只监听内容变化，**不要**写成 `watch([() => props.markdown, empty], render)` 这类会在首轮触发的形式：
 // 首轮会走「内容为空」分支把正在建图的 view 销毁掉，随后 `view.setData` 报
 // "Cannot read properties of null (reading 'fit')" —— 实测踩过。
 watch(() => props.markdown, render)
 onBeforeUnmount(() => {
+  ++renderSeq
+  motionPreference?.removeEventListener?.('change', syncMotionPreference)
   view?.destroy?.()
   view = null
 })
@@ -155,16 +179,19 @@ onBeforeUnmount(() => {
   <div class="mindmap-wrap">
     <div class="mindmap-toolbar">
       <span class="mindmap-zoom">缩放 {{ zoom }}%</span>
-      <button class="text-button" type="button" @click="zoomBy(1.2)">放大</button>
-      <button class="text-button" type="button" @click="zoomBy(1 / 1.2)">缩小</button>
-      <button class="text-button" type="button" @click="resetView">适应画面</button>
-      <button class="text-button" type="button" @click="downloadSvg">导出 SVG</button>
+      <button :disabled="loading || empty || !!error" class="text-button" type="button" @click="zoomBy(1.2)">放大</button>
+      <button :disabled="loading || empty || !!error" class="text-button" type="button" @click="zoomBy(1 / 1.2)">缩小</button>
+      <button :disabled="loading || empty || !!error" class="text-button" type="button" @click="resetView">适应画面</button>
+      <button :disabled="loading || empty || !!error" class="text-button" type="button" @click="downloadSvg">导出 SVG</button>
     </div>
-    <div ref="host" class="mindmap-host">
+    <div v-content-motion="loading ? 'loading' : error || markdown" :aria-busy="loading" ref="host" class="mindmap-host">
       <!-- 导图容器必须有确定高度：这是当初"空白"的头号原因 -->
-      <svg ref="svg" class="mindmap-svg" role="img" aria-label="会议思维导图" />
-      <p v-if="empty" class="meeting-hint">还没有导图，点「生成导图」用 AI 从转写提炼结构</p>
+      <svg ref="svg" v-show="!empty && !error" class="mindmap-svg" role="img" aria-label="会议思维导图" />
+      <Transition v-bind="presenceMotion" name="es-fade">
+      <p v-if="loading" class="meeting-hint" role="status">正在绘制导图…</p>
+      <p v-else-if="empty" class="meeting-hint">还没有导图，点「生成导图」用 AI 从转写提炼结构</p>
       <p v-else-if="error" class="meeting-hint meeting-failed">导图渲染失败：{{ error }}</p>
+      </Transition>
     </div>
     <p class="mindmap-tip">点击节点可折叠/展开，滚轮缩放，拖拽平移</p>
   </div>

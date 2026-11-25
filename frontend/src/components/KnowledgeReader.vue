@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import type { KnowledgeDocumentBlock, KnowledgeDocumentView } from '../types/core'
 
@@ -46,7 +47,7 @@ const sourceLabel = (block: KnowledgeDocumentBlock) => {
 
 const scrollToBlock = (id: string) => {
   // 组件测试环境没有 scrollIntoView，产物里必须有；可选调用避免测试直接炸
-  document.getElementById(blockAnchor(id))?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  document.getElementById(blockAnchor(id))?.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
 }
 const scrollToFocus = async () => {
   await nextTick()
@@ -73,7 +74,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
           <p v-if="meta">{{ meta }}</p>
         </div>
         <div class="reader-actions">
-          <button v-if="view?.manifest.can_download === true" class="secondary-button compact" type="button" :disabled="loading || !!error || downloading" @click="emit('download')">
+          <button v-content-motion="downloading" v-if="view?.manifest.can_download === true" class="secondary-button compact" type="button" :disabled="loading || !!error || downloading" @click="emit('download')">
             {{ downloading ? '正在保存…' : '下载原件' }}
           </button>
           <span v-else-if="view" class="reader-kicker">仅可查看</span>
@@ -81,7 +82,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         </div>
       </header>
 
-      <div :class="['reader-body', { 'reader-body--single': loading || error || !view || !outline.length }]">
+      <div v-content-motion="loading ? 'loading' : error || view" :aria-busy="loading" :class="['reader-body', { 'reader-body--single': loading || error || !view || !outline.length }]">
         <div v-if="loading" class="reader-status">正在读取原文…</div>
         <div v-else-if="error" class="reader-status reader-status--error">{{ error }}</div>
         <template v-else-if="view">
@@ -128,7 +129,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
         </template>
       </div>
 
+      <Transition v-bind="presenceMotion" name="es-fade">
       <footer v-if="notice" class="reader-footer">{{ notice }}</footer>
+      </Transition>
     </article>
   </div>
 </template>

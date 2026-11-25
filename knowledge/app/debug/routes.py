@@ -20,7 +20,7 @@ LOCAL_CLIENTS = {"127.0.0.1", "::1", "testclient"}
 
 def _guard(request: Request) -> AppServices:
     services: AppServices = request.app.state.services
-    if not services.config.local_lab_enabled:
+    if not services.config.local_lab_enabled or services.sso is not None or services.config.control_plane_url:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "本地实验台未启用")
     client_host = request.client.host if request.client else ""
     if client_host not in LOCAL_CLIENTS:

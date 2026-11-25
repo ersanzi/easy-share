@@ -53,6 +53,7 @@ __pycache__/
 *.py[cod]
 
 # ─── 本地测试产物 ───
+build/motion-evidence/
 .playwright-cli/
 output/playwright/
 # 知识面 pytest 从仓库根跑时的 SQLite 落点（auth/jobs/query_log）

@@ -97,11 +97,33 @@ npm --prefix frontend test
 npm --prefix frontend run build
 ```
 
+### 状态动效浏览器验收
+
+静态守卫不依赖浏览器，涵盖插件、知识实验台、驾驶舱和 WPS 页面：
+
+```powershell
+node --test scripts/diag/static-ui-motion.test.mjs
+```
+
+实际交互及帧时间脚本使用已安装的 Playwright 与本机 Chromium 浏览器；浏览器和测试包不作为产品运行时依赖。设置 `EASYSHARE_PLAYWRIGHT_MODULE` 为可被 Node require 的 Playwright 模块绝对路径，`EASYSHARE_BROWSER` 为 Chrome/Edge 可执行文件绝对路径；省略后者默认使用已安装的 Chrome。
+
+```powershell
+# 终端一：隔离 Wails 替身的真实 Vue 预览，仅监听回环
+node frontend/node_modules/vite/bin/vite.js docs/design/oil-ui-redesign/preview `
+  --config docs/design/oil-ui-redesign/preview/vite.config.ts --host 127.0.0.1 --port 5178 --strictPort
+
+# 终端二：按本机安装位置设置上述两个环境变量后运行
+node scripts/diag/check-motion-browser.mjs build/motion-evidence
+node scripts/diag/check-static-ui-motion-browser.mjs
+```
+
+第一份脚本验证快速反向、离场 inert、键盘焦点、减少动态效果、窄窗口和千行列表更新/滚动，并输出帧间隔 p50/p95/max、布局次数/耗时及截图。后者覆盖静态 UI 加载/错误/保存/关闭/响应乱序。两者使用隔离接口数据，不访问企业后端，不能替代安装版 WebView2、真实 WPS 宿主、多账号活栈与低配设备验收。性能报告必须同时记录尾部卡顿，不以 p95 掩盖最大帧间隔。
+
 ### Java 控制面测试（platform-drive）
 
 ```powershell
-cd platform-drive
-mvn -o clean test        # 84 个用例
+mvn -B -ntp -f platform/pom.xml -pl ../platform-drive -am clean test `
+  -Dmaven.test.skip=false -DskipTests=false -Drevision=6.0.0
 ```
 
 > ⚠️ **必须带 `clean`，且必须确认输出里有 `Tests run: N`**。两个坑都踩过：
@@ -118,7 +140,7 @@ mvn -o clean test        # 84 个用例
 
 ```powershell
 cd knowledge
-.venv/Scripts/python.exe -m pytest -m "not integration"    # 180 passed, 1 skipped
+.venv/Scripts/python.exe -m pytest -m "not integration"
 ```
 
 > 集成测试依赖 RustFS（`-m "not integration"` 排除），需要真实对象存储时单独跑。

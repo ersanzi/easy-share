@@ -69,7 +69,7 @@ const hoverPopupHTML = `<!doctype html>
   .quota { color: var(--text); font-size: 13px; line-height: 1.5; font-variant-numeric: tabular-nums; }
   .capacity-hint { margin-top: 5px; font-size: 13px; color: var(--muted); line-height: 1.5; }
   .capacity-track { height: 5px; margin-top: 7px; overflow: hidden; border-radius: var(--r-md); background: var(--soft-bg); }
-  .capacity-fill { display: block; width: 0; height: 100%; background: var(--blue); }
+  .capacity-fill { display: block; width: 100%; height: 100%; background: var(--blue); transform: scaleX(0); transform-origin: left; transition: transform 180ms cubic-bezier(.2,0,0,1); }
   .capacity[data-state="overquota"] .capacity-fill { background: var(--red-text); }
   .capacity[data-stale="true"] .capacity-fill { opacity: .6; }
   .capacity[data-state="overquota"] .capacity-hint { color: var(--red-text); }
@@ -89,6 +89,9 @@ const hoverPopupHTML = `<!doctype html>
   .footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--border); background: var(--bg-chrome); }
   .task-summary { flex: 1; min-width: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task-btn { border: 0; background: transparent; color: var(--blue); padding: 2px; white-space: nowrap; }
+  button, .dropzone { transition: background-color 120ms cubic-bezier(.2,0,0,1), color 120ms cubic-bezier(.2,0,0,1), border-color 120ms cubic-bezier(.2,0,0,1); }
+  .body { overscroll-behavior: contain; }
+  @media (prefers-reduced-motion: reduce) { .capacity-fill { transition: none; } }
 </style>
 </head>
 <body>
@@ -177,7 +180,7 @@ const hoverPopupHTML = `<!doctype html>
     track.hidden = !view.barVisible || !view.known;
     track.setAttribute('aria-valuenow', String(percent));
     track.setAttribute('aria-valuetext', view.usageText || '');
-    document.getElementById('capacityFill').style.width = percent + '%';
+    document.getElementById('capacityFill').style.transform = 'scaleX(' + percent / 100 + ')';
     document.getElementById('openSpace').disabled = !view.openEnabled;
     uploadEnabled = !!view.uploadEnabled;
     zone.setAttribute('aria-disabled', uploadEnabled ? 'false' : 'true');

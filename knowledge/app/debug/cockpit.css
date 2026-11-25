@@ -1,4 +1,8 @@
 :root {
+  --motion-fast: 120ms;
+  --motion-enter: 200ms;
+  --motion-exit: 120ms;
+  --motion-ease: cubic-bezier(.2,0,0,1);
   --bg: #f8f9fa;
   --surface: #ffffff;
   --ink: #1a1a2e;
@@ -52,7 +56,7 @@ body {
   cursor: pointer;
   font-size: 13px;
   color: var(--muted);
-  transition: all 0.15s;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 .tab:hover { background: var(--bg); color: var(--ink); }
 .tab.active { background: var(--blue-light); color: var(--blue); font-weight: 500; }
@@ -81,7 +85,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   background: var(--surface);
   cursor: pointer;
   font-size: 13px;
-  transition: all 0.15s;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
 .btn:hover { border-color: var(--blue); color: var(--blue); }
 .btn.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
@@ -135,7 +139,6 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
   margin-bottom: 8px;
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
 }
 .chunk-card:hover { border-color: var(--blue); background: var(--blue-light); }
 .chunk-card .chunk-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
@@ -261,6 +264,14 @@ main { max-width: 1400px; margin: 0 auto; padding: 24px; }
 
 /* Loading */
 .loading { opacity: 0.5; pointer-events: none; }
+button:disabled { cursor: wait; opacity: .5; }
+button:active:not(:disabled) { opacity: .75; }
+.inspect-layout { transition: opacity var(--motion-fast) var(--motion-ease); }
+.operation-status { min-height: 24px; color: var(--muted); font-size: 12px; }
+@media (prefers-reduced-motion: no-preference) {
+  .panel.active, .sub-panel.active { animation: panel-in var(--motion-enter) var(--motion-ease); }
+}
+@keyframes panel-in { from { opacity: .55; } to { opacity: 1; } }
 
 /* Strategy columns (multi-strategy comparison) */
 .strategy-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }

@@ -1,7 +1,12 @@
-import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminPanel from '../AdminPanel.vue'
 
+enableAutoUnmount(afterEach)
+
+const confirmAction = vi.hoisted(() => vi.fn())
+vi.mock('../../composables/useConfirm', () => ({ useConfirm: () => ({ confirm: confirmAction }) }))
+const adminSavePermissions = vi.fn()
 const GB = 1024 * 1024 * 1024
 
 const adminSetPersonalQuota = vi.fn()
@@ -46,6 +51,9 @@ vi.mock('../../services/core', () => ({
     adminSetPersonalQuota: (...args: unknown[]) => adminSetPersonalQuota(...args),
     adminSetSharedQuota: (...args: unknown[]) => adminSetSharedQuota(...args),
     adminGrantShared: (...args: unknown[]) => adminGrantShared(...args),
+    serviceEndpoints: () => Promise.resolve({ knowledgeUrl: '', knowledgeUrlSource: 'derived' }),
+    adminAiConfigGet: () => Promise.resolve({ llmBaseUrl: '', llmModel: '', apiKeySet: false, apiKeyMasked: '', asrEnabled: null, asrSpeakerEnabled: null }),
+    adminSavePermissions: (...args: unknown[]) => adminSavePermissions(...args),
     adminPermissionMembers: () => adminPermissionMembers(),
     adminPermissionRoles: () => adminPermissionRoles(),
     adminAssignRoles: (...args: unknown[]) => adminAssignRoles(...args),
@@ -80,7 +88,9 @@ const mountSpaces = async () => {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
+  confirmAction.mockResolvedValue(true)
+  adminSavePermissions.mockResolvedValue(undefined)
   currentUser.mockResolvedValue({
     loggedIn: true,
     userId: '1761100000000000001',
@@ -158,31 +168,23 @@ describe('AdminPanel 空间分配', () => {
     expect(typeof adminSetPersonalQuota.mock.calls[0][0]).toBe('string')
   })
 
-  it('共享权限按 无 → 只读 → 读写 → 无 轮转', async () => {
-    // 组件授权后会重新拉列表：mock 按调用次序返回逐步推进的授权行
-    const member = (permission: string) => [{
-      memberType: 'user', memberId: '1761300000000000042', permission, name: '',
-    }]
-    adminSharedMembers
-      .mockResolvedValueOnce(member(''))
-      .mockResolvedValueOnce(member('read'))
-      .mockResolvedValueOnce(member('write'))
-      .mockResolvedValueOnce(member(''))
-
+  it('共享授权必须明确选择并保存，撤销取消时不写入', async () => {
+    adminSharedMembers.mockResolvedValueOnce([]).mockResolvedValue([{ memberType: 'user', memberId: '1761300000000000042', permission: 'read', name: '小张' }])
     const wrapper = await mountSpaces()
-    const perm = wrapper.find('.admin-perm')
-    expect(perm.text()).toBe('无权限')
-
-    await perm.trigger('click')
-    await new Promise(resolve => setTimeout(resolve, 0))
+    await wrapper.get('.admin-perm').setValue('read')
+    expect(adminGrantShared).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="save-shared-permission"]').trigger('click')
+    await flushPromises()
     expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', 'read')
-
-    await wrapper.find('.admin-perm').trigger('click')
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', 'write')
-
-    await wrapper.find('.admin-perm').trigger('click')
-    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(wrapper.text()).toContain('个人显式授权')
+    await wrapper.get('.admin-perm').setValue('')
+    confirmAction.mockResolvedValueOnce(false)
+    await wrapper.get('[data-testid="save-shared-permission"]').trigger('click')
+    await flushPromises()
+    expect(confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '撤销个人授权' }))
+    expect(adminGrantShared).toHaveBeenCalledTimes(1)
+    await wrapper.get('[data-testid="save-shared-permission"]').trigger('click')
+    await flushPromises()
     expect(adminGrantShared).toHaveBeenLastCalledWith('user', '1761300000000000042', '')
   })
 
@@ -313,7 +315,8 @@ const role = (overrides: Record<string, unknown> = {}) => ({
 })
 
 const mountPermissions = async () => {
-  const wrapper = mount(AdminPanel)
+  // 原生 submit 的默认动作需要节点连接到 document；同时覆盖真实按钮提交行为。
+  const wrapper = mount(AdminPanel, { attachTo: document.body })
   await new Promise(resolve => setTimeout(resolve, 0))
   await new Promise(resolve => setTimeout(resolve, 0))
   const tab = wrapper.findAll('.admin-tab').find(b => b.text() === '权限')
@@ -344,6 +347,7 @@ describe('AdminPanel 权限角色', () => {
 
     const wrapper = await mountPermissions()
     const row = wrapper.find('.perm-row:not(.perm-head)')
+    await row.get('.perm-role-trigger').trigger('click')
     await row.find('.perm-role-menu input[type="checkbox"]').setValue(true)
     await row.find('.perm-role-menu .secondary-button').trigger('click')
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -483,7 +487,155 @@ describe('AdminPanel 文件访问角色', () => {
     expect(add.attributes('disabled')).toBeDefined()
     await add.trigger('click')
     // 既有主体不能重复添加；候选结果不是成员行。
-    expect(card.findAll('.file-member-editor > .role-row').length).toBe(2)
+    expect(card.findAll('.file-member-editor .role-actions select')).toHaveLength(1)
+    expect(add.attributes('disabled')).toBeDefined()
     expect(card.findAll('.role-actions').length).toBe(1)
   })
+})
+
+const deferred = <T,>() => { let resolve!: (value: T) => void; let reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b }); return { promise, resolve, reject } }
+describe('AdminPanel 权限异步护栏', () => {
+  it('权限页不混入空间卡，部门范围文案不固定为本部门', async () => {
+    const w = await mountPermissions()
+    expect(w.find('[aria-label="选择共享文件"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('逐账号分配')
+  })
+  it('身份加载失败不请求成员权限，不展示任何管理表单', async () => {
+    currentUser.mockRejectedValueOnce(new Error('身份失效'))
+    const w = mount(AdminPanel); await flushPromises()
+    expect(w.text()).toContain('身份失效')
+    expect(adminPermissionMembers).not.toHaveBeenCalled()
+    expect(w.find('.admin-list').exists()).toBe(false)
+  })
+  it('角色和权限读取失败不展示伪空状态或允许保存', async () => {
+    adminPermissionMembers.mockRejectedValue(new Error('成员读取失败'))
+    adminPermissionRoles.mockRejectedValue(new Error('角色读取失败'))
+    const w = await mountPermissions()
+    expect(w.text()).toContain('成员读取失败')
+    expect(w.text()).toContain('角色读取失败')
+    expect(w.text()).not.toContain('本范围内暂无成员')
+    expect(w.text()).not.toContain('还没有角色')
+    expect(w.findAll('button').find(b => b.text() === '新建角色')!.attributes('disabled')).toBeDefined()
+  })
+  it('跨行保存互斥，提交失败保留草稿且恢复操作', async () => {
+    adminPermissionMembers.mockResolvedValue([member(), member({ userId: '43', nickName: '小李' })])
+    const w = await mountPermissions()
+    const rows = w.findAll('.perm-row:not(.perm-head)')
+    await rows[0].get('.admin-toggle').trigger('click')
+    await rows[1].get('.admin-toggle').trigger('click')
+    const pending = deferred<void>(); adminSavePermissions.mockReturnValueOnce(pending.promise)
+    await rows[0].findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    await rows[1].findAll('button').find(b => b.text() === '保存')!.trigger('click')
+    expect(adminSavePermissions).toHaveBeenCalledTimes(1)
+    expect(rows[1].get('.admin-toggle').attributes('disabled')).toBeDefined()
+    pending.reject(new Error('保存拒绝')); await flushPromises()
+    expect(w.text()).toContain('保存拒绝')
+    expect(rows[0].findAll('button').some(b => b.text() === '保存')).toBe(true)
+    expect(rows[1].get('.admin-toggle').attributes('disabled')).toBeUndefined()
+  })
+  it('一个成员分配角色后不抹掉其他成员功能草稿', async () => {
+    const first = member(), second = member({ userId: '43', nickName: '小李' })
+    adminPermissionMembers.mockResolvedValueOnce([first, second]).mockResolvedValueOnce([first, { ...second, roleIds: ['7'], roleNames: ['只读成员'] }])
+    adminPermissionRoles.mockResolvedValue([role()])
+    const w = await mountPermissions()
+    const rows = w.findAll('.perm-row:not(.perm-head)')
+    await rows[0].get('.admin-toggle').trigger('click')
+    await rows[1].get('.perm-role-trigger').trigger('click')
+    await rows[1].get('.perm-role-menu input').setValue(true)
+    await rows[1].get('.perm-role-menu button').trigger('click'); await flushPromises()
+    const refreshed = w.findAll('.perm-row:not(.perm-head)')
+    expect(refreshed[0].get('.admin-toggle').attributes('aria-checked')).toBe('false')
+    expect(refreshed[0].findAll('button').some(b => b.text() === '保存')).toBe(true)
+    expect(refreshed[1].text()).toContain('由角色决定')
+  })
+  it('角色管理范围变更要确认，取消保留草稿且不改原角色', async () => {
+    const original = role({ adminScope: 'specified', scopeDeptIds: ['10'] })
+    adminPermissionRoles.mockResolvedValue([original]); adminListDepts.mockResolvedValue([{ deptId: '10', deptName: '车间' }])
+    const w = await mountPermissions()
+    await w.get('.role-actions button').trigger('click')
+    await w.get('.role-form select').setValue('all')
+    confirmAction.mockResolvedValueOnce(false)
+    await w.findAll('.role-form button').find(b => b.text() === '保存角色')!.trigger('click'); await flushPromises()
+    expect(confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '变更角色管理范围' }))
+    expect(adminSavePermissionRole).not.toHaveBeenCalled()
+    expect(original.adminScope).toBe('specified')
+    expect(w.find('.role-form').exists()).toBe(true)
+  })
+  it('角色保存中禁止切换角色表单和重复提交', async () => {
+    adminPermissionRoles.mockResolvedValue([role()])
+    const w = await mountPermissions()
+    await w.get('.role-actions button').trigger('click')
+    const pending = deferred<void>(); adminSavePermissionRole.mockReturnValueOnce(pending.promise)
+    const save = w.findAll('.role-form button').find(b => b.text() === '保存角色')!
+    await save.trigger('click'); await save.trigger('click')
+    expect(adminSavePermissionRole).toHaveBeenCalledTimes(1)
+    expect(w.get('.role-form input').attributes('disabled')).toBeDefined()
+    expect(w.get('.role-actions button').attributes('disabled')).toBeDefined()
+    pending.resolve(); await flushPromises()
+  })
+  it('提交成功但刷新失败明确待核实，不能继续按旧权限编辑', async () => {
+    adminPermissionMembers.mockResolvedValueOnce([member()]).mockRejectedValueOnce(new Error('刷新离线'))
+    adminPermissionRoles.mockResolvedValue([role()])
+    const w = await mountPermissions()
+    await w.get('.perm-role-trigger').trigger('click')
+    await w.get('.perm-role-menu input').setValue(true)
+    await w.get('.perm-role-menu button').trigger('click'); await flushPromises()
+    expect(w.text()).toContain('角色已提交，但实际权限读取失败')
+    expect(w.text()).not.toContain('已读取实际权限')
+    expect(w.find('.perm-table').exists()).toBe(false)
+  })
+  it('网盘关闭后共享开关显示关闭，不能显示禁用但仍开启', async () => {
+    adminPermissionMembers.mockResolvedValue([member()])
+    const w = await mountPermissions()
+    const toggles = w.findAll('.perm-row:not(.perm-head) .admin-toggle')
+    await toggles[2].trigger('click')
+    expect(toggles[3].attributes('aria-checked')).toBe('false')
+    expect(toggles[3].attributes('disabled')).toBeDefined()
+  })
+  it('组件卸载后角色提交完成不再刷新其他账号数据', async () => {
+    adminPermissionRoles.mockResolvedValue([role()])
+    const w = await mountPermissions(); await w.get('.role-actions button').trigger('click')
+    const pending = deferred<void>(); adminSavePermissionRole.mockReturnValueOnce(pending.promise)
+    await w.findAll('.role-form button').find(b => b.text() === '保存角色')!.trigger('click')
+    expect(adminSavePermissionRole).toHaveBeenCalledTimes(1)
+    w.unmount(); const calls = adminPermissionRoles.mock.calls.length
+    pending.resolve(); await flushPromises()
+    expect(adminPermissionRoles).toHaveBeenCalledTimes(calls)
+  })
+})
+
+it('移除最后角色显式提交空数组，确认说明保留当前限制', async () => {
+  adminPermissionMembers.mockResolvedValueOnce([member({ roleIds: ['7'], roleNames: ['只读成员'], knowledge: false })]).mockResolvedValueOnce([member({ knowledge: false })])
+  adminPermissionRoles.mockResolvedValue([role()])
+  const w = await mountPermissions()
+  await w.get('.perm-role-trigger').trigger('click')
+  await w.get('.perm-role-menu input').setValue(false)
+  const pending = deferred<boolean>(); confirmAction.mockReturnValueOnce(pending.promise)
+  await w.get('.perm-role-menu button').trigger('click')
+  expect(adminAssignRoles).not.toHaveBeenCalled()
+  expect(confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('保留当前有效功能限制') }))
+  pending.resolve(true); await flushPromises()
+  expect(adminAssignRoles).toHaveBeenCalledWith('1761300000000000042', [])
+  expect(w.get('.perm-row:not(.perm-head) .admin-toggle').attributes('aria-checked')).toBe('false')
+})
+it('部门撤权确认期间不会重复请求，取消不改授权', async () => {
+  adminSharedMembers.mockResolvedValue([{ memberType: 'dept', memberId: '10', permission: 'write', name: '车间' }])
+  const w = await mountSpaces()
+  const pending = deferred<boolean>(); confirmAction.mockReturnValueOnce(pending.promise)
+  const revoke = w.findAll('button').find(b => b.text() === '撤销')!
+  await revoke.trigger('click'); await revoke.trigger('click')
+  expect(confirmAction).toHaveBeenCalledTimes(1)
+  expect(adminGrantShared).not.toHaveBeenCalled()
+  pending.resolve(false); await flushPromises()
+  expect(adminGrantShared).not.toHaveBeenCalled()
+  expect(revoke.attributes('disabled')).toBeUndefined()
+})
+it('角色分配菜单支持 Escape 返回触发按钮', async () => {
+  adminPermissionMembers.mockResolvedValue([member()]); adminPermissionRoles.mockResolvedValue([role()])
+  const w = await mountPermissions()
+  await w.get('.perm-role-trigger').trigger('click')
+  expect(w.get('.perm-role-trigger').attributes('aria-expanded')).toBe('true')
+  await w.get('.perm-role-details').trigger('keydown', { key: 'Escape' })
+  expect(w.get('.perm-role-trigger').attributes('aria-expanded')).toBe('false')
+  expect(w.find('.perm-role-menu').exists()).toBe(false)
 })

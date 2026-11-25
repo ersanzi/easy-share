@@ -85,7 +85,7 @@
             <strong id="current-progress">0%</strong>
           </div>
         </div>
-        <div class="progress-bar" aria-hidden="true"><span id="progress-fill"></span></div>
+        <div class="progress-bar" role="progressbar" aria-label="处理进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="progress-fill"></span></div>
 
         <ol class="pipeline-track" id="pipeline-track">
           <li data-step="queued"><span>01</span><strong>入队</strong><small>Job Store</small></li>
@@ -98,7 +98,7 @@
           <li data-step="finalizing"><span>08</span><strong>收口</strong><small>Manifest</small></li>
         </ol>
 
-        <div class="error-box" id="error-box" hidden>
+        <div class="error-box" id="error-box" role="alert" hidden>
           <strong id="error-code">处理失败</strong>
           <p id="error-message"></p>
           <button class="text-button" id="retry-button" type="button">重试该任务</button>

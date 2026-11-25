@@ -533,8 +533,11 @@ func petWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		p.correctLayout(suggested, newDPI)
 		return 0
 	case winui.WMDisplayChange, winui.WMSettingChange:
-		// 显示/系统设置变化不能关闭用户明确要求的桌宠 reveal。
-		p.popup.reducedMotion = false
+		// 运行中切换减少动态效果时立即采样目标态，并释放动画定时器。
+		p.popup.reducedMotion = !winui.ClientAreaAnimationsEnabled()
+		if p.popup.reducedMotion && p.popup.animation.Running() {
+			p.popup.animateOnOwnThread(p.popup.animation.Expanded())
+		}
 		p.correctLayout(nil, 0)
 		return 0
 	case winui.WMClose:

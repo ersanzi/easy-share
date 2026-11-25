@@ -1,0 +1,76 @@
+{
+  "date": "2026-11-25T12:52:33.360Z",
+  "browser": "158.0.4370.33",
+  "viewport": {
+    "width": 1440,
+    "height": 960
+  },
+  "source": "真实 Vue 源码 + 独立浏览器 Wails 替身",
+  "checks": [
+    {
+      "name": "抽屉连续反向/单实例/退出隔离",
+      "same": true,
+      "count": 1,
+      "inert": true,
+      "opacity": "1"
+    },
+    {
+      "name": "确认框键盘循环/退出",
+      "passed": true
+    },
+    {
+      "name": "连续页面切换落在最新目标",
+      "passed": true
+    },
+    {
+      "name": "键盘跨越屏外渲染边界",
+      "passed": true
+    },
+    {
+      "name": "系统减少动态效果",
+      "preference": true,
+      "drawerTransform": "none",
+      "progressTransition": "none",
+      "animations": 0,
+      "overflow": 0
+    },
+    {
+      "name": "1024×720 尺寸变化",
+      "overflow": 0,
+      "bottom": 720,
+      "height": 720
+    }
+  ],
+  "measurements": [
+    {
+      "name": "千行列表16条进度动画",
+      "rows": 1000,
+      "frames": 196,
+      "p50Ms": 10,
+      "p95Ms": 10.100000000000364,
+      "maxMs": 50.100000000000364,
+      "framesOver25Ms": 1,
+      "durationMs": 2004.19999999851,
+      "overflowPx": 0,
+      "layoutCount": 0,
+      "layoutMs": 0,
+      "scriptMs": 6.877000000000001
+    },
+    {
+      "name": "千行列表滚动与真实事件更新",
+      "rows": 1000,
+      "frames": 189,
+      "p50Ms": 10,
+      "p95Ms": 10.199999999999818,
+      "maxMs": 120,
+      "framesOver25Ms": 1,
+      "durationMs": 2005.2999999985095,
+      "overflowPx": 0,
+      "layoutCount": 11,
+      "layoutMs": 5.87,
+      "scriptMs": 11.015999999999998
+    }
+  ],
+  "passed": true,
+  "errors": []
+}

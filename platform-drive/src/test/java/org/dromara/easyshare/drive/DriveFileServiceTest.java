@@ -575,11 +575,13 @@ void setVisibilityChecksOperatorOwnership() {
     sharedRow.setFileSize(1L);
     when(mapper.selectOne(any())).thenReturn(sharedRow, sharedRow);
     doThrow(new ServiceException("只有可管理权限的成员可以执行此操作"))
-        .when(fileRoleService).assertVisibilityManageable(any(), eq(3L));
+        .when(fileRoleService).replaceVisibleDepts(eq(31L), eq(3L), any());
+    when(fileRoleService.replaceVisibleDepts(31L, 2L, "3,7")).thenReturn("3,7");
 
     assertEquals("3,7", service.setRegisteredVisibleDepts(
         EsFile.TYPE_SHARED, 0L, 2L, "docs/x.pdf", java.util.List.of(3L, 7L)));
-    assertEquals("3,7", sharedRow.getVisibleDepts());
+    verify(fileRoleService).replaceVisibleDepts(31L, 2L, "3,7");
+    verify(mapper, never()).updateById(any(EsFile.class));
 
     ServiceException ex = assertThrows(ServiceException.class,
         () -> service.setRegisteredVisibleDepts(

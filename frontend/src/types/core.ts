@@ -38,6 +38,9 @@ export type TaskDirection = 'send' | 'receive' | ''
 
 export interface TransferTask {
   id: string
+  // 服务端判定账号归属；旧云任务没有归属时不向当前账号展示。
+  ownerId?: string
+  hidden?: boolean
   // 旧 history.json 中没有 kind，前端按 direction 兼容推断。
   kind?: TaskKind
   fileName: string

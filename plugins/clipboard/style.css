@@ -5,6 +5,10 @@
 * { box-sizing: border-box; }
 
 :root {
+  --motion-fast: 120ms;
+  --motion-enter: 200ms;
+  --motion-exit: 120ms;
+  --motion-ease: cubic-bezier(.2,0,0,1);
   --bg: #141416;
   --surface: #1d1d20;
   --card: #232327;
@@ -138,7 +142,6 @@ kbd {
   border-radius: 9px;
   cursor: pointer;
   color: var(--muted);
-  transition: background 0.12s ease, color 0.12s ease;
 }
 .nav:hover { background: var(--accent-soft); color: var(--text); }
 .nav.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -168,10 +171,11 @@ kbd {
 .quota-bar i {
   display: block;
   height: 100%;
-  width: 0;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: left;
   border-radius: 2px;
   background: var(--accent);
-  transition: width 0.3s ease;
 }
 
 /* ── 主区 ── */
@@ -201,7 +205,6 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .search:focus-within {
   border-color: var(--accent);
@@ -237,7 +240,7 @@ kbd {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: opacity var(--motion-fast) var(--motion-ease);
   user-select: none;
 }
 .ghost:hover { color: var(--text); border-color: var(--border-strong); }
@@ -280,10 +283,9 @@ kbd {
   box-shadow: var(--shadow);
   cursor: pointer;
   overflow: hidden;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 .card:hover { border-color: var(--border-strong); background: var(--card-hover); }
-.card:active { transform: scale(0.995); }
+.card:active { opacity: .85; }
 
 .card-body {
   flex: 1 1 auto;
@@ -352,9 +354,9 @@ kbd {
   font-size: 12px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  transition: opacity var(--motion-fast) var(--motion-ease);
 }
-.card:hover .icon-btn, .prow:hover .icon-btn, .icon-btn.on { opacity: 1; }
+.card:hover .icon-btn, .prow:hover .icon-btn, .card:focus-within .icon-btn, .prow:focus-within .icon-btn, .icon-btn.on { opacity: 1; }
 .icon-btn:hover { background: var(--accent-soft); color: var(--text); }
 .icon-btn.del:hover { background: rgba(255, 69, 58, 0.14); color: var(--danger); }
 .icon-btn.star.on { color: var(--accent); }
@@ -412,7 +414,7 @@ kbd {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: opacity var(--motion-fast) var(--motion-ease);
   user-select: none;
 }
 .chip:hover { color: var(--text); border-color: var(--border-strong); }
@@ -529,7 +531,6 @@ kbd {
   background: var(--border);
   position: relative;
   cursor: pointer;
-  transition: background 0.15s ease;
 }
 .switch::after {
   content: '';
@@ -539,7 +540,23 @@ kbd {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 0.15s ease;
 }
 .switch.on { background: var(--accent); }
 .switch.on::after { transform: translateX(13px); }
+
+/* 隐藏态立即停止交互；固定提示只淡出，不等动画事件再更新状态。 */
+[hidden] { display: none !important; }
+#toast { display: block; visibility: visible; opacity: 1; pointer-events: none; }
+#toast[hidden] { display: block !important; visibility: hidden; opacity: 0; }
+.ghost:disabled, .icon-btn:disabled, .switch[aria-disabled="true"] { opacity: .5; cursor: wait; }
+.ghost:active:not(:disabled), .chip:active { opacity: .7; }
+.load-status { margin: 0; padding: 0 16px; color: var(--muted); font-size: 12px; min-height: 18px; }
+.flow[aria-busy="true"], .panel-list[aria-busy="true"] { opacity: .65; }
+.flow, .panel-list { transition: opacity var(--motion-fast) var(--motion-ease); }
+@media (hover: none) { .icon-btn { opacity: 1; } }
+@media (prefers-reduced-motion: no-preference) {
+  .quota-bar i { transition: transform var(--motion-enter) var(--motion-ease); }
+  .switch::after { transition: transform var(--motion-fast) var(--motion-ease); }
+  #toast { transition: opacity var(--motion-enter) var(--motion-ease), visibility 0s; }
+  #toast[hidden] { transition: opacity var(--motion-exit) var(--motion-ease), visibility 0s linear var(--motion-exit); }
+}

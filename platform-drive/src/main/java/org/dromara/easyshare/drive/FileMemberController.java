@@ -23,8 +23,8 @@ import java.util.List;
  * 文档级成员角色的读写入口（企业权限第三片）。
  * <p>
  * 只有上传者与 manage 档成员能读写（服务端 {@link FileRoleService} 按四档梯子裁决）；
- * 护栏与钉钉对齐：不能修改自己的角色行。这些端点不受功能矩阵管辖——
- * 管理动作不能被功能开关误伤，与 {@code /easyshare/permission/*} 同口径。
+ * 护栏与钉钉对齐：不能修改自己的角色行；文件管理必须通过有效账号、
+ * 功能开关与共享空间资格检查，历史上传者或成员行不能绕过撤权。
  * <p>
  * 只针对共享空间文件；个人空间 owner 独占，不需要成员角色。
  *
@@ -70,7 +70,9 @@ public class FileMemberController {
     public R<Void> replace(@PathVariable Long fileId,
                            @RequestBody List<MemberBo> body) {
         Long userId = LoginHelper.getUserId();
-        List<EsFileMember> rows = body == null ? List.of() : body.stream()
+        if (body == null || body.stream().anyMatch(java.util.Objects::isNull))
+            throw new org.dromara.common.core.exception.ServiceException("成员列表非法；清空授权请明确提交空列表");
+        List<EsFileMember> rows = body.stream()
             .map(bo -> {
                 EsFileMember member = new EsFileMember();
                 member.setFileId(fileId);

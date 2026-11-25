@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import FileMemberEditor from './FileMemberEditor.vue'
 import { useConfirm } from '../composables/useConfirm'
 import { ADMIN_SCOPE_LABELS, QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type AdminMember, type AdminRole, type AdminSharedMember, type AuthUser, type Capacity, type FeatureFlags, type KnowledgeStats, type ManagedUser, type SharedFileEntry, type Space } from '../types/core'
@@ -8,6 +9,12 @@ import { ADMIN_SCOPE_LABELS, QUOTA_UNLIMITED, QUOTA_UNSET, type AdminDept, type 
 type Tab = 'overview' | 'accounts' | 'spaces' | 'permissions'
 
 const tab = ref<Tab>('accounts')
+let disposed = false
+let spacesRevision = 0, permissionRevision = 0, rolesRevision = 0, filesRevision = 0, usersRevision = 0, deptRevision = 0
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+onBeforeUnmount(() => { disposed = true; clearTimeout(noticeTimer) })
+const identityLoading = ref(true)
+const identityError = ref('')
 // 管理范围来自控制面：超管（RuoYi superadmin）看全部标签页；
 // 子管理员（任一管理范围档位）只有「权限」页，成员由服务端按范围档位裁剪。
 const currentUser = ref<AuthUser | null>(null)
@@ -21,37 +28,72 @@ const message = ref('')
 const messageKind = ref<'ok' | 'error'>('ok')
 const registerEnabled = ref(false)
 const registerBusy = ref(false)
+const registerReady = ref(false)
 
 const notify = (text: string, kind: 'ok' | 'error' = 'ok') => {
+  if (disposed) return
+  clearTimeout(noticeTimer)
   message.value = text
   messageKind.value = kind
-  if (kind === 'ok') setTimeout(() => { if (message.value === text) message.value = '' }, 2600)
+  if (kind === 'ok') noticeTimer = setTimeout(() => { message.value = '' }, 5000)
 }
 const fail = (e: unknown) => notify(e instanceof Error ? e.message : String(e), 'error')
 
 // ═══ 空间 ═══
 const spaces = ref<Space[]>([])
 const knowledgeStats = ref<KnowledgeStats | null>(null)
-const userTotal = ref(0)
+const userTotal = ref<number | null>(null)
+const overviewError = ref('')
+let overviewRevision = 0
 const overviewLoading = ref(false)
 const sharedMembers = ref<AdminSharedMember[]>([])
 const depts = ref<AdminDept[]>([])
 const deptForm = ref<{ deptId: string; permission: string }>({ deptId: '', permission: 'read' })
 const spacesLoading = ref(false)
+const spacesReady = ref(false)
+const spacesError = ref('')
+const deptLoading = ref(false)
+const deptReady = ref(false)
+const deptError = ref('')
+const sharedPermissionDraft = ref<Record<string, string>>({})
+const spacesLocked = computed(() => !!busyId.value || deptBusy.value || spacesLoading.value || !spacesReady.value)
+const loadDepts = async () => {
+  const request = ++deptRevision
+  deptLoading.value = true; deptReady.value = false; deptError.value = ''
+  try {
+    const list = await core.adminListDepts()
+    if (disposed || request !== deptRevision) return
+    depts.value = list ?? []; deptReady.value = true
+  } catch (e) { if (!disposed && request === deptRevision) deptError.value = e instanceof Error ? e.message : String(e) }
+  finally { if (!disposed && request === deptRevision) deptLoading.value = false }
+}
 
 // ═══ 文件访问角色（企业权限第三片）═══
 // 按 fileId 给账号/部门配四档角色；整组替换保存。
 // 护栏在服务端（不能修改自己的角色、仅 manage 档可授权），前端只做可用的编辑器。
 const sharedFiles = ref<SharedFileEntry[]>([])
 const memberFileId = ref('')
+const memberFileBusy = ref(false)
+const filesLoading = ref(false)
+const filesReady = ref(false)
+const filesError = ref('')
 
 const loadSharedFiles = async () => {
-  try { sharedFiles.value = (await core.sharedFileList()) ?? [] } catch (e) { fail(e) }
+  if (memberFileBusy.value) return
+  const request = ++filesRevision
+  filesLoading.value = true; filesReady.value = false; filesError.value = ''
+  try {
+    const list = await core.sharedFileList()
+    if (disposed || request !== filesRevision) return
+    sharedFiles.value = list ?? []; filesReady.value = true
+    if (!sharedFiles.value.some(f => f.fileId === memberFileId.value)) memberFileId.value = ''
+  } catch (e) { if (!disposed && request === filesRevision) filesError.value = e instanceof Error ? e.message : String(e) }
+  finally { if (!disposed && request === filesRevision) filesLoading.value = false }
 }
 
 const memberFileName = computed(() =>
   sharedFiles.value.find(f => f.fileId === memberFileId.value)?.name ?? '')
-const pickMemberFile = (fileId: string) => { memberFileId.value = fileId }
+const pickMemberFile = (fileId: string) => { if (!memberFileBusy.value && filesReady.value) memberFileId.value = fileId }
 // 每个账号的配额输入框各自的草稿值（GB），键是 userId；共享空间用 'shared'。
 // 值可能是 number：Vue 的 v-model 对 <input type="number"> 会自动做数字转换，
 // 清空输入框时又会给回空串，所以两种类型都要接。
@@ -97,36 +139,40 @@ const overcommitted = computed(() => {
 })
 
 const loadOverview = async () => {
-  overviewLoading.value = true
+  const request = ++overviewRevision
+  overviewLoading.value = true; overviewError.value = ''
   try {
     const [stats, users] = await Promise.all([
-      core.adminKnowledgeStats(30).catch(() => null),
-      core.adminListUsers(1, 1).catch(() => null),
+      core.adminKnowledgeStats(30),
+      core.adminListUsers(1, 1),
     ])
+    if (disposed || request !== overviewRevision) return
     knowledgeStats.value = stats
-    if (users) userTotal.value = users.total
+    userTotal.value = users?.total ?? null
   } catch (e) {
-    fail(e)
+    if (!disposed && request === overviewRevision) { overviewError.value = e instanceof Error ? e.message : String(e); knowledgeStats.value = null; userTotal.value = null }
   } finally {
-    overviewLoading.value = false
+    if (!disposed && request === overviewRevision) overviewLoading.value = false
   }
 }
 
 const loadSpaces = async () => {
-  spacesLoading.value = true
+  const request = ++spacesRevision
+  spacesLoading.value = true; spacesReady.value = false; spacesError.value = ''
   // 文件访问角色卡的文件列表并行刷（失败不阻塞空间页其余数据）
   void loadSharedFiles()
   try {
-    const [list, members, cap, deptList] = await Promise.all([
+    const [list, members, cap] = await Promise.all([
       core.adminListSpaces(),
       core.adminSharedMembers(),
       core.adminCapacity(),
-      core.adminListDepts().catch(() => []),
     ])
+    if (disposed || request !== spacesRevision) return false
     spaces.value = list ?? []
     sharedMembers.value = members ?? []
     capacity.value = cap ?? null
-    depts.value = deptList ?? []
+    spacesReady.value = true
+    sharedPermissionDraft.value = Object.fromEntries(sharedMembers.value.filter(m => m.memberType === 'user').map(m => [m.memberId, m.permission]))
     // 草稿值以服务端为准重置，避免上次没提交的输入残留成假象
     const draft: Record<string, string> = {}
     for (const space of spaces.value) {
@@ -134,10 +180,12 @@ const loadSpaces = async () => {
       draft[key] = space.quotaBytes > 0 ? String(+(space.quotaBytes / GB).toFixed(2)) : ''
     }
     quotaDraft.value = draft
+    return true
   } catch (e) {
-    fail(e)
+    if (!disposed && request === spacesRevision) { spacesError.value = e instanceof Error ? e.message : String(e); fail(e) }
+    return false
   } finally {
-    spacesLoading.value = false
+    if (!disposed && request === spacesRevision) spacesLoading.value = false
   }
 }
 
@@ -150,14 +198,16 @@ const draftToBytes = (raw: string | number | undefined): number | null => {
 }
 
 const saveSharedQuota = async () => {
+  if (spacesLocked.value) return
   const bytes = draftToBytes(quotaDraft.value.shared)
   if (bytes === null) {
     notify('容量请填非负数字', 'error')
     return
   }
-  busyId.value = 'shared'
+  busyId.value = 'shared'; message.value = ''
   try {
     await core.adminSetSharedQuota(bytes)
+    if (disposed) return
     notify(bytes === QUOTA_UNSET ? '已收回共享空间容量' : `共享空间容量已设为 ${formatBytes(bytes)}`)
     await loadSpaces()
   } catch (e) {
@@ -168,14 +218,16 @@ const saveSharedQuota = async () => {
 }
 
 const savePersonalQuota = async (user: ManagedUser) => {
+  if (spacesLocked.value) return
   const bytes = draftToBytes(quotaDraft.value[user.userId])
   if (bytes === null) {
     notify('容量请填非负数字', 'error')
     return
   }
-  busyId.value = user.userId
+  busyId.value = user.userId; message.value = ''
   try {
     await core.adminSetPersonalQuota(user.userId, bytes)
+    if (disposed) return
     notify(bytes === QUOTA_UNSET
       ? `已收回 ${user.nickName || user.userName} 的空间`
       : `${user.nickName || user.userName} 的空间已设为 ${formatBytes(bytes)}`)
@@ -191,41 +243,46 @@ const savePersonalQuota = async (user: ManagedUser) => {
 const userMemberRow = (userId: string) => sharedMembers.value.find(m => m.memberType === 'user' && m.memberId === userId)
 const deptMemberRows = computed(() => sharedMembers.value.filter(m => m.memberType === 'dept'))
 
-// 共享空间权限三态轮转：无 → 只读 → 读写 → 无（仅操作个人显式授权）
-const cycleSharedPermission = async (user: ManagedUser) => {
-  const current = userMemberRow(user.userId)?.permission ?? ''
-  const next = current === '' ? 'read' : current === 'read' ? 'write' : ''
+// 显式选择后保存；撤销仅移除个人行，部门继承仍可能生效。
+const saveSharedPermission = async (user: ManagedUser) => {
+  if (spacesLocked.value) return
+  const previous = userMemberRow(user.userId)?.permission ?? ''
+  const next = sharedPermissionDraft.value[user.userId] ?? previous
+  if (!['', 'read', 'write'].includes(next) || next === previous) return
   busyId.value = user.userId
   try {
+    if (next === '' && !await confirm({ title: '撤销个人授权', message: '撤销「' + (user.nickName || user.userName) + '」的个人显式授权？部门继承可能继续有效。', confirmText: '撤销授权', danger: true })) return
+    if (disposed) return
     await core.adminGrantShared('user', user.userId, next)
-    const label = next === '' ? '已撤销共享空间权限' : next === 'read' ? '已设为只读' : '已设为读写'
-    notify(`${user.nickName || user.userName}：${label}`)
-    await loadSpaces()
-  } catch (e) {
-    fail(e)
-  } finally {
-    busyId.value = ''
-  }
+    if (disposed) return
+    const refreshed = await loadSpaces()
+    if (refreshed) notify('个人显式授权已保存；实际权限还需结合部门继承与功能开关。')
+    else fail('授权已保存，但读取最新权限失败，请刷新后继续。')
+  } catch (e) { fail(e) }
+  finally { busyId.value = '' }
 }
-
 const permissionLabel = (userId: string) => {
+  if (!spacesReady.value) return '尚未读取'
   const perm = userMemberRow(userId)?.permission ?? ''
-  return perm === 'write' ? '读写' : perm === 'read' ? '只读' : '无权限'
+  return perm === 'write' ? '读写' : perm === 'read' ? '只读' : '未单独授权'
 }
 
 // ── 部门授权（片 1）：整部门生效，个人显式授权与其取宽 ──
 const deptBusy = ref(false)
 const addDeptAuth = async () => {
+  if (spacesLocked.value || !deptReady.value) return
   if (!deptForm.value.deptId) {
     notify('请选择部门', 'error')
     return
   }
-  deptBusy.value = true
+  const { deptId, permission } = deptForm.value
+  deptBusy.value = true; message.value = ''
   try {
-    await core.adminGrantShared('dept', deptForm.value.deptId, deptForm.value.permission)
-    notify(deptForm.value.permission === 'write' ? '部门已可读写共享空间' : '部门已可只读共享空间')
+    await core.adminGrantShared('dept', deptId, permission)
+    if (disposed) return
     deptForm.value = { deptId: '', permission: 'read' }
-    await loadSpaces()
+    if (await loadSpaces()) notify(permission === 'write' ? '部门显式授权已设为读写' : '部门显式授权已设为只读')
+    else fail('部门授权已保存，但最新权限读取失败，请刷新。')
   } catch (e) {
     fail(e)
   } finally {
@@ -233,11 +290,14 @@ const addDeptAuth = async () => {
   }
 }
 const revokeDeptAuth = async (row: AdminSharedMember) => {
+  if (spacesLocked.value) return
   deptBusy.value = true
   try {
+    if (!await confirm({ title: '撤销部门授权', message: '撤销部门「' + (row.name || row.memberId) + '」的授权？个人显式授权可能继续有效。', confirmText: '撤销授权', danger: true }) || disposed) return
     await core.adminGrantShared('dept', row.memberId, '')
-    notify(`已撤销部门「${row.name || row.memberId}」的授权`)
-    await loadSpaces()
+    if (disposed) return
+    if (await loadSpaces()) notify('部门显式授权已撤销，个人授权可能继续有效。')
+    else fail('部门授权已撤销，但最新权限读取失败，请刷新。')
   } catch (e) {
     fail(e)
   } finally {
@@ -257,28 +317,32 @@ const form = ref({ userName: '', nickName: '', password: '' })
 
 const load = async () => {
   void loadOverview()
+  const request = ++usersRevision
   loading.value = true
   try {
     const page = await core.adminListUsers(1, 100)
+    if (disposed || request !== usersRevision) return
     users.value = page.rows ?? []
     total.value = page.total ?? 0
   } catch (e) {
     fail(e)
   } finally {
-    loading.value = false
+    if (!disposed && request === usersRevision) loading.value = false
   }
 }
 
 const loadRegisterSwitch = async () => {
   try {
-    registerEnabled.value = await core.adminRegisterEnabled()
+    const enabled = await core.adminRegisterEnabled()
+    if (disposed) return
+    registerEnabled.value = enabled; registerReady.value = true
   } catch (e) {
     fail(e)
   }
 }
 
 const toggleRegister = async () => {
-  if (registerBusy.value) return
+  if (registerBusy.value || !registerReady.value) return
   const next = !registerEnabled.value
   registerBusy.value = true
   try {
@@ -297,10 +361,13 @@ const toggleRegister = async () => {
 const serviceKnowledgeUrl = ref('')
 const serviceSource = ref<'' | 'registry' | 'derived'>('')
 const serviceBusy = ref(false)
+const serviceReady = ref(false)
 
 const loadServiceConfig = async () => {
   try {
     const endpoints = await core.serviceEndpoints()
+    if (disposed) return
+    serviceReady.value = true
     serviceKnowledgeUrl.value = endpoints.knowledgeUrl
     serviceSource.value = endpoints.knowledgeUrlSource
   } catch (e) {
@@ -309,7 +376,7 @@ const loadServiceConfig = async () => {
 }
 
 const submitServiceConfig = async () => {
-  if (serviceBusy.value) return
+  if (serviceBusy.value || !serviceReady.value) return
   serviceBusy.value = true
   try {
     await core.saveServiceConfig(serviceKnowledgeUrl.value.trim())
@@ -335,12 +402,15 @@ const ai = ref({
 })
 const aiApiKey = ref('')
 const aiBusy = ref(false)
+const aiReady = ref(false)
 const aiPush = ref('')
 const aiPushOk = ref(true)
 
 const loadAiConfig = async () => {
   try {
     const vo = await core.adminAiConfigGet()
+    if (disposed) return
+    aiReady.value = true
     ai.value = {
       llmBaseUrl: vo.llmBaseUrl,
       llmModel: vo.llmModel,
@@ -356,8 +426,8 @@ const loadAiConfig = async () => {
 }
 
 const submitAiConfig = async () => {
-  if (aiBusy.value) return
-  aiBusy.value = true
+  if (aiBusy.value || !aiReady.value) return
+  aiBusy.value = true; aiPush.value = ''; message.value = ''
   try {
     const vo = await core.adminAiConfigSave(
       ai.value.llmBaseUrl.trim(),
@@ -382,6 +452,7 @@ const submitCreate = async () => {
   creating.value = true
   try {
     await core.adminCreateUser(form.value.userName, form.value.nickName, form.value.password)
+    if (disposed) return
     notify(`账号 ${form.value.userName} 已创建`)
     form.value = { userName: '', nickName: '', password: '' }
     createOpen.value = false
@@ -394,11 +465,13 @@ const submitCreate = async () => {
 }
 
 const toggleStatus = async (user: ManagedUser) => {
-  if (busyId.value) return
-  busyId.value = user.userId
+  if (busyId.value || loading.value) return
+  busyId.value = user.userId; message.value = ''
   try {
+    if (user.status === '0' && !await confirm({ title: '停用账号', message: '停用「' + (user.nickName || user.userName) + '」后，该成员将无法继续使用账号。', confirmText: '停用', danger: true })) return
+    if (disposed) return
     await core.adminSetUserStatus(user.userId, user.status !== '0')
-    await load()
+    if (!disposed) await load()
   } catch (e) {
     fail(e)
   } finally {
@@ -407,24 +480,16 @@ const toggleStatus = async (user: ManagedUser) => {
 }
 
 const removeUser = async (user: ManagedUser) => {
-  if (busyId.value) return
-  const confirmed = await confirm({
-    title: '删除账号',
-    message: `删除账号「${user.nickName || user.userName}」？该账号的个人空间将无人可访问。`,
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!confirmed) return
-  busyId.value = user.userId
+  if (busyId.value || loading.value) return
+  busyId.value = user.userId; message.value = ''
   try {
+    if (!await confirm({ title: '删除账号', message: '删除账号「' + (user.nickName || user.userName) + '」？该账号的个人空间将无人可访问。', confirmText: '删除', danger: true }) || disposed) return
     await core.adminDeleteUser(user.userId)
-    notify(`账号 ${user.userName} 已删除`)
+    if (disposed) return
+    notify('账号 ' + user.userName + ' 已删除')
     await load()
-  } catch (e) {
-    fail(e)
-  } finally {
-    busyId.value = ''
-  }
+  } catch (e) { fail(e) }
+  finally { busyId.value = '' }
 }
 
 const canSubmit = computed(() =>
@@ -435,14 +500,22 @@ const initial = (user: ManagedUser) => {
   return name ? Array.from(name)[0] : '?'
 }
 
-onMounted(async () => {
-  try { currentUser.value = await core.currentUser() } catch { currentUser.value = null }
+const initialize = async () => {
+  identityLoading.value = true; identityError.value = ''
+  try {
+    const user = await core.currentUser()
+    if (disposed) return
+    if (!user?.loggedIn || (!user.isAdmin && (!user.adminScope || user.adminScope === 'none'))) throw new Error('当前账号没有管理权限')
+    currentUser.value = user
+  } catch (e) { identityError.value = e instanceof Error ? e.message : String(e); return }
+  finally { identityLoading.value = false }
   if (isSuper.value) {
     void load()
     void loadRegisterSwitch()
     void loadServiceConfig()
     void loadAiConfig()
     void loadSpaces()
+    void loadDepts()
   } else {
     // 子管理员只有权限矩阵；账号/空间接口在控制面按超管拒绝，不能一进来就去撞
     tab.value = 'permissions'
@@ -452,7 +525,8 @@ onMounted(async () => {
     void loadPermissions()
     void loadRoles()
   }
-})
+}
+onMounted(initialize)
 // ═══ 权限：角色组 + 成员矩阵 ═══
 // 角色把五项开关打包给一批人，成员挂了角色就按角色裁决（服务端取并集），逐账号开关不再生效；
 // 没有角色的成员沿用逐账号矩阵，「缺行 = 全开」。子管理员只能看/改本部门成员的逐账号开关，
@@ -472,12 +546,28 @@ interface PermissionRow {
 }
 const permissionRows = ref<PermissionRow[]>([])
 const permissionLoading = ref(false)
+const permissionReady = ref(false)
+const permissionError = ref('')
+const rolesLoading = ref(false)
+const rolesReady = ref(false)
+const rolesError = ref('')
 const permissionBusy = ref('')
 const roles = ref<AdminRole[]>([])
 // 每个成员的角色勾选草稿（键 userId）；保存后才回写服务端
 const roleDraft = ref<Record<string, string[]>>({})
 const roleForm = ref<AdminRole | null>(null)
 const roleBusy = ref(false)
+const permissionLocked = computed(() => !!permissionBusy.value || roleBusy.value || permissionLoading.value || !permissionReady.value || (isSuper.value && (rolesLoading.value || !rolesReady.value)))
+const roleFormElement = ref<HTMLElement | null>(null)
+const roleMenu = ref('')
+let roleMenuTrigger: HTMLElement | null = null
+const toggleRoleMenu = (userId: string, event: Event) => {
+  if (permissionLocked.value) return
+  roleMenuTrigger = event.currentTarget as HTMLElement
+  roleMenu.value = roleMenu.value === userId ? '' : userId
+}
+const closeRoleMenu = () => { roleMenu.value = ''; roleMenuTrigger?.focus() }
+const roleDraftChanged = (row: PermissionRow) => JSON.stringify([...(roleDraft.value[row.member.userId] ?? [])].sort()) !== JSON.stringify([...(row.member.roleIds ?? [])].sort())
 
 // 管理范围档位：none 是普通权限组，其余档位授子管理员入口（成员范围由服务端裁剪）
 const scopeOptions = [
@@ -498,138 +588,159 @@ const roleDeptEmpty = computed(() =>
   roleForm.value?.adminScope === 'specified' && !(roleForm.value.scopeDeptIds ?? []).length)
 
 const toggleScopeDept = (deptId: string, checked: boolean) => {
-  if (!roleForm.value) return
+  if (!roleForm.value || roleBusy.value || !deptReady.value) return
   const current = roleForm.value.scopeDeptIds ?? []
   roleForm.value.scopeDeptIds = checked
     ? Array.from(new Set([...current, deptId]))
     : current.filter(id => id !== deptId)
 }
 
-const loadPermissions = async () => {
-  permissionLoading.value = true
+const loadPermissions = async (savedUserId?: string) => {
+  const request = ++permissionRevision
+  permissionLoading.value = true; permissionReady.value = false; permissionError.value = ''
   try {
     const list = (await core.adminPermissionMembers()) ?? []
-    permissionRows.value = list.map(member => ({
-      member,
-      flags: {
-        userId: member.userId,
-        knowledge: member.knowledge,
-        meeting: member.meeting,
-        drive: member.drive,
-        shared: member.shared,
-        plugin: member.plugin,
-      },
-      dirty: false,
-    }))
+    if (disposed || request !== permissionRevision) return false
+    const previous = permissionRows.value
     const drafts: Record<string, string[]> = {}
-    for (const member of list) drafts[member.userId] = [...(member.roleIds ?? [])]
-    roleDraft.value = drafts
+    permissionRows.value = list.map(member => {
+      const old = previous.find(row => row.member.userId === member.userId)
+      const keep = savedUserId !== undefined && member.userId !== savedUserId && old && JSON.stringify(old.member.roleIds ?? []) === JSON.stringify(member.roleIds ?? [])
+      drafts[member.userId] = keep ? [...(roleDraft.value[member.userId] ?? member.roleIds ?? [])] : [...(member.roleIds ?? [])]
+      return {
+        member,
+        flags: keep && old.dirty && !(member.roleIds ?? []).length ? { ...old.flags } : {
+          userId: member.userId, knowledge: member.knowledge, meeting: member.meeting,
+          drive: member.drive, shared: member.shared, plugin: member.plugin,
+        },
+        dirty: !!(keep && old.dirty && !(member.roleIds ?? []).length),
+      }
+    })
+    roleDraft.value = drafts; permissionReady.value = true
+    return true
   } catch (e) {
-    fail(e)
-  } finally {
-    permissionLoading.value = false
-  }
+    if (!disposed && request === permissionRevision) permissionError.value = e instanceof Error ? e.message : String(e)
+    return false
+  } finally { if (!disposed && request === permissionRevision) permissionLoading.value = false }
 }
-
 const loadRoles = async () => {
-  if (!isSuper.value) return
-  try { roles.value = (await core.adminPermissionRoles()) ?? [] } catch (e) { fail(e) }
+  if (!isSuper.value) return true
+  const request = ++rolesRevision
+  rolesLoading.value = true; rolesReady.value = false; rolesError.value = ''
+  try {
+    const list = await core.adminPermissionRoles()
+    if (disposed || request !== rolesRevision) return false
+    roles.value = list ?? []; rolesReady.value = true
+    return true
+  } catch (e) {
+    if (!disposed && request === rolesRevision) rolesError.value = e instanceof Error ? e.message : String(e)
+    return false
+  } finally { if (!disposed && request === rolesRevision) rolesLoading.value = false }
 }
-
-const openPermissions = () => {
-  tab.value = 'permissions'
-  void loadPermissions()
-  void loadRoles()
-  // 角色表单的「指定部门」勾选要用部门树；超管才看得到角色卡，提前拉好
-  if (isSuper.value && !depts.value.length) {
-    core.adminListDepts().then(list => { depts.value = list ?? [] }).catch(() => {})
+const openPermissions = async () => {
+  if (identityLoading.value || identityError.value || !currentUser.value) return
+  if (permissionBusy.value || roleBusy.value || permissionLoading.value || rolesLoading.value) return
+  if (permissionRows.value.some(row => row.dirty || roleDraftChanged(row)) || roleForm.value) {
+    if (tab.value !== 'permissions') { tab.value = 'permissions'; return }
+    permissionBusy.value = 'refresh'
+    const accepted = await confirm({ title: '重新读取权限', message: '刷新将丢弃本页尚未保存的权限和角色草稿。', confirmText: '放弃草稿并刷新' })
+    permissionBusy.value = ''
+    if (!accepted || disposed) return
+    roleForm.value = null
   }
+  tab.value = 'permissions'
+  void loadPermissions(); void loadRoles()
+  if (isSuper.value && !deptReady.value && !deptLoading.value) void loadDepts()
 }
-
 const roleDriven = (row: PermissionRow) => (row.member.roleIds ?? []).length > 0
-
+const featureEnabled = (row: PermissionRow, key: FeatureKey) => key === 'shared' && !row.flags.drive ? false : row.flags[key]
 const toggleFeature = (row: PermissionRow, key: FeatureKey) => {
-  if (roleDriven(row)) return
+  if (permissionLocked.value || roleDriven(row) || roleDraftChanged(row) || (key === 'shared' && !row.flags.drive)) return
   row.flags = { ...row.flags, [key]: !row.flags[key] }
   row.dirty = true
 }
-
 const savePermissions = async (row: PermissionRow) => {
+  if (permissionLocked.value || roleDriven(row) || roleDraftChanged(row) || !row.dirty) return
   permissionBusy.value = row.member.userId
+  message.value = ''
   try {
     await core.adminSavePermissions({ ...row.flags, userId: row.member.userId })
-    row.dirty = false
-    notify(`已保存 ${row.member.nickName || row.member.userName} 的功能权限`)
-  } catch (e) {
-    fail(e)
-  } finally {
-    permissionBusy.value = ''
-  }
+    if (disposed) return
+    if (await loadPermissions(row.member.userId)) notify('已保存 ' + (row.member.nickName || row.member.userName) + ' 的功能权限')
+    else fail('功能权限已提交，但最新权限读取失败，请刷新确认。')
+  } catch (e) { fail(e) }
+  finally { permissionBusy.value = '' }
 }
-
 const saveMemberRoles = async (row: PermissionRow) => {
-  permissionBusy.value = row.member.userId
+  if (permissionLocked.value || !isSuper.value || !roleDraftChanged(row)) return
+  const selected = [...(roleDraft.value[row.member.userId] ?? [])]
+  permissionBusy.value = row.member.userId; message.value = ''
   try {
-    await core.adminAssignRoles(row.member.userId, roleDraft.value[row.member.userId] ?? [])
-    notify(`已更新 ${row.member.nickName || row.member.userName} 的角色`)
-    await loadPermissions()
-  } catch (e) {
-    fail(e)
-  } finally {
-    permissionBusy.value = ''
-  }
+    const addsManagement = roles.value.some(role => selected.includes(role.roleId ?? '') && !(row.member.roleIds ?? []).includes(role.roleId ?? '') && role.adminScope !== 'none')
+    const removesRole = (row.member.roleIds ?? []).some(id => !selected.includes(id))
+    if ((addsManagement || removesRole) && !await confirm({ title: '确认角色变更', message: '此操作将重新计算「' + (row.member.nickName || row.member.userName) + '」的功能权限与管理范围。移除最后一个角色时保留当前有效功能限制，转为逐账号配置；角色带来的管理范围将撤去。', confirmText: '保存角色', danger: removesRole })) return
+    if (disposed) return
+    await core.adminAssignRoles(row.member.userId, selected)
+    if (disposed) return
+    if (await loadPermissions(row.member.userId)) notify('成员角色已更新，已读取实际权限')
+    else fail('角色已提交，但实际权限读取失败，请刷新确认。')
+  } catch (e) { fail(e) }
+  finally { permissionBusy.value = '' }
 }
-
 const toggleRoleDraft = (row: PermissionRow, roleId: string, checked: boolean) => {
+  if (permissionLocked.value || !isSuper.value || !roleId) return
   const current = roleDraft.value[row.member.userId] ?? []
-  roleDraft.value[row.member.userId] = checked
-    ? Array.from(new Set([...current, roleId]))
-    : current.filter(id => id !== roleId)
+  roleDraft.value[row.member.userId] = checked ? Array.from(new Set([...current, roleId])) : current.filter(id => id !== roleId)
 }
-
-const startRoleForm = (role?: AdminRole) => {
-  roleForm.value = role ? { ...role } : emptyRole()
+const startRoleForm = async (role?: AdminRole) => {
+  if (permissionLocked.value || !isSuper.value) return
+  roleForm.value = role ? { ...role, scopeDeptIds: [...(role.scopeDeptIds ?? [])] } : emptyRole()
+  await nextTick(); roleFormElement.value?.querySelector<HTMLInputElement>('input')?.focus()
 }
-
 const saveRole = async () => {
-  if (!roleForm.value) return
-  roleBusy.value = true
+  if (permissionLocked.value || !isSuper.value || !roleForm.value || !roleForm.value.roleName.trim() || roleDeptEmpty.value) return
+  if (roleForm.value.adminScope === 'specified' && !deptReady.value) return
+  const draft: AdminRole = { ...roleForm.value, roleName: roleForm.value.roleName.trim(), scopeDeptIds: [...(roleForm.value.scopeDeptIds ?? [])] }
+  if (draft.adminScope !== 'specified') delete draft.scopeDeptIds
+  roleBusy.value = true; message.value = ''
   try {
-    const name = roleForm.value.roleName
-    // 范围部门列表只在 specified 档携带；其余档位清掉，避免上次编辑的残留误存
-    const draft = { ...roleForm.value }
-    if (draft.adminScope !== 'specified') {
-      delete draft.scopeDeptIds
-    }
+    const previous = roles.value.find(role => role.roleId === draft.roleId)
+    const scopeChanged = previous && (previous.adminScope !== draft.adminScope || JSON.stringify([...(previous.scopeDeptIds ?? [])].sort()) !== JSON.stringify([...(draft.scopeDeptIds ?? [])].sort()))
+    if (scopeChanged && !await confirm({ title: '变更角色管理范围', message: '角色「' + draft.roleName + '」的管理范围将改变，对已分配该角色的成员同时生效。', confirmText: '确认变更' })) return
+    if (disposed) return
     await core.adminSavePermissionRole(draft)
+    if (disposed) return
     roleForm.value = null
-    notify(`角色「${name}」已保存`)
-    await Promise.all([loadRoles(), loadPermissions()])
-  } catch (e) {
-    fail(e)
-  } finally {
-    roleBusy.value = false
-  }
+    const results = await Promise.all([loadRoles(), loadPermissions('')])
+    if (results.every(Boolean)) notify('角色「' + draft.roleName + '」已保存')
+    else fail('角色已提交，但最新权限读取失败，请刷新确认。')
+  } catch (e) { fail(e) }
+  finally { roleBusy.value = false }
 }
-
 const removeRole = async (role: AdminRole) => {
-  if (!role.roleId) return
-  const confirmed = await confirm({
-    title: '删除角色',
-    message: `删除角色「${role.roleName}」？只挂这一个角色的成员会保留当前权限（转为逐账号配置），不会被放大成全开。`,
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!confirmed) return
+  if (!role.roleId || permissionLocked.value || !isSuper.value) return
+  roleBusy.value = true; message.value = ''
   try {
+    if (!await confirm({ title: '删除角色', message: '删除角色「' + role.roleName + '」？仅分配此角色的成员会保留当前有效功能限制并转为逐账号配置；角色带来的管理范围将撤去。', confirmText: '删除', danger: true }) || disposed) return
     await core.adminDeletePermissionRole(role.roleId)
-    notify(`角色「${role.roleName}」已删除`)
-    await Promise.all([loadRoles(), loadPermissions()])
-  } catch (e) {
-    fail(e)
-  }
+    if (disposed) return
+    if (roleForm.value?.roleId === role.roleId) roleForm.value = null
+    const results = await Promise.all([loadRoles(), loadPermissions('')])
+    if (results.every(Boolean)) notify('角色「' + role.roleName + '」已删除')
+    else fail('角色已删除，但最新权限读取失败，请刷新确认。')
+  } catch (e) { fail(e) }
+  finally { roleBusy.value = false }
 }
 
+const tabKey = (event: KeyboardEvent) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role=tab]:not(:disabled)'))
+  const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  if (index < 0) return
+  event.preventDefault()
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
+  buttons[next]?.focus(); buttons[next]?.click()
+}
 const roleSummary = (role: AdminRole) => {
   const enabled = featureLabels.filter(f => role[f.key]).map(f => f.label)
   return enabled.length ? enabled.join(' · ') : '五项全关'
@@ -638,51 +749,54 @@ const roleSummary = (role: AdminRole) => {
 </script>
 
 <template>
-  <div class="admin-panel">
+  <div class="admin-panel" @click="roleMenu = ''">
     <header class="workspace-header">
       <div>
         <span class="section-label">管理</span>
         <h1>账号与空间</h1>
-        <p>{{ isSuper ? '开设账号、分配空间大小，控制共享空间的访问权限。' : '管理本部门成员的功能权限。' }}</p>
+        <p>{{ isSuper ? '开设账号、分配空间大小，控制共享空间的访问权限。' : '管理授权范围内成员的功能权限。' }}</p>
       </div>
-      <div class="admin-tabs" role="tablist">
+      <div class="admin-tabs" role="tablist" aria-label="管理功能" @keydown="tabKey">
         <button
           v-if="isSuper"
           :class="['admin-tab', tab === 'overview' ? 'active' : '']"
-          type="button" role="tab" :aria-selected="tab === 'overview'"
+          type="button" role="tab" :disabled="memberFileBusy || !!permissionBusy || roleBusy || deptBusy || !!busyId" :aria-selected="tab === 'overview'" :tabindex="tab === 'overview' ? 0 : -1"
           @click="tab = 'overview'"
         >概览</button>
         <button
           v-if="isSuper"
           :class="['admin-tab', tab === 'accounts' ? 'active' : '']"
-          type="button" role="tab" :aria-selected="tab === 'accounts'"
+          type="button" role="tab" :disabled="memberFileBusy || !!permissionBusy || roleBusy || deptBusy || !!busyId" :aria-selected="tab === 'accounts'" :tabindex="tab === 'accounts' ? 0 : -1"
           @click="tab = 'accounts'"
         >账号</button>
         <button
           v-if="isSuper"
           :class="['admin-tab', tab === 'spaces' ? 'active' : '']"
-          type="button" role="tab" :aria-selected="tab === 'spaces'"
+          type="button" role="tab" :disabled="memberFileBusy || !!permissionBusy || roleBusy || deptBusy || !!busyId" :aria-selected="tab === 'spaces'" :tabindex="tab === 'spaces' ? 0 : -1"
           @click="tab = 'spaces'"
         >空间</button>
         <button
           :class="['admin-tab', tab === 'permissions' ? 'active' : '']"
-          type="button" role="tab" :aria-selected="tab === 'permissions'"
+          type="button" role="tab" :disabled="memberFileBusy || !!permissionBusy || roleBusy || deptBusy || !!busyId" :aria-selected="tab === 'permissions'" :tabindex="tab === 'permissions' ? 0 : -1"
           @click="openPermissions"
         >权限</button>
       </div>
     </header>
 
-    <div v-if="message" :class="['admin-message', messageKind]" role="status">
+    <div :role="messageKind === 'error' ? 'alert' : 'status'" aria-atomic="true"><Transition v-bind="presenceMotion" name="es-fade"><div v-if="message" :key="message" :class="['admin-message', messageKind]">
       <span>{{ message }}</span>
       <button type="button" aria-label="关闭提示" @click="message = ''">×</button>
-    </div>
+    </div></Transition></div>
 
     <!-- ═══ 账号 ═══ -->
-    <template v-if="tab === 'overview'">
+    <Transition v-bind="presenceMotion" name="es-content">
+    <div v-if="identityLoading" key="identity-loading" role="status">正在确认管理权限…</div>
+    <div v-else-if="identityError" key="identity-error" role="alert">{{ identityError }} <button class="text-button" type="button" @click="initialize">重试</button></div>
+    <div v-else-if="tab === 'overview'" key="overview" class="admin-panel" role="tabpanel" aria-label="概览">
       <div class="overview-grid">
         <div class="overview-card">
           <span class="overview-label">账号总数</span>
-          <strong>{{ userTotal }}</strong>
+          <strong v-content-motion="userTotal">{{ userTotal ?? '—' }}</strong>
           <span class="overview-sub">管理页可开设与配额管理</span>
         </div>
         <div class="overview-card">
@@ -693,7 +807,7 @@ const roleSummary = (role: AdminRole) => {
         <div class="overview-card">
           <span class="overview-label">知识文档</span>
           <strong>{{ knowledgeStats?.documents ?? '—' }}</strong>
-          <span class="overview-sub">LLM {{ knowledgeStats?.llm === 'configured' ? '已配置' : '未配置' }}</span>
+          <span class="overview-sub">LLM {{ !knowledgeStats ? '尚未确认' : knowledgeStats.llm === 'configured' ? '已配置' : '未配置' }}</span>
         </div>
         <div class="overview-card">
           <span class="overview-label">生成质量</span>
@@ -711,24 +825,25 @@ const roleSummary = (role: AdminRole) => {
           <span class="overview-sub">{{ overcommitted ? '⚠ 已超物理容量' : `物理可用 ${formatBytes(capacity?.usableBytes ?? 0)}` }}</span>
         </div>
       </div>
-      <p v-if="overviewLoading" class="setting-hint">加载中…</p>
+      <p v-if="overviewLoading" class="setting-hint" role="status">加载中…</p>
+      <p v-if="overviewError" role="alert">统计读取失败：{{ overviewError }} <button class="text-button" type="button" @click="loadOverview">重试</button></p>
       <p class="setting-hint">
         统计窗口 30 天，数据来自知识服务查询日志与控制面容量聚合。高频引用文档与盲区明细见知识驾驶舱。
       </p>
-    </template>
-    <template v-if="tab === 'accounts'">
+    </div>
+    <div v-else-if="tab === 'accounts'" key="accounts" class="admin-panel" role="tabpanel" aria-label="账号">
       <section class="card">
         <header class="card-header">
           <div>
             <span class="section-label">成员</span>
-            <h2>{{ total }} 个账号</h2>
+            <h2 v-content-motion="total">{{ total }} 个账号</h2>
           </div>
           <div class="card-actions">
             <button class="secondary-button compact" type="button" :disabled="loading" @click="load">
               <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
               刷新
             </button>
-            <button class="primary-button compact" type="button" @click="createOpen = !createOpen">
+            <button class="primary-button compact" type="button" :disabled="creating" :aria-expanded="createOpen" @click="createOpen = !createOpen">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
               新建账号
             </button>
@@ -736,26 +851,26 @@ const roleSummary = (role: AdminRole) => {
         </header>
 
         <!-- 新建表单：就地展开，不弹窗，避免遮住列表 -->
-        <form v-if="createOpen" class="admin-create" @submit.prevent="submitCreate">
+        <Transition v-bind="presenceMotion" name="es-disclosure"><form v-if="createOpen" class="admin-create" @submit.prevent="submitCreate">
           <label class="admin-field">
             <span>账号名</span>
-            <input v-model="form.userName" class="setting-input" autocomplete="off" placeholder="登录用的账号" />
+            <input v-model="form.userName" :disabled="creating" class="setting-input" autocomplete="off" placeholder="登录用的账号" />
           </label>
           <label class="admin-field">
             <span>昵称</span>
-            <input v-model="form.nickName" class="setting-input" autocomplete="off" placeholder="留空则同账号名" />
+            <input v-model="form.nickName" :disabled="creating" class="setting-input" autocomplete="off" placeholder="留空则同账号名" />
           </label>
           <label class="admin-field">
             <span>初始密码</span>
-            <input v-model="form.password" class="setting-input" type="password" autocomplete="new-password" placeholder="告知该成员后请其自行修改" />
+            <input v-model="form.password" :disabled="creating" class="setting-input" type="password" autocomplete="new-password" placeholder="告知该成员后请其自行修改" />
           </label>
           <div class="admin-create-actions">
-            <button class="secondary-button compact" type="button" @click="createOpen = false">取消</button>
+            <button class="secondary-button compact" type="button" :disabled="creating" @click="createOpen = false">取消</button>
             <button class="primary-button compact" type="submit" :disabled="!canSubmit || creating">
               {{ creating ? '创建中…' : '创建' }}
             </button>
           </div>
-        </form>
+        </form></Transition>
 
         <div v-if="loading && !users.length" class="admin-empty">正在读取账号…</div>
         <ul v-else class="admin-list">
@@ -778,10 +893,10 @@ const roleSummary = (role: AdminRole) => {
               {{ user.status === '0' ? '正常' : '已停用' }}
             </span>
             <div class="admin-row-actions">
-              <button class="secondary-button compact" type="button" :disabled="busyId === user.userId" @click="toggleStatus(user)">
+              <button class="secondary-button compact" type="button" :disabled="!!busyId || spacesLoading" @click="toggleStatus(user)">
                 {{ user.status === '0' ? '停用' : '启用' }}
               </button>
-              <button class="secondary-button compact danger" type="button" :disabled="busyId === user.userId" @click="removeUser(user)">
+              <button class="secondary-button compact danger" type="button" :disabled="!!busyId || spacesLoading" @click="removeUser(user)">
                 删除
               </button>
             </div>
@@ -792,10 +907,11 @@ const roleSummary = (role: AdminRole) => {
       <section class="card admin-switch-card">
         <div class="admin-switch-copy">
           <strong>允许用户自助注册</strong>
-          <span>关闭后只能由管理员在此页面开设账号。</span>
+          <span>{{ registerReady ? '关闭后只能由管理员在此页面开设账号。' : '注册设置尚未确认，请重试读取。' }}</span>
+          <button v-if="!registerReady" class="text-button" type="button" @click="loadRegisterSwitch">重试读取</button>
         </div>
         <button
-          :class="['admin-toggle', registerEnabled ? 'on' : '']"
+          v-if="registerReady" aria-label="允许用户自助注册" :class="['admin-toggle', registerEnabled ? 'on' : '']"
           type="button" role="switch" :aria-checked="registerEnabled"
           :disabled="registerBusy" @click="toggleRegister"
         >
@@ -819,14 +935,15 @@ const roleSummary = (role: AdminRole) => {
           </p>
           <div class="admin-service-row">
             <input
-              id="svcKnowledgeUrl"
+              id="svcKnowledgeUrl" :disabled="serviceBusy || !serviceReady"
               v-model="serviceKnowledgeUrl"
               class="setting-input"
               type="text"
               autocomplete="off"
               placeholder="http://192.168.1.10:8000"
             />
-            <button class="secondary-button" type="button" :disabled="serviceBusy" @click="submitServiceConfig">
+            <button v-if="!serviceReady" class="text-button" type="button" @click="loadServiceConfig">重试读取配置</button>
+            <button class="secondary-button" type="button" :disabled="serviceBusy || !serviceReady" @click="submitServiceConfig">
               {{ serviceBusy ? '保存中…' : '保存' }}
             </button>
           </div>
@@ -847,7 +964,7 @@ const roleSummary = (role: AdminRole) => {
         <div class="setting-row">
           <label class="setting-label" for="aiLlmBaseUrl">LLM 地址</label>
           <input
-            id="aiLlmBaseUrl"
+            id="aiLlmBaseUrl" :disabled="aiBusy || !aiReady"
             v-model="ai.llmBaseUrl"
             class="setting-input"
             type="text"
@@ -858,7 +975,7 @@ const roleSummary = (role: AdminRole) => {
         <div class="setting-row">
           <label class="setting-label" for="aiLlmModel">LLM 模型</label>
           <input
-            id="aiLlmModel"
+            id="aiLlmModel" :disabled="aiBusy || !aiReady"
             v-model="ai.llmModel"
             class="setting-input"
             type="text"
@@ -870,7 +987,7 @@ const roleSummary = (role: AdminRole) => {
           <label class="setting-label" for="aiLlmApiKey">LLM 密钥</label>
           <p class="setting-hint">{{ ai.apiKeySet ? `已设置（${ai.apiKeyMasked}）` : '未设置' }}，留空保持不变</p>
           <input
-            id="aiLlmApiKey"
+            id="aiLlmApiKey" :disabled="aiBusy || !aiReady"
             v-model="aiApiKey"
             class="setting-input"
             type="password"
@@ -887,7 +1004,7 @@ const roleSummary = (role: AdminRole) => {
             id="aiAsrToggle"
             :class="['admin-toggle', ai.asrEnabled ? 'on' : '']"
             type="button" role="switch" :aria-checked="!!ai.asrEnabled"
-            :disabled="aiBusy" @click="ai.asrEnabled = !ai.asrEnabled"
+            :disabled="aiBusy || !aiReady" @click="ai.asrEnabled = !ai.asrEnabled"
           >
             <i />
           </button>
@@ -901,22 +1018,24 @@ const roleSummary = (role: AdminRole) => {
             id="aiSpkToggle"
             :class="['admin-toggle', ai.asrSpeakerEnabled ? 'on' : '']"
             type="button" role="switch" :aria-checked="!!ai.asrSpeakerEnabled"
-            :disabled="aiBusy" @click="ai.asrSpeakerEnabled = !ai.asrSpeakerEnabled"
+            :disabled="aiBusy || !aiReady" @click="ai.asrSpeakerEnabled = !ai.asrSpeakerEnabled"
           >
             <i />
           </button>
         </div>
         <div class="admin-service-row">
           <p v-if="aiPush" :class="['setting-hint', { 'meeting-failed': !aiPushOk }]">{{ aiPush }}</p>
-          <button class="secondary-button" type="button" :disabled="aiBusy" @click="submitAiConfig">
+          <button v-if="!aiReady" class="text-button" type="button" @click="loadAiConfig">重试读取配置</button>
+          <button class="secondary-button" type="button" :disabled="aiBusy || !aiReady" @click="submitAiConfig">
             {{ aiBusy ? '保存中…' : '保存' }}
           </button>
         </div>
       </section>
-    </template>
+    </div>
 
     <!-- ═══ 空间 ═══ -->
-    <template v-else>
+    <div v-else-if="tab === 'spaces'" key="spaces" class="admin-panel" role="tabpanel" aria-label="空间">
+      <p v-if="spacesError" role="alert">空间权限读取失败：{{ spacesError }}，请刷新后继续编辑。</p>
       <!--
         容量总览。逐空间配额看不出「承诺总量是否超过物理磁盘」——
         没有这一行，管理员会在不知情下超配，用户则看到「还剩很多」却传不上去。
@@ -964,7 +1083,7 @@ const roleSummary = (role: AdminRole) => {
             <h2>按文件给成员配权限</h2>
           </div>
           <div class="card-actions">
-            <button class="secondary-button compact" type="button" :disabled="spacesLoading" @click="void loadSharedFiles()">
+            <button class="secondary-button compact" type="button" :disabled="filesLoading || memberFileBusy" @click="void loadSharedFiles()">
               <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
               刷新文件
             </button>
@@ -972,26 +1091,28 @@ const roleSummary = (role: AdminRole) => {
         </header>
         <p class="setting-hint perm-hint">
           四档：可管理（含授权/删除）&gt; 可编辑 &gt; 可查看下载 &gt; 仅可查看。
-          删除是可管理独占；未出现在下方列表的文件按默认规则生效（空间可写成员全权）。
+          删除是可管理独占；文件列表只用于选择目标，实际访问仍由控制面按文件授权与空间规则裁决。
           服务端护栏：不能修改自己的角色。
         </p>
         <div class="role-field">
           <span>选择文件</span>
-          <select :value="memberFileId" @change="void pickMemberFile(($event.target as HTMLSelectElement).value)">
+          <select aria-label="选择共享文件" :disabled="filesLoading || !filesReady || memberFileBusy" :value="memberFileId" @change="void pickMemberFile(($event.target as HTMLSelectElement).value)">
             <option value="">— 选择共享空间文件 —</option>
             <option v-for="f in sharedFiles.filter(f => f.fileId && f.fileId !== '0')" :key="f.fileId" :value="f.fileId">
               {{ f.name }}{{ f.uploadByName ? `（上传者 ${f.uploadByName}）` : '' }}
             </option>
           </select>
         </div>
-        <FileMemberEditor v-if="memberFileId" :file-id="memberFileId" :file-name="memberFileName" :operator-id="currentUser?.userId ?? ''" @saved="notify('成员角色已保存')" />
+        <p v-if="filesLoading" role="status">正在读取共享文件…</p>
+        <p v-if="filesError" role="alert">共享文件读取失败：{{ filesError }}，可点击刷新文件重试。</p>
+        <Transition v-bind="presenceMotion" name="es-content"><FileMemberEditor v-if="memberFileId && filesReady" :file-id="memberFileId" :file-name="memberFileName" :operator-id="currentUser?.userId ?? ''" @busy-change="memberFileBusy = $event" @saved="notify('成员角色已保存')" /></Transition>
       </section>
 
       <section class="card">
         <header class="card-header">
           <div>
             <span class="section-label">共享空间</span>
-            <h2>全员可见的公共空间</h2>
+            <h2>按账号与部门授权的共享空间</h2>
           </div>
           <div class="card-actions">
             <button class="secondary-button compact" type="button" :disabled="spacesLoading" @click="loadSpaces">
@@ -1005,13 +1126,13 @@ const roleSummary = (role: AdminRole) => {
             <span>空间容量（GB，留空表示收回）</span>
             <div class="admin-quota-input">
               <input
-                v-model="quotaDraft.shared"
+                v-model="quotaDraft.shared" :disabled="spacesLocked"
                 class="setting-input" type="number" min="0" step="0.5" placeholder="未分配"
                 @keyup.enter="saveSharedQuota"
               />
               <button
                 class="primary-button compact" type="button"
-                :disabled="busyId === 'shared'" @click="saveSharedQuota"
+                :disabled="spacesLocked" @click="saveSharedQuota"
               >{{ busyId === 'shared' ? '保存中…' : '保存' }}</button>
             </div>
           </label>
@@ -1023,7 +1144,7 @@ const roleSummary = (role: AdminRole) => {
               <b v-if="usedPercent(sharedSpace) !== null">{{ usedPercent(sharedSpace) }}%</b>
             </div>
             <div v-if="usedPercent(sharedSpace) !== null" class="mini-track">
-              <i :style="{ width: `${usedPercent(sharedSpace)}%` }" />
+              <i :style="{ transform: `scaleX(${(usedPercent(sharedSpace) ?? 0) / 100})` }" />
             </div>
           </div>
 
@@ -1049,7 +1170,7 @@ const roleSummary = (role: AdminRole) => {
 
             <div class="admin-quota-input compact">
               <input
-                v-model="quotaDraft[user.userId]"
+                v-model="quotaDraft[user.userId]" :disabled="spacesLocked"
                 class="setting-input" type="number" min="0" step="0.5" placeholder="未分配"
                 @keyup.enter="savePersonalQuota(user)"
               />
@@ -1062,24 +1183,25 @@ const roleSummary = (role: AdminRole) => {
                   <span>{{ formatBytes(personalByOwner[user.userId].usedBytes) }} / {{ formatBytes(personalByOwner[user.userId].quotaBytes) }}</span>
                 </div>
                 <div v-if="usedPercent(personalByOwner[user.userId]) !== null" class="mini-track">
-                  <i :style="{ width: `${usedPercent(personalByOwner[user.userId])}%` }" />
+                  <i :style="{ transform: `scaleX(${(usedPercent(personalByOwner[user.userId]) ?? 0) / 100})` }" />
                 </div>
               </template>
               <span v-else class="admin-space-cell pending">待开空间</span>
             </div>
 
-            <!-- 共享空间权限：点击轮转 无 → 只读 → 读写 → 无 -->
-            <button
-              :class="['admin-perm', userMemberRow(user.userId)?.permission || 'none']"
-              type="button" :disabled="busyId === user.userId"
-              :title="`共享空间：${permissionLabel(user.userId)}，点击切换`"
-              @click="cycleSharedPermission(user)"
-            >{{ permissionLabel(user.userId) }}</button>
+            <div class="role-field">
+              <label :for="'shared-permission-' + user.userId">个人显式授权 · 当前{{ permissionLabel(user.userId) }}</label>
+              <select :id="'shared-permission-' + user.userId" class="admin-perm" :disabled="spacesLocked" :value="sharedPermissionDraft[user.userId] ?? userMemberRow(user.userId)?.permission ?? ''" @change="sharedPermissionDraft[user.userId] = ($event.target as HTMLSelectElement).value">
+                <option value="">未单独授权（保留部门继承）</option><option value="read">只读</option><option value="write">读写</option>
+              </select>
+              <button data-testid="save-shared-permission" class="secondary-button compact" type="button" :disabled="spacesLocked || (sharedPermissionDraft[user.userId] ?? '') === (userMemberRow(user.userId)?.permission ?? '')" @click="saveSharedPermission(user)">保存授权</button>
+              <span class="setting-hint">实际权限需合并部门继承与功能开关，以控制面裁决为准。</span>
+            </div>
 
             <div class="admin-row-actions">
               <button
                 class="primary-button compact" type="button"
-                :disabled="busyId === user.userId" @click="savePersonalQuota(user)"
+                :disabled="spacesLocked" @click="savePersonalQuota(user)"
               >{{ busyId === user.userId ? '保存中…' : '保存' }}</button>
             </div>
           </li>
@@ -1091,16 +1213,18 @@ const roleSummary = (role: AdminRole) => {
         <div class="dept-auth">
           <div class="admin-usage-head"><span>按部门授权</span></div>
           <div class="dept-auth-form">
-            <select class="dept-select" :value="deptForm.deptId" @change="onDeptChange">
+            <select class="dept-select" aria-label="授权部门" :disabled="spacesLocked || !deptReady" :value="deptForm.deptId" @change="onDeptChange">
               <option value="">选择部门…</option>
               <option v-for="dept in depts" :key="dept.deptId" :value="dept.deptId">{{ dept.deptName }}</option>
             </select>
-            <select class="dept-select" :value="deptForm.permission" @change="onDeptPermChange">
+            <select class="dept-select" aria-label="部门权限" :disabled="spacesLocked || !deptReady" :value="deptForm.permission" @change="onDeptPermChange">
               <option value="read">只读</option>
               <option value="write">读写</option>
             </select>
-            <button class="primary-button compact" type="button" :disabled="deptBusy || !deptForm.deptId" @click="addDeptAuth">授权</button>
+            <button class="primary-button compact" type="button" :disabled="spacesLocked || !deptReady || !deptForm.deptId" @click="addDeptAuth">授权</button>
           </div>
+          <p v-if="deptLoading" role="status">正在读取部门…</p>
+          <p v-if="deptError" role="alert">部门读取失败：{{ deptError }} <button class="text-button" type="button" @click="loadDepts">重试</button></p>
           <ul v-if="deptMemberRows.length" class="admin-user-list">
             <li v-for="row in deptMemberRows" :key="row.memberId" class="admin-user-row">
               <div class="admin-user-main">
@@ -1108,7 +1232,7 @@ const roleSummary = (role: AdminRole) => {
                 <span>{{ row.permission === 'write' ? '读写' : '只读' }} · 整部门生效</span>
               </div>
               <div class="admin-row-actions">
-                <button class="secondary-button compact" type="button" :disabled="deptBusy" @click="revokeDeptAuth(row)">撤销</button>
+                <button class="secondary-button compact" type="button" :disabled="spacesLocked" @click="revokeDeptAuth(row)">撤销</button>
               </div>
             </li>
           </ul>
@@ -1117,10 +1241,10 @@ const roleSummary = (role: AdminRole) => {
           </p>
         </div>
       </section>
-    </template>
+    </div>
 
     <!-- ═══ 权限：角色组 + 成员矩阵 ═══ -->
-    <template v-if="tab === 'permissions'">
+    <div v-else-if="tab === 'permissions'" key="permissions" class="admin-panel" role="tabpanel" aria-label="权限">
       <section v-if="isSuper" class="card">
         <header class="card-header">
           <div>
@@ -1128,46 +1252,51 @@ const roleSummary = (role: AdminRole) => {
             <h2>一批人共用一套权限</h2>
           </div>
           <div class="card-actions">
-            <button class="secondary-button compact" type="button" @click="startRoleForm()">新建角色</button>
+            <button class="secondary-button compact" type="button" :disabled="permissionLocked" @click="startRoleForm()">新建角色</button>
           </div>
         </header>
         <p class="setting-hint perm-hint">
-          成员挂了角色就按角色裁决，多个角色取并集；已挂角色的成员不再看逐账号开关。
+          成员拥有其所有角色授予的功能。已分配角色时，请通过角色调整权限。
           角色可设为「子管理员」：该成员能进入本页，按管理范围看到、修改范围内成员的功能权限
           （本部门 / 含下级 / 指定部门 / 全部成员）。
         </p>
-        <div v-if="roleForm" class="role-form">
+        <Transition v-bind="presenceMotion" name="es-disclosure"><form v-if="roleForm" ref="roleFormElement" class="role-form" :aria-busy="roleBusy" @submit.prevent="saveRole">
           <label class="role-field">
             <span>角色名</span>
-            <input v-model="roleForm.roleName" type="text" maxlength="64" placeholder="如：车间主管、只读成员" />
+            <input :disabled="roleBusy" v-model="roleForm.roleName" type="text" maxlength="64" placeholder="如：车间主管、只读成员" />
           </label>
           <label class="role-field">
             <span>管理范围</span>
-            <select v-model="roleForm.adminScope">
+            <select :disabled="roleBusy" v-model="roleForm.adminScope">
               <option v-for="opt in scopeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
           </label>
-          <div v-if="roleForm.adminScope === 'specified'" class="role-field role-dept-field">
+          <Transition v-bind="presenceMotion" name="es-disclosure"><div v-if="roleForm.adminScope === 'specified'" class="role-field role-dept-field">
             <span>指定部门（至少勾选一个）</span>
             <div class="role-dept-list">
               <label v-for="dept in depts" :key="dept.deptId">
                 <input
-                  type="checkbox" :value="dept.deptId"
+                  type="checkbox" :disabled="roleBusy || !deptReady" :value="dept.deptId"
                   :checked="(roleForm.scopeDeptIds ?? []).includes(dept.deptId)"
                   @change="toggleScopeDept(dept.deptId, ($event.target as HTMLInputElement).checked)"
                 />
                 <span>{{ dept.deptName }}</span>
               </label>
-              <div v-if="!depts.length" class="admin-empty">部门列表为空或尚未加载</div>
+              <div v-for="id in deptReady ? (roleForm.scopeDeptIds ?? []).filter(id => !depts.some(dept => dept.deptId === id)) : []" :key="id" class="role-row">
+                <span>部门 #{{ id }} 已不在可选范围</span><button type="button" class="text-button" :disabled="roleBusy" @click="toggleScopeDept(id, false)">移除无效部门</button>
+              </div>
+              <p v-if="deptLoading" role="status">正在读取部门…</p>
+              <p v-else-if="deptError" role="alert">部门读取失败：{{ deptError }} <button type="button" class="text-button" @click="loadDepts">重试</button></p>
+              <div v-else-if="deptReady && !depts.length" class="admin-empty">暂无可授权部门</div>
             </div>
-          </div>
+          </div></Transition>
           <div class="role-flags">
             <div v-for="f in featureLabels" :key="f.key" class="role-flag">
               <button
                 :class="['admin-toggle', roleForm[f.key] ? 'on' : '']"
                 type="button" role="switch" :aria-checked="roleForm[f.key]"
                 :aria-label="`${f.label}：${roleForm[f.key] ? '开启' : '关闭'}`"
-                @click="roleForm[f.key] = !roleForm[f.key]"
+                :disabled="roleBusy" @click="roleForm[f.key] = !roleForm[f.key]"
               ><i /></button>
               <span>{{ f.label }}</span>
             </div>
@@ -1175,15 +1304,18 @@ const roleSummary = (role: AdminRole) => {
           <div class="role-form-actions">
             <button class="secondary-button compact" type="button" :disabled="roleBusy" @click="roleForm = null">取消</button>
             <button
-              class="primary-button compact" type="button"
-              :disabled="roleBusy || !roleForm.roleName.trim() || roleDeptEmpty" @click="saveRole"
+              class="primary-button compact" type="submit"
+              :disabled="permissionLocked || !roleForm.roleName.trim() || roleDeptEmpty || (roleForm.adminScope === 'specified' && !deptReady)"
             >
               {{ roleBusy ? '保存中…' : '保存角色' }}
             </button>
           </div>
-        </div>
-        <div v-if="!roles.length" class="admin-empty">还没有角色。成员按下方逐账号开关生效。</div>
-        <div v-else class="role-list">
+        </form></Transition>
+        <Transition v-bind="presenceMotion" name="es-content">
+        <p v-if="rolesLoading" key="loading" role="status">正在读取角色…</p>
+        <p v-else-if="rolesError" key="error" role="alert">角色读取失败：{{ rolesError }} <button class="text-button" type="button" @click="openPermissions">重试</button></p>
+        <div v-else-if="rolesReady && !roles.length" class="admin-empty">还没有角色。成员按下方逐账号开关生效。</div>
+        <div v-else-if="rolesReady" key="roles" class="role-list">
           <div v-for="role in roles" :key="role.roleId" class="role-row">
             <div class="role-main">
               <strong>{{ role.roleName }}</strong>
@@ -1191,40 +1323,43 @@ const roleSummary = (role: AdminRole) => {
               <span class="role-meta">{{ roleSummary(role) }} · {{ role.memberCount || 0 }} 人</span>
             </div>
             <div class="role-actions">
-              <button class="secondary-button compact" type="button" @click="startRoleForm(role)">编辑</button>
-              <button class="secondary-button compact" type="button" @click="removeRole(role)">删除</button>
+              <button class="secondary-button compact" type="button" :disabled="permissionLocked" @click="startRoleForm(role)">编辑</button>
+              <button class="secondary-button compact" type="button" :disabled="permissionLocked" @click="removeRole(role)">删除</button>
             </div>
           </div>
         </div>
+        </Transition>
       </section>
 
       <section class="card perm-card">
         <header class="card-header">
           <div>
             <span class="section-label">成员权限</span>
-            <h2>{{ isSuper ? '每个成员能用哪些功能' : '本部门成员的功能权限' }}</h2>
+            <h2>{{ isSuper ? '每个成员能用哪些功能' : '授权范围内成员的功能权限' }}</h2>
           </div>
           <div class="card-actions">
-            <button class="secondary-button compact" type="button" :disabled="permissionLoading" @click="openPermissions">
+            <button class="secondary-button compact" type="button" :disabled="permissionLoading || rolesLoading || !!permissionBusy || roleBusy" @click="openPermissions">
               <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>
               刷新
             </button>
           </div>
         </header>
         <p class="setting-hint perm-hint">
-          关闭后客户端隐藏入口，控制面与知识服务同时拒绝——不是只藏按钮。
+          关闭后，成员将无法使用该功能。
           关闭「网盘」时共享空间一并停用。挂了角色的成员由角色决定，开关在这里只读。
         </p>
-        <div v-if="permissionLoading && !permissionRows.length" class="admin-empty">正在读取权限…</div>
-        <div v-else-if="!permissionRows.length" class="admin-empty">本范围内暂无成员。</div>
-        <div v-else class="perm-table">
+        <Transition v-bind="presenceMotion" name="es-content">
+        <p v-if="permissionLoading" key="loading" role="status">正在读取权限…</p>
+        <p v-else-if="permissionError" key="error" role="alert">权限读取失败：{{ permissionError }}，请刷新重试。</p>
+        <div v-else-if="permissionReady && !permissionRows.length" class="admin-empty">本范围内暂无成员。</div>
+        <div v-else-if="permissionReady" key="members" class="perm-table">
           <div class="perm-row perm-head" aria-hidden="true">
             <span>成员</span>
             <span>角色</span>
             <span v-for="f in featureLabels" :key="f.key">{{ f.label }}</span>
             <span></span>
           </div>
-          <div v-for="row in permissionRows" :key="row.member.userId" class="perm-row">
+          <div v-for="row in permissionRows" :key="row.member.userId" class="perm-row" role="group" :aria-label="(row.member.nickName || row.member.userName) + '的功能权限'">
             <div class="perm-user">
               <strong>
                 {{ row.member.nickName || row.member.userName }}
@@ -1234,42 +1369,46 @@ const roleSummary = (role: AdminRole) => {
               <span>{{ row.member.userName }}<template v-if="row.member.deptName"> · {{ row.member.deptName }}</template></span>
             </div>
             <div class="perm-role-cell">
-              <details v-if="isSuper" class="perm-role-details">
-                <summary>{{ row.member.roleNames?.length ? row.member.roleNames.join('、') : '未分配' }}</summary>
-                <div class="perm-role-menu">
+              <div v-if="isSuper" class="perm-role-details" @click.stop @keydown.esc.stop="closeRoleMenu">
+                <button class="text-button perm-role-trigger" type="button" :disabled="permissionLocked" :aria-expanded="roleMenu === row.member.userId" :aria-label="(row.member.nickName || row.member.userName) + '的角色分配'" @click="toggleRoleMenu(row.member.userId, $event)">{{ row.member.roleNames?.length ? row.member.roleNames.join('、') : '未分配' }}</button>
+                <Transition v-bind="presenceMotion" name="es-popover"><div v-if="roleMenu === row.member.userId" class="perm-role-menu">
                   <label v-for="role in roles" :key="role.roleId">
                     <input
-                      type="checkbox" :value="role.roleId"
+                      type="checkbox" :disabled="permissionLocked" :value="role.roleId"
                       :checked="(roleDraft[row.member.userId] ?? []).includes(role.roleId ?? '')"
                       @change="toggleRoleDraft(row, role.roleId ?? '', ($event.target as HTMLInputElement).checked)"
                     />
                     <span>{{ role.roleName }}</span>
                   </label>
-                  <button class="secondary-button compact" type="button" :disabled="permissionBusy === row.member.userId" @click="saveMemberRoles(row)">保存角色</button>
-                </div>
-              </details>
+                  <button class="secondary-button compact" type="button" :disabled="permissionLocked || !roleDraftChanged(row)" @click="saveMemberRoles(row)">保存角色</button>
+                </div></Transition>
+              </div>
               <span v-else class="perm-role-static">{{ row.member.roleNames?.length ? row.member.roleNames.join('、') : '未分配' }}</span>
+              <span v-if="roleDraftChanged(row)" class="setting-hint">角色草稿未保存，当前权限仍按原角色生效</span>
+              <span v-else-if="row.dirty" class="setting-hint">功能权限草稿未保存</span>
             </div>
             <span v-for="f in featureLabels" :key="f.key" class="perm-cell">
               <button
-                :class="['admin-toggle', row.flags[f.key] ? 'on' : '']"
-                type="button" role="switch" :aria-checked="row.flags[f.key]"
-                :aria-label="`${f.label}：${row.flags[f.key] ? '开启' : '关闭'}`"
-                :title="roleDriven(row) ? `由角色「${row.member.roleNames.join('、')}」决定` : (f.key === 'shared' && !row.flags.drive ? '网盘关闭时共享空间不可用' : '')"
-                :disabled="roleDriven(row) || permissionBusy === row.member.userId || (f.key === 'shared' && !row.flags.drive)"
+                :class="['admin-toggle', featureEnabled(row, f.key) ? 'on' : '']"
+                type="button" role="switch" :aria-checked="featureEnabled(row, f.key)"
+                :aria-label="`${f.label}：${featureEnabled(row, f.key) ? '开启' : '关闭'}`"
+                :title="roleDriven(row) ? `由角色「${(row.member.roleNames ?? []).join('、')}」决定` : (f.key === 'shared' && !row.flags.drive ? '网盘关闭时共享空间不可用' : '')"
+                :disabled="roleDriven(row) || roleDraftChanged(row) || permissionLocked || (f.key === 'shared' && !row.flags.drive)"
                 @click="toggleFeature(row, f.key)"
               ><i /></button>
             </span>
             <span class="perm-cell">
               <button
                 class="secondary-button compact" type="button"
-                :disabled="roleDriven(row) || !row.dirty || permissionBusy === row.member.userId"
+                :disabled="roleDriven(row) || roleDraftChanged(row) || !row.dirty || permissionLocked"
                 @click="savePermissions(row)"
-              >{{ permissionBusy === row.member.userId ? '保存中…' : roleDriven(row) ? '由角色决定' : row.dirty ? '保存' : '已保存' }}</button>
+              >{{ permissionBusy === row.member.userId ? '保存中…' : roleDraftChanged(row) ? '先保存角色' : roleDriven(row) ? '由角色决定' : row.dirty ? '保存' : '已保存' }}</button>
             </span>
           </div>
         </div>
+        </Transition>
       </section>
-    </template>
+    </div>
+    </Transition>
   </div>
 </template>

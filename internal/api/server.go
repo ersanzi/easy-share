@@ -95,9 +95,8 @@ func (server *Server) routes() http.Handler {
 		}
 		writeJSON(writer, http.StatusOK, server.peers())
 	})))
-	mux.Handle("GET /api/tasks", server.auth(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, http.StatusOK, server.tasks.List())
-	})))
+	mux.Handle("GET /api/tasks", server.auth(http.HandlerFunc(server.listTasks)))
+	mux.Handle("POST /api/tasks/check-path", server.auth(http.HandlerFunc(server.checkTaskPath)))
 	mux.Handle("POST /api/tasks/clear", server.auth(http.HandlerFunc(server.clearTasks)))
 	mux.Handle("DELETE /api/tasks/{id}", server.auth(http.HandlerFunc(server.deleteTask)))
 	mux.Handle("POST /api/tasks", server.auth(http.HandlerFunc(server.createTask)))
@@ -187,7 +186,9 @@ func (server *Server) events(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	defer connection.CloseNow()
-	server.hub.serve(request.Context(), connection)
+	server.hub.serve(request.Context(), connection, func() (string, error) {
+		return server.taskOwner(request.Context(), request.Header.Get(taskAccountHeader))
+	})
 }
 
 func (server *Server) Start(ctx context.Context) error {
@@ -394,13 +395,18 @@ func (server *Server) setDriveStatus(running bool) {
 	server.Publish(Event{Type: "drive.status.changed", Data: value})
 }
 
-func (server *Server) clearTasks(writer http.ResponseWriter, _ *http.Request) {
-	server.tasks.ClearHistory()
+func (server *Server) clearTasks(writer http.ResponseWriter, request *http.Request) {
+	owner := server.taskViewOwner(writer, request)
+	server.tasks.ClearHistoryFor(owner)
 	writeJSON(writer, http.StatusOK, map[string]bool{"cleared": true})
 }
 
 func (server *Server) deleteTask(writer http.ResponseWriter, request *http.Request) {
-	if err := server.tasks.Delete(request.PathValue("id")); err != nil {
+	owner, ok := server.taskMutationOwner(writer, request)
+	if !ok {
+		return
+	}
+	if err := server.tasks.DeleteFor(request.PathValue("id"), owner); err != nil {
 		writeJSON(writer, http.StatusNotFound, ErrorResponse{Code: "task_not_found", Message: err.Error()})
 		return
 	}
@@ -426,7 +432,20 @@ func (server *Server) createTask(writer http.ResponseWriter, request *http.Reque
 	if input.Status == "" {
 		input.Status = task.StatusQueued
 	}
+	owner := ""
+	if input.Kind != task.KindLANSend && input.Kind != task.KindLANReceive && input.Kind != "" {
+		var ok bool
+		owner, ok = server.requestTaskOwner(writer, request)
+		if !ok {
+			return
+		}
+		if owner == "" {
+			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "task_account_required", Message: "云任务需要企业账号"})
+			return
+		}
+	}
 	created, err := server.tasks.Create(task.Task{
+		OwnerID:    owner,
 		Kind:       input.Kind,
 		FileName:   input.FileName,
 		LocalPath:  input.LocalPath,
@@ -447,6 +466,10 @@ func (server *Server) createTask(writer http.ResponseWriter, request *http.Reque
 // patchTask 由桌面端调用，更新外部任务的进度/状态（云盘上传进度等）。
 func (server *Server) patchTask(writer http.ResponseWriter, request *http.Request) {
 	id := request.PathValue("id")
+	owner, ok := server.taskMutationOwner(writer, request)
+	if !ok {
+		return
+	}
 	var input struct {
 		TransferredBytes *int64       `json:"transferredBytes"`
 		Speed            *float64     `json:"speed"`
@@ -460,6 +483,9 @@ func (server *Server) patchTask(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	updated, err := server.tasks.Update(id, func(value *task.Task) error {
+		if !value.VisibleTo(owner) {
+			return task.ErrTaskNotFound
+		}
 		if input.TransferredBytes != nil {
 			value.TransferredBytes = *input.TransferredBytes
 		}
@@ -480,6 +506,10 @@ func (server *Server) patchTask(writer http.ResponseWriter, request *http.Reques
 		}
 		return nil
 	})
+	if errors.Is(err, task.ErrTaskNotFound) {
+		writeJSON(writer, http.StatusNotFound, ErrorResponse{Code: "task_not_found", Message: "task not found"})
+		return
+	}
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "update_failed", Message: err.Error()})
 		return

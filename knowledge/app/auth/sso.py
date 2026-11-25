@@ -1,89 +1,102 @@
-"""控制面 SSO 信任（introspection 模式）：知识服务认控制面（RuoYi）登录令牌。
+"""控制面是企业身份及权限的唯一权威，每次请求回查，失败关闭访问。
 
-RuoYi-Vue-Plus 的令牌由 Sa-Token + Redis 管理（不透明随机串，非自包含 JWT），
-本地无法验签，信任方式是回查控制面 `GET /system/user/getInfo`：应答 200 即
-令牌有效，顺带取回用户名 / 部门 / 管理员标志——请求头与响应形状与 Go 客户端
-（internal/account/client.go）同一套，已由桌面端在生产验证。introspection
-结果缓存 60 秒，避免每个请求一跳控制面。
-
-映射规则（权属划分，宁可少给不可多给）：
-- 控制面新用户 → JIT 建本地档案：role 按控制面 superadmin / *:*:* 判定，
-  dept 取控制面 deptId（与部门授权/文档可见性同源的部门 ID），口令为随机串
-  （本地登录通道实际不可用，身份完全来自控制面）；
-- 本地已有同名人 → 保留本地 role（管理页显式管理的语义不被 SSO 覆盖），
-  dept 跟随控制面同步（组织架构的权威在控制面，见部门授权片 1 的 sys_dept 投影）。
-
-本地账号/口令登录完全不受影响：中间件先查本地令牌，未命中才走本模块——
-本地令牌与控制面令牌是不同随机空间，不存在歧义。
-
-功能权限（2026-10-27 企业化整改第二轮）：身份验过后再取一次
-`GET /easyshare/permission/mine`，把五项能力开关并入用户 dict 的 `features`，
-由中间件按路由前缀拒绝。取权限这一步**失败即全开**（旧版控制面没有这个端点、
-或瞬时故障）：身份已经验过，为一次附加查询把所有人挡在门外，代价远大于收益；
-真出问题时日志里会有告警，不静默。
+本地用户档案仅供兼容历史展示，不得把本地角色提升为控制面权限。
+独立部署未配置 SSO 时仍可使用本地账号；企业模式不接受本地令牌。
 """
 from __future__ import annotations
 
 import json
 import logging
 import secrets
-import threading
-import time
+import datetime
+import urllib.error
+
+from fastapi import HTTPException
 import urllib.request
 
 from app.auth.store import UserStore
 
-_CACHE_TTL_SECONDS = 60.0
-_CACHE_MAX_ENTRIES = 512
-
 _FEATURES = ("knowledge", "meeting", "drive", "shared", "plugin")
-
 _log = logging.getLogger(__name__)
 
 
-def all_features_enabled() -> dict[str, bool]:
-    """五项全开（缺省口径：没有权限信息来源时不收权）。"""
-    return dict.fromkeys(_FEATURES, True)
-
 
 class ControlPlaneSSO:
-    """回查控制面验票并映射为知识服务本地用户（含 JIT 建档与缓存）。"""
+    """回查控制面身份与权限；不复用跨请求的令牌、角色或功能授权。"""
 
-    def __init__(
-        self,
-        base_url: str,
-        *,
-        client_id: str,
-        users: UserStore,
-        timeout_seconds: float = 5.0,
-    ) -> None:
+    def __init__(self, base_url: str, *, client_id: str, users: UserStore,
+                 timeout_seconds: float = 5.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.client_id = client_id
         self.users = users
         self.timeout_seconds = timeout_seconds
-        self.lock = threading.Lock()
-        self._cache: dict[str, tuple[dict, float]] = {}
+
+    def login(self, username: str, password: str) -> dict:
+        """企业入口只向配置的控制面登录，不在本地校验口令或签发备用身份。"""
+        request = urllib.request.Request(
+            f"{self.base_url}/auth/login",
+            data=json.dumps({"username": username, "password": password,
+                             "clientId": self.client_id, "grantType": "password"}).encode(),
+            headers={"Content-Type": "application/json", "clientid": self.client_id}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code in (400, 401, 403):
+                raise HTTPException(401, "企业登录被拒绝；请确认账号口令。若企业要求验证码或加密登录，请使用企业控制面的受支持登录入口") from exc
+            raise HTTPException(503, "企业账号服务暂不可用，请稍后重试") from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(503, "企业账号服务暂不可用，请稍后重试") from exc
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            raise HTTPException(401, "企业登录被拒绝；请确认账号口令及企业的验证码/加密登录要求")
+        data = payload.get("data")
+        token = data.get("access_token") if isinstance(data, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            raise HTTPException(502, "企业账号服务没有返回有效会话")
+        user = self.resolve(token)
+        if user is None:
+            raise HTTPException(401, "企业会话无法验证，请重新登录")
+        # 有效期只作展示；后续每次请求仍向控制面验票。
+        expiry = ""
+        seconds = data.get("expire_in")
+        if isinstance(seconds, (int, float)) and 0 < seconds < 315360000:
+            expiry = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=seconds)).isoformat()
+        return {"token": token, "username": user["username"], "role": user["role"],
+                "dept": user.get("dept", ""), "expires_at": expiry}
+
+    def logout(self, token: str) -> None:
+        """显式退出只撤销所提交的控制面会话；失败不得伪装成已退出。"""
+        request = urllib.request.Request(f"{self.base_url}/auth/logout", data=b"{}",
+            headers={"Authorization": f"Bearer {token}", "clientid": self.client_id,
+                     "Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                return  # 控制面确认令牌已经失效，幂等退出。
+            raise HTTPException(503, "企业会话注销未完成，请稍后重试") from exc
+        except (OSError, ValueError) as exc:
+            raise HTTPException(503, "企业会话注销未完成，请稍后重试") from exc
+        if not isinstance(payload, dict) or payload.get("code") not in (200, 401):
+            raise HTTPException(503, "企业会话注销未完成，请稍后重试")
 
     def resolve(self, token: str) -> dict | None:
-        """令牌 → 本地用户 dict；令牌无效或控制面不可达返回 None（回退原行为）。"""
         if not token:
             return None
-        cached = self._cache_get(token)
-        if cached is not None:
-            return cached
         info = self._introspect(token)
         if info is None:
             return None
         user = self._ensure_local_user(info)
-        # features 只随本次解析结果走，不回写本地档案：档案是身份，权限是控制面的活
-        user = {**user, "features": info.get("features") or all_features_enabled(),
-                "authority": "ruoyi", "subject_id": info.get("subject_id"),
-                "authorization_role": "admin" if info.get("is_admin") else "member", "dept": info.get("dept") or ""}
-        self._cache_put(token, user)
-        return user
+        flags = info.get("features")
+        role = "admin" if info.get("is_admin") is True else "member"
+        # 所有消费者（会议导出、账号管理、知识读取）都只看到当前权威角色。
+        return {**user, "role": role, "authorization_role": role,
+                "features": {name: isinstance(flags, dict) and flags.get(name) is True for name in _FEATURES},
+                "authority": "ruoyi", "subject_id": info.get("subject_id"), "dept": info.get("dept") or ""}
 
     def _introspect(self, token: str) -> dict | None:
-        """回查控制面换身份；任何失败（网络/HTTP 错/业务非 0）返回 None。"""
+        """任何无法确认身份的响应都拒绝，不能继承上一次成功结果。"""
         request = urllib.request.Request(f"{self.base_url}/system/user/getInfo")
         request.add_header("Authorization", f"Bearer {token}")
         request.add_header("clientid", self.client_id)
@@ -91,26 +104,32 @@ class ControlPlaneSSO:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as resp:
                 payload = json.loads(resp.read())
         except (OSError, ValueError):
-            # URLError/HTTPError/超时都是 OSError；响应非 JSON 是 ValueError
             return None
-        if payload.get("code") != 200:
+        if not isinstance(payload, dict) or payload.get("code") != 200:
             return None
-        data = payload.get("data") or {}
-        user = data.get("user") or {}
+        data = payload.get("data")
+        if not isinstance(data, dict) or not isinstance(data.get("user"), dict):
+            return None
+        user = data["user"]
         username = str(user.get("userName") or "").strip()
-        if not username:
+        subject_id = str(user.get("userId") or "").strip()
+        if not username or not subject_id or user.get("status") not in (None, "0", 0):
             return None
-        roles = data.get("roles") or []
-        permissions = data.get("permissions") or []
+        permission = self._permission_snapshot(token, subject_id)
+        roles = data.get("roles")
+        permissions = data.get("permissions")
         return {
             "username": username,
-            "is_admin": "superadmin" in roles or "*:*:*" in permissions,
+            "subject_id": subject_id,
+            "is_admin": permission.get("adminScope") == "all" and (
+                (isinstance(roles, list) and "superadmin" in roles)
+                or (isinstance(permissions, list) and "*:*:*" in permissions)),
             "dept": str(user.get("deptId") or "").strip(),
-            "features": self._feature_flags(token),
+            "features": {name: permission.get(name) is True for name in _FEATURES},
         }
 
-    def _feature_flags(self, token: str) -> dict[str, bool]:
-        """取功能权限；端点不可用（旧版控制面 / 瞬时故障）按全开并告警。"""
+    def _permission_snapshot(self, token: str, subject_id: str) -> dict:
+        """功能与管理权限必须来自同一次实时快照；身份角色不能覆盖撤权。"""
         request = urllib.request.Request(f"{self.base_url}/easyshare/permission/mine")
         request.add_header("Authorization", f"Bearer {token}")
         request.add_header("clientid", self.client_id)
@@ -118,47 +137,26 @@ class ControlPlaneSSO:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as resp:
                 payload = json.loads(resp.read())
         except (OSError, ValueError):
-            _log.warning("控制面功能权限不可用，本轮按全开放行：%s", self.base_url)
-            return all_features_enabled()
-        if payload.get("code") != 200:
-            _log.warning("控制面功能权限返回 code=%s，本轮按全开放行", payload.get("code"))
-            return all_features_enabled()
-        data = payload.get("data") or {}
-        # 缺字段按开处理：控制面还没升级到带这个字段时，行为与升级前一致
-        return {name: data.get(name) is not False for name in _FEATURES}
+            _log.warning("控制面功能权限不可用，本次拒绝业务访问")
+            return {}
+        if not isinstance(payload, dict) or payload.get("code") != 200 or not isinstance(payload.get("data"), dict):
+            _log.warning("控制面功能权限响应无效，本次拒绝业务访问")
+            return {}
+        permission = payload["data"]
+        if permission.get("userId") is not None and str(permission["userId"]) != subject_id:
+            _log.warning("控制面权限与身份不一致，本次拒绝业务访问")
+            return {}
+        return permission
 
     def _ensure_local_user(self, info: dict) -> dict:
         username, dept = info["username"], info["dept"]
         existing = self.users.get_user(username)
         if existing is None:
-            role = "admin" if info["is_admin"] else "member"
             try:
-                # 口令随机串：JIT 档案只承载身份，本地口令登录通道实际不可用
-                self.users.create_user(username, secrets.token_urlsafe(32), role=role, dept=dept)
+                self.users.create_user(username, secrets.token_urlsafe(32),
+                                       role="admin" if info["is_admin"] else "member", dept=dept)
             except ValueError:
-                pass  # 并发竞态下已被建档，直接读取
-        elif dept and existing["dept"] != dept:
+                pass  # 并发请求已完成建档，读取最终记录。
+        elif existing["dept"] != dept:
             self.users.set_user_dept(username, dept)
         return self.users.get_user(username) or {"username": username, "role": "member", "dept": dept}
-
-    def _cache_get(self, token: str) -> dict | None:
-        now = time.monotonic()
-        with self.lock:
-            entry = self._cache.get(token)
-            if entry is None:
-                return None
-            if entry[1] <= now:
-                self._cache.pop(token, None)
-                return None
-            return entry[0]
-
-    def _cache_put(self, token: str, user: dict) -> None:
-        now = time.monotonic()
-        with self.lock:
-            if len(self._cache) >= _CACHE_MAX_ENTRIES:
-                expired = [key for key, (_, until) in self._cache.items() if until <= now]
-                for key in expired:
-                    self._cache.pop(key, None)
-                if len(self._cache) >= _CACHE_MAX_ENTRIES:
-                    self._cache.clear()  # 兜底：观察期规模到不了这里
-            self._cache[token] = (user, now + _CACHE_TTL_SECONDS)

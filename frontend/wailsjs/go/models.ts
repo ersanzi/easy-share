@@ -1945,6 +1945,8 @@ export namespace plugin {
 export namespace task {
 	
 	export class Task {
+	    hidden?: boolean;
+	    ownerId?: string;
 	    id: string;
 	    kind: string;
 	    fileName: string;
@@ -1970,6 +1972,8 @@ export namespace task {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hidden = source["hidden"];
+	        this.ownerId = source["ownerId"];
 	        this.id = source["id"];
 	        this.kind = source["kind"];
 	        this.fileName = source["fileName"];

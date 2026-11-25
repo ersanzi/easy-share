@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
 import { isLoopbackURL } from '../utils/net'
@@ -16,6 +17,17 @@ import MindMap from './MindMap.vue'
 const emit = defineEmits<{ (e: 'goto-knowledge'): void }>()
 
 const app = useEasyShare()
+let disposed = false
+let statusRequest = 0
+let listRequest = 0
+let detailRequest = 0
+let detailContext = 0
+let qaRequest = 0
+let audioRequest = 0
+let audioPendingFor = ''
+let pollBusy = false
+const stopEvents: Array<() => void> = []
+const scrollBehavior = (): ScrollBehavior => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 const status = ref<KnowledgeStatus>({ configured: false, loggedIn: false, serverUrl: '', username: '', role: '', mode: '' })
@@ -71,10 +83,17 @@ const notice = meetingSession.notice
 const noticeKind = meetingSession.noticeKind
 
 const refreshStatus = async () => {
+  if (disposed) return
+  const request = ++statusRequest
   try {
-    status.value = await core.knowledgeStatus()
+    const result = await core.knowledgeStatus()
+    if (disposed || request !== statusRequest) return
+    status.value = result
+    if (!result.loggedIn) { closeDetail(); meetings.value = []; ++listRequest; stopPolling() }
+  } catch (e) {
+    if (!disposed && request === statusRequest) showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
-    statusLoading.value = false
+    if (!disposed && request === statusRequest) statusLoading.value = false
   }
 }
 
@@ -82,6 +101,9 @@ const refreshStatus = async () => {
 const serverIsLoopback = computed(() => isLoopbackURL(status.value.serverUrl))
 
 const onTargetChanged = () => {
+  closeDetail()
+  ++listRequest
+  meetings.value = []
   meetingSession.notify('知识服务地址已由管理员更新，请重新登录', 'error')
   void refreshStatus()
 }
@@ -105,11 +127,15 @@ const explainServerError = (message: string) => {
 }
 
 const refreshList = async () => {
+  if (disposed) return
+  const request = ++listRequest
   try {
-    meetings.value = await core.meetingsList(50)
+    const result = await core.meetingsList(50)
+    if (disposed || request !== listRequest) return
+    meetings.value = result
     serverError.value = ''
   } catch (e) {
-    serverError.value = explainServerError(e instanceof Error ? e.message : String(e))
+    if (!disposed && request === listRequest) serverError.value = explainServerError(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -131,6 +157,8 @@ const retryConnect = async () => {
 
 // 宿主用客户端账号自动登录知识服务（或随账号登出清掉会话）后广播此事件
 const onKnowledgeSessionChanged = async () => {
+  closeDetail()
+  ++listRequest
   await refreshStatus()
   if (status.value.loggedIn) await refreshList()
 }
@@ -189,32 +217,59 @@ const DETAIL_TABS: { id: DetailTab; label: string; hint: string }[] = [
 const summarySections = computed(() => selected.value?.summary?.sections ?? [])
 
 const openDetail = async (id: string) => {
+  if (disposed) return
+  const request = ++detailRequest
   const switching = selected.value?.id !== id
   detailLoading.value = true
   confirmingDelete.value = false
+  if (switching) {
+    ++detailContext
+    ++qaRequest
+    releaseAudio()
+    selected.value = null
+    chat.value = []
+    qaBusy.value = false
+    posterOpen.value = false
+    moreMenuOpen.value = false
+    detailTab.value = 'summary'
+  }
   try {
     const detail = await core.meetingDetail(id)
-    if (switching) releaseAudio()
-    if (switching) {
-      chat.value = []
-      // 换一条听记时回到「纪要」，并滚到阅读区顶部——否则用户看到的是上一条的滚动位置
-      detailTab.value = 'summary'
-    }
+    if (disposed || request !== detailRequest) return
     selected.value = detail
     regenTemplateId.value = detail.template_id || 'meeting-minutes'
-    if (detail.status === 'completed' && !audioUrl.value) {
-      // 音频是增强项：拿不到（老记录没留 wav/服务端暂时失败）不该挡住纪要阅读
+    if (detail.status === 'completed' && !audioUrl.value && audioPendingFor !== id) {
+      const audioVersion = ++audioRequest
+      audioPendingFor = id
       void core.meetingAudioObjectUrl(id)
-        .then(url => { if (selected.value?.id === id) audioUrl.value = url })
+        .then(url => {
+          if (!disposed && audioVersion === audioRequest && selected.value?.id === id) audioUrl.value = url
+          else URL.revokeObjectURL(url)
+        })
         .catch(() => {})
+        .finally(() => { if (audioVersion === audioRequest) audioPendingFor = '' })
     }
     ensurePolling()
     if (switching) await nextTick()
-    if (switching) scrollToDetailTop()
+    if (switching && !disposed && request === detailRequest) scrollToDetailTop()
   } catch (e) {
-    showNotice(e instanceof Error ? e.message : String(e), 'error')
+    if (!disposed && request === detailRequest) showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
-    detailLoading.value = false
+    if (!disposed && request === detailRequest) detailLoading.value = false
+  }
+}
+
+// 写操作完成时只能更新发起操作的那条听记，不能覆盖后来打开的内容。
+const applyDetailUpdate = async (pending: Promise<MeetingRecord>) => {
+  const context = detailContext
+  try {
+    const result = await pending
+    if (disposed || context !== detailContext || result.id !== selected.value?.id) return false
+    selected.value = result
+    return true
+  } catch (e) {
+    if (disposed || context !== detailContext) return false
+    throw e
   }
 }
 
@@ -227,7 +282,7 @@ const scrollToDetailTop = () => {
   const scroller = host.closest('.workspace') as HTMLElement | null
   if (!scroller) return
   const top = host.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
-  scroller.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' })
+  scroller.scrollTo({ top: Math.max(0, top - 12), behavior: scrollBehavior() })
 }
 
 const detailAnchor = ref<HTMLElement | null>(null)
@@ -240,26 +295,32 @@ const switchTab = async (tab: DetailTab) => {
   const scroller = pane?.closest('.workspace') as HTMLElement | null
   if (pane && scroller) {
     const top = pane.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
-    scroller.scrollTo({ top: Math.max(0, top - 8), behavior: 'smooth' })
+    scroller.scrollTo({ top: Math.max(0, top - 8), behavior: scrollBehavior() })
   }
 }
 
 const releaseAudio = () => {
+  ++audioRequest
+  audioPendingFor = ''
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
   audioUrl.value = ''
 }
 
 const ensurePolling = () => {
-  if (pollHandle !== null) return
+  if (disposed || pollHandle !== null) return
   pollHandle = window.setInterval(async () => {
+    if (disposed || pollBusy || detailLoading.value) return
     const processing = selected.value?.status === 'processing'
       || meetings.value.some(meeting => meeting.status === 'processing')
     if (!processing) {
       stopPolling()
       return
     }
-    if (selected.value?.status === 'processing') await openDetail(selected.value.id)
-    else await refreshList()
+    pollBusy = true
+    try {
+      if (selected.value?.status === 'processing') await openDetail(selected.value.id)
+      else await refreshList()
+    } finally { pollBusy = false }
   }, 3000)
 }
 
@@ -271,6 +332,13 @@ const stopPolling = () => {
 }
 
 const closeDetail = () => {
+  ++detailRequest
+  ++detailContext
+  ++qaRequest
+  detailLoading.value = false
+  qaBusy.value = false
+  posterOpen.value = false
+  moreMenuOpen.value = false
   selected.value = null
   releaseAudio()
   chat.value = []
@@ -361,7 +429,7 @@ const confirmRename = async () => {
   renamingBusy.value = true
   try {
     const before = nameOf(speaker)
-    selected.value = await core.meetingSpeakerRename(selected.value.id, speaker, name)
+    if (!await applyDetailUpdate(core.meetingSpeakerRename(selected.value.id, speaker, name))) return
     await refreshList()
     showNotice(before === name ? '发言人名称未变化' : `已把「${before}」标注为「${name}」`)
   } catch (e) {
@@ -392,7 +460,7 @@ const confirmMerge = async () => {
   try {
     const fromName = nameOf(mergeFrom.value)
     const intoName = nameOf(target)
-    selected.value = await core.meetingSpeakerMerge(selected.value.id, mergeFrom.value, target)
+    if (!await applyDetailUpdate(core.meetingSpeakerMerge(selected.value.id, mergeFrom.value, target))) return
     await refreshList()
     showNotice(`已把「${fromName}」的发言并进「${intoName}」，需要的话点「按模板重生成」刷新纪要`)
   } catch (e) {
@@ -431,7 +499,7 @@ const confirmEditSegment = async (event?: Event) => {
   }
   segmentBusy.value = true
   try {
-    selected.value = await core.meetingSegmentUpdate(meeting.id, index, text)
+    if (!await applyDetailUpdate(core.meetingSegmentUpdate(meeting.id, index, text))) return
     showNotice('这一句已修改')
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
@@ -530,19 +598,23 @@ const qaList = ref<HTMLElement | null>(null)
 const askQuestion = async (preset?: string) => {
   const question = (preset ?? qaQuestion.value).trim()
   if (!selected.value || qaBusy.value || !question || selected.value.status !== 'completed') return
+  const request = ++qaRequest
   const history = chat.value.slice(-6)
   chat.value = [...chat.value, { role: 'user', content: question }]
   qaQuestion.value = ''
   qaBusy.value = true
   try {
     const result = await core.meetingAsk(selected.value.id, question, history)
+    if (disposed || request !== qaRequest) return
     chat.value = [...chat.value, { role: 'assistant', content: result.answer }]
   } catch (e) {
+    if (disposed || request !== qaRequest) return
     chat.value = [...chat.value, { role: 'assistant', content: `回答失败：${e instanceof Error ? e.message : String(e)}` }]
   } finally {
+    if (disposed || request !== qaRequest) return
     qaBusy.value = false
     await nextTick()
-    qaList.value?.scrollTo({ top: qaList.value.scrollHeight, behavior: 'smooth' })
+    qaList.value?.scrollTo({ top: qaList.value.scrollHeight, behavior: scrollBehavior() })
   }
 }
 
@@ -568,8 +640,10 @@ const remove = async () => {
     return
   }
   try {
+    const context = detailContext
     await core.meetingRemove(selected.value.id)
-    closeDetail()
+    if (disposed) return
+    if (context === detailContext) closeDetail()
     await refreshList()
     showNotice('已删除')
   } catch (e) {
@@ -611,7 +685,7 @@ const regenKeywords = async () => {
   if (!selected.value || keywordsBusy.value) return
   keywordsBusy.value = true
   try {
-    selected.value = await core.meetingKeywordsRegenerate(selected.value.id)
+    if (!await applyDetailUpdate(core.meetingKeywordsRegenerate(selected.value.id))) return
     showNotice('关键词已更新')
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
@@ -700,8 +774,11 @@ const retranscribe = async () => {
   if (!selected.value || retranscribeBusy.value) return
   retranscribeBusy.value = true
   try {
-    await core.meetingRetranscribe(selected.value.id)
-    await openDetail(selected.value.id)
+    const id = selected.value.id
+    const context = detailContext
+    await core.meetingRetranscribe(id)
+    if (disposed || context !== detailContext) return
+    await openDetail(id)
     showNotice('已重新排队转写，热词将参与识别')
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
@@ -727,7 +804,7 @@ const addTodo = async () => {
   }
   todoBusy.value = true
   try {
-    selected.value = await core.meetingTodoAdd(selected.value.id, task, newTodoOwner.value.trim())
+    if (!await applyDetailUpdate(core.meetingTodoAdd(selected.value.id, task, newTodoOwner.value.trim()))) return
     newTodoTask.value = ''
     newTodoOwner.value = ''
   } catch (e) {
@@ -741,14 +818,14 @@ const patchTodo = async (todo: MeetingTodo, patch: Partial<MeetingTodo>) => {
   if (!selected.value || todoBusy.value) return
   todoBusy.value = true
   try {
-    selected.value = await core.meetingTodoUpdate(
+    if (!await applyDetailUpdate(core.meetingTodoUpdate(
       selected.value.id,
       todo.id,
       patch.task ?? todo.task,
       patch.owner_hint ?? todo.owner_hint,
       patch.due_hint ?? todo.due_hint,
       patch.done ?? todo.done,
-    )
+    ))) return
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
@@ -777,7 +854,7 @@ const removeTodo = async (todo: MeetingTodo) => {
   if (!selected.value || todoBusy.value) return
   todoBusy.value = true
   try {
-    selected.value = await core.meetingTodoRemove(selected.value.id, todo.id)
+    if (!await applyDetailUpdate(core.meetingTodoRemove(selected.value.id, todo.id))) return
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
   } finally {
@@ -805,7 +882,9 @@ const regenWithTemplate = async () => {
   try {
     // 先把选定模板写到记录上（借 summary 重生成端点读取记录 template_id 的约定，
     // 这里需要后端按请求模板生成——故走「改记录模板」+「重生成」两步，简化为先改后生）
+    const context = detailContext
     const updated = await core.meetingSummaryRegenerate(selected.value.id)
+    if (disposed || context !== detailContext || selected.value?.id !== updated.id) return
     selected.value = updated
     await refreshList()
     showNotice(`已按「${templateName(updated.template_id)}」重新生成总结`)
@@ -820,7 +899,7 @@ const regenMindmap = async () => {
   if (!selected.value || mindmapBusy.value) return
   mindmapBusy.value = true
   try {
-    selected.value = await core.meetingMindmapRegenerate(selected.value.id)
+    if (!await applyDetailUpdate(core.meetingMindmapRegenerate(selected.value.id))) return
     showNotice('思维导图已重新生成')
   } catch (e) {
     showNotice(e instanceof Error ? e.message : String(e), 'error')
@@ -1053,7 +1132,7 @@ const seekTo = (seconds: number) => {
 watch(activeBlockIndex, async () => {
   if (!playing.value || activeBlockIndex.value < 0) return
   await nextTick()
-  document.getElementById(`meeting-block-${activeBlockIndex.value}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  document.getElementById(`meeting-block-${activeBlockIndex.value}`)?.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() })
 })
 
 // 菜单与复制：导出/更多操作收进一个入口，标题行只留主操作
@@ -1092,7 +1171,7 @@ const previewOf = (meeting: MeetingRecord) => {
 
 // 章节锚点（对标钉钉结构化章节纪要）：点小节 chip 滚动定位
 const scrollToSection = (index: number) => {
-  document.getElementById(`meeting-section-${index}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  document.getElementById(`meeting-section-${index}`)?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' })
 }
 
 const formatTime = (seconds: number) => {
@@ -1141,8 +1220,8 @@ const onDetailKeydown = (event: KeyboardEvent) => {
 
 onMounted(async () => {
   window.addEventListener('keydown', onDetailKeydown)
-  EventsOn('knowledge:target-changed', onTargetChanged)
-  EventsOn('knowledge:session-changed', onKnowledgeSessionChanged)
+  stopEvents.push(EventsOn('knowledge:target-changed', onTargetChanged))
+  stopEvents.push(EventsOn('knowledge:session-changed', onKnowledgeSessionChanged))
   await refreshStatus()
   if (status.value.loggedIn) {
     await refreshList()
@@ -1157,8 +1236,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onDetailKeydown)
-  EventsOff('knowledge:target-changed')
-  EventsOff('knowledge:session-changed')
+  disposed = true
+  ++detailRequest
+  ++detailContext
+  ++qaRequest
+  ++listRequest
+  ++statusRequest
+  stopEvents.forEach(stop => stop())
   // 只收页面自己的轮询、音频 URL 与本地计时器；录音在 meetingSession 单例里，切页不中断
   stopPolling()
   releaseAudio()
@@ -1170,7 +1254,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="knowledge-panel">
+  <div v-content-motion="statusLoading ? 'loading' : status.loggedIn ? 'ready' : 'login'" class="knowledge-panel">
     <header class="workspace-header">
       <div>
         <span class="section-label">会议</span>
@@ -1179,10 +1263,12 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <div v-if="notice" :class="['alert', { 'alert-error': noticeKind === 'error' }]" role="alert">
       <span class="alert-copy"><b>{{ notice }}</b></span>
       <button type="button" aria-label="关闭" @click="dismissNotice">×</button>
     </div>
+    </Transition>
 
     <!-- 未登录知识服务：听记数据在服务端，必须登录 -->
     <div v-if="!statusLoading && !status.loggedIn" class="card knowledge-login-card">
@@ -1196,6 +1282,7 @@ onBeforeUnmount(() => {
 
     <template v-else-if="status.loggedIn">
       <!-- 连不上知识服务时先给可执行的下一步，别让用户按了录音才发现上传不了 -->
+      <Transition v-bind="presenceMotion" name="es-fade">
       <div v-if="serverError && !recording && !uploading" class="card meeting-server-error" role="alert">
         <div class="meeting-server-error-copy">
           <strong>暂时连不上知识服务</strong>
@@ -1209,9 +1296,10 @@ onBeforeUnmount(() => {
           {{ retrying ? '重试中…' : '重试连接' }}
         </button>
       </div>
+      </Transition>
 
       <!-- 录音控制卡 -->
-      <div class="card meeting-record-card">
+      <div v-content-motion="recording ? 'recording' : uploading ? 'uploading' : 'idle'" class="card meeting-record-card">
         <div v-if="!recording && !uploading" class="meeting-record-idle">
           <div class="meeting-templates" role="group" aria-label="选择总结模板">
             <button
@@ -1261,6 +1349,7 @@ onBeforeUnmount(() => {
             <button class="text-button" type="button" @click="hotwordsOpen = !hotwordsOpen">
               {{ hotwordsOpen ? '收起识别热词与声纹' : `识别热词 ${hotwords.length}/${hotwordsMax} · 声纹 ${voiceprints.length}` }}
             </button>
+            <Transition v-bind="presenceMotion" name="es-disclosure">
             <div v-if="hotwordsOpen" class="meeting-hotwords-body">
               <p class="meeting-hint">
                 加入人名、产品名、项目名等专名，转写时优先识别。改完可在听记详情页点「重新转写」让老记录也用上。
@@ -1298,6 +1387,7 @@ onBeforeUnmount(() => {
                 <p v-else class="meeting-hint">还没有登记过声纹。</p>
               </div>
             </div>
+            </Transition>
           </div>
           <!-- 提示必须在空闲分支内部：放到 v-if/v-else 链中间会把「空闲」与「上传中」拆成两支 -->
           <p v-if="audioSource === 'system'" class="setting-hint meeting-source-hint">
@@ -1321,11 +1411,12 @@ onBeforeUnmount(() => {
         </div>
         <!-- 实时上屏（对标钉钉边说边出字 + 会中要点 + 会中快检）：预览性质，终态以录制后的整段转写为准。
              录音中与上传中都保留，切页回来还能看到刚才说了什么 -->
+        <Transition v-bind="presenceMotion" name="es-disclosure">
         <div
           v-if="(recording || uploading) && liveSessionId"
           class="meeting-live"
         >
-          <div class="meeting-live-head">
+          <div v-content-motion="liveState" class="meeting-live-head">
             <div class="meeting-live-title">
               <span :class="['meeting-live-dot', liveState]" aria-hidden="true" />
               实时字幕
@@ -1345,9 +1436,11 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <p v-if="liveHint" class="meeting-live-hint">{{ liveHint }}</p>
+          <Transition v-bind="presenceMotion" name="es-fade">
           <p v-if="liveState === 'unavailable' || liveState === 'degraded'" class="meeting-live-error">
             {{ liveError || (liveState === 'degraded' ? '推流中断，已改用轮询' : '实时上屏不可用') }}。录音不会中断，结束后照常生成完整转写。
           </p>
+          </Transition>
           <div ref="liveBox" class="meeting-live-lines">
             <p v-for="(line, index) in liveLines" :key="index" class="meeting-live-line">
               <span class="meeting-segment-time">{{ formatTime(line.at) }}</span>{{ line.text }}
@@ -1358,7 +1451,8 @@ onBeforeUnmount(() => {
             </p>
           </div>
           <!-- 会中快检：整场纪要要等录音结束，会中能救场的只有「刚才这句的数字对不对」 -->
-          <div v-if="latestCheck" class="meeting-live-check" :class="`is-${latestCheck.verdict}`">
+          <Transition v-bind="presenceMotion" name="es-fade">
+          <div v-content-motion="latestCheck" v-if="latestCheck" class="meeting-live-check" :class="`is-${latestCheck.verdict}`">
             <div class="meeting-live-title">
               会中快检 · {{ latestCheck.checked_at }}
               <span class="meeting-live-check-verdict">{{ checkLabel(latestCheck.verdict) }}</span>
@@ -1369,6 +1463,7 @@ onBeforeUnmount(() => {
             </ul>
             <p v-if="liveChecks.length > 1" class="meeting-hint">历史上共核对 {{ liveChecks.length }} 次，最近一次在最上方</p>
           </div>
+          </Transition>
           <div v-if="livePoints.length" class="meeting-live-points">
             <div class="meeting-live-title">会中要点</div>
             <ul>
@@ -1376,11 +1471,16 @@ onBeforeUnmount(() => {
             </ul>
           </div>
         </div>
+        </Transition>
       </div>
 
       <!-- 详情：标题 + 阅读区。刻意不再套一层 card：里面每块已经是卡片，
            卡片套卡片会让「一屏里有几层容器」变得数不清（钉钉听记这里也是无边框的。 -->
-      <div v-if="selected" ref="detailAnchor" class="meeting-detail">
+      <Transition v-bind="presenceMotion" name="es-fade">
+        <p v-if="detailLoading && !selected" class="meeting-hint" role="status">正在读取听记…</p>
+      </Transition>
+      <Transition v-bind="presenceMotion" name="es-disclosure">
+      <div v-content-motion="selected?.id + ':' + selected?.status" :aria-busy="detailLoading" v-if="selected" ref="detailAnchor" class="meeting-detail">
         <!-- 标题行：左「返回 + 标题」/ 右操作。操作只留「导出」与「更多」，其余进菜单，
              不再让十个文字按钮横向铺满一行把标题挤到下面。
              返回按钮必须在明面上：详情占满阅读区且打开时会自动滚到标题，
@@ -1419,6 +1519,7 @@ onBeforeUnmount(() => {
                 更多
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
               </button>
+              <Transition v-bind="presenceMotion" name="es-popover">
               <div v-if="moreMenuOpen" class="meeting-more-menu" role="menu" @click.stop>
                 <button type="button" role="menuitem" :disabled="exportBusy !== '' || selected.status !== 'completed'" @click="closeMoreMenu(); exportFile('markdown')">导出 Markdown</button>
                 <button type="button" role="menuitem" :disabled="selected.status !== 'completed'" @click="closeMoreMenu(); openPoster()">生成图文海报</button>
@@ -1426,10 +1527,11 @@ onBeforeUnmount(() => {
                 <button type="button" role="menuitem" :disabled="archiving || selected.status !== 'completed'" @click="closeMoreMenu(); archive()">归档进知识库</button>
                 <button type="button" role="menuitem" :disabled="selected.status !== 'completed'" @click="closeMoreMenu(); retranscribe()">重新转写（用上热词）</button>
                 <span class="meeting-more-sep" aria-hidden="true" />
-                <button type="button" role="menuitem" class="is-danger" @click="closeMoreMenu(); remove()">
+                <button v-content-motion="confirmingDelete" type="button" role="menuitem" class="is-danger" @click="closeMoreMenu(); remove()">
                   {{ confirmingDelete ? '再点一次确认删除' : '删除这条听记' }}
                 </button>
               </div>
+              </Transition>
             </div>
           </div>
         </header>
@@ -1512,7 +1614,7 @@ onBeforeUnmount(() => {
         <template v-else>
           <div class="meeting-detail-body">
             <!-- 主区：标签页，一屏只讲一件事 -->
-            <div ref="detailPane" class="meeting-pane">
+            <div v-content-motion="detailTab" ref="detailPane" class="meeting-pane">
               <nav class="meeting-tabs" role="tablist" aria-label="听记内容">
                 <button
                   v-for="tab in DETAIL_TABS"
@@ -1749,7 +1851,7 @@ onBeforeUnmount(() => {
                 <h3>AI 问答</h3>
                 <span class="meeting-hint">基于本条听记</span>
               </div>
-              <div ref="qaList" class="meeting-qa-list">
+              <div v-content-motion="qaBusy" ref="qaList" class="meeting-qa-list">
                 <p v-if="!chat.length && !qaBusy" class="meeting-hint">问结论、问待办、问数据，或让它起草跟进邮件。</p>
                 <div v-for="(turn, index) in chat" :key="index" :class="['meeting-qa-turn', turn.role]">
                   <div class="meeting-qa-bubble">{{ turn.content }}</div>
@@ -1776,43 +1878,8 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
+      </Transition>
 
-      <!-- 图文海报弹窗：主题选择 + zoom 缩放预览 + 导出动作 -->
-      <div v-if="posterOpen && selected" class="meeting-poster-overlay" @click.self="closePoster">
-        <div ref="posterModalRef" class="meeting-poster-modal" role="dialog" aria-modal="true" aria-label="图文海报">
-          <div class="meeting-poster-modal-head">
-            <h3>图文海报</h3>
-            <button class="text-button" type="button" :disabled="posterBusy" @click="closePoster">关闭</button>
-          </div>
-          <div class="meeting-poster-themes" role="group" aria-label="海报主题">
-            <button
-              v-for="theme in POSTER_THEMES"
-              :key="theme.id"
-              :class="['meeting-poster-theme', { on: posterTheme === theme.id }]"
-              type="button"
-              @click="posterTheme = theme.id"
-            >
-              <span :class="['meeting-poster-theme-chip', `meeting-poster-theme-chip--${theme.id}`]" aria-hidden="true">
-                <template v-if="theme.id === 'report'"><i /><i /><i /></template>
-                <template v-else>Aa</template>
-              </span>
-              {{ theme.name }}
-            </button>
-          </div>
-          <div class="meeting-poster-scroll">
-            <div class="meeting-poster-preview">
-              <MeetingVisualReport v-if="posterTheme === 'report'" :meeting="selected" />
-              <MeetingPoster v-else :meeting="selected" :theme="posterTheme" />
-            </div>
-          </div>
-          <div class="meeting-poster-actions">
-            <span v-if="posterBusy" class="meeting-hint">正在生成…</span>
-            <button class="text-button" type="button" :disabled="posterBusy" @click="copyPoster">复制图片</button>
-            <button class="text-button" type="button" :disabled="posterBusy" @click="exportPosterPdf">导出 PDF</button>
-            <button class="primary-button" type="button" :disabled="posterBusy" @click="savePoster">保存图片</button>
-          </div>
-        </div>
-      </div>
       <!-- 离屏全尺寸海报：html2canvas 截图根（预览实例带 zoom，不能直接截） -->
       <div v-if="posterOpen && selected" ref="posterCaptureHost" class="meeting-poster-offscreen" aria-hidden="true">
         <MeetingVisualReport v-if="posterTheme === 'report'" :meeting="selected" />
@@ -1839,12 +1906,55 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <span :class="['meeting-status', meeting.status]">
+            <Transition v-bind="presenceMotion" name="es-icon">
             <span v-if="meeting.status === 'processing'" class="knowledge-spinner" aria-hidden="true" />
+            </Transition>
             {{ statusLabel(meeting.status) }}
           </span>
         </div>
         <p v-if="filteredMeetings.length" class="meeting-list-end">共 {{ filteredMeetings.length }} 条听记</p>
       </div>
     </template>
+    <p v-else class="knowledge-loading" role="status">正在获取会议状态…</p>
+    <!-- 图文海报弹窗独立于登录分支，让关闭过渡能完成。 -->
+    <Teleport to="body">
+      <Transition v-bind="presenceMotion" name="es-dialog">
+      <div v-if="status.loggedIn && posterOpen && selected" class="meeting-poster-overlay" @click.self="closePoster">
+        <div ref="posterModalRef" class="meeting-poster-modal" role="dialog" aria-modal="true" aria-label="图文海报">
+          <div class="meeting-poster-modal-head">
+            <h3>图文海报</h3>
+            <button class="text-button" type="button" :disabled="posterBusy" @click="closePoster">关闭</button>
+          </div>
+          <div class="meeting-poster-themes" role="group" aria-label="海报主题">
+            <button :disabled="posterBusy"
+              v-for="theme in POSTER_THEMES"
+              :key="theme.id"
+              :class="['meeting-poster-theme', { on: posterTheme === theme.id }]"
+              type="button"
+              @click="posterTheme = theme.id"
+            >
+              <span :class="['meeting-poster-theme-chip', `meeting-poster-theme-chip--${theme.id}`]" aria-hidden="true">
+                <template v-if="theme.id === 'report'"><i /><i /><i /></template>
+                <template v-else>Aa</template>
+              </span>
+              {{ theme.name }}
+            </button>
+          </div>
+          <div class="meeting-poster-scroll">
+            <div v-content-motion="posterTheme" class="meeting-poster-preview">
+              <MeetingVisualReport v-if="posterTheme === 'report'" :meeting="selected" />
+              <MeetingPoster v-else :meeting="selected" :theme="posterTheme" />
+            </div>
+          </div>
+          <div class="meeting-poster-actions">
+            <span v-if="posterBusy" class="meeting-hint">正在生成…</span>
+            <button class="text-button" type="button" :disabled="posterBusy" @click="copyPoster">复制图片</button>
+            <button class="text-button" type="button" :disabled="posterBusy" @click="exportPosterPdf">导出 PDF</button>
+            <button class="primary-button" type="button" :disabled="posterBusy" @click="savePoster">保存图片</button>
+          </div>
+        </div>
+      </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

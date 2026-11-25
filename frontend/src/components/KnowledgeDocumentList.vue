@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed } from 'vue'
 import type { KnowledgeDocumentSummary } from '../types/core'
 
@@ -47,7 +48,7 @@ const onQuery = (event: Event) => {
 </script>
 
 <template>
-  <div class="card knowledge-doc-card">
+  <div v-content-motion="loading && !documents.length ? 'loading' : error ? 'error' : documents.length ? 'ready' : 'empty'" :aria-busy="loading" class="card knowledge-doc-card">
     <div class="knowledge-doc-toolbar">
       <div>
         <h2>已入库文档</h2>
@@ -68,12 +69,18 @@ const onQuery = (event: Event) => {
       </div>
     </div>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <div v-if="error" class="alert" role="alert">
       <span class="alert-copy"><b>{{ error }}</b></span>
       <button type="button" aria-label="关闭" @click="emit('clear-error')">×</button>
     </div>
+    </Transition>
 
     <div v-if="loading && !documents.length" class="knowledge-loading">正在读取文档清单…</div>
+    <div v-else-if="error && !documents.length" class="knowledge-doc-empty">
+      <strong>文档清单暂不可用</strong>
+      <p>请重试后再查看知识库内容。</p>
+    </div>
     <div v-else-if="!documents.length" class="knowledge-doc-empty">
       <strong>{{ hasQuery ? '没有匹配的文档' : '知识库还没有文档' }}</strong>
       <p>{{ hasQuery ? '换个关键词试试。' : '管理员把文件放入知识库后，这里会出现。' }}</p>
@@ -93,7 +100,7 @@ const onQuery = (event: Event) => {
             <span v-if="doc.status === 'failed' && doc.error_message" class="knowledge-doc-error">{{ doc.error_message }}</span>
             <span v-else-if="doc.status === 'failed' && doc.ready" class="knowledge-doc-error">最近一次更新失败，当前可读上一版。</span>
           </span>
-          <span :class="['knowledge-doc-status', documentStatusClass(doc)]">{{ documentStatusLabel(doc) }}</span>
+          <span v-content-motion="doc.status" :class="['knowledge-doc-status', documentStatusClass(doc)]">{{ documentStatusLabel(doc) }}</span>
         </button>
       </li>
     </ul>

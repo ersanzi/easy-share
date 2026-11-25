@@ -30,13 +30,15 @@ class KnowledgeAclControllerTest {
         var depts = mock(SysDeptRowMapper.class);
         var roles = mock(EsUserRoleMapper.class);
         when(roles.selectRolesOfUser(anyLong())).thenReturn(List.of());
-        var features = new FeaturePermissionService(permissions, roles);
+        var subjects = PermissionTestFixtures.directory(users, depts);
+        var writes = mock(PermissionWriteService.class);
+        var features = new FeaturePermissionService(permissions, roles, subjects, writes);
         var spacesMapper = mock(EsSpaceMapper.class);
         var shared = new EsSpace(); shared.setStatus("0"); shared.setQuotaBytes(-1L);
         when(spacesMapper.selectById(1L)).thenReturn(shared);
         var spaces = new SpaceService(spacesMapper, spaceMembers, mock(SpaceUsageService.class),
-            mock(CapacityService.class), users, depts, features);
-        var fileRoles = new FileRoleService(members, files, spaces, users, depts);
+            mock(CapacityService.class), users, depts, features, subjects, writes);
+        var fileRoles = new FileRoleService(members, files, spaces, users, depts, writes);
         storage = mock(DriveStorage.class);
         var properties = new DriveProperties(); properties.setBucket("easyshare");
         controller = new KnowledgeAclController(new KnowledgeAclService(files, spaces, fileRoles, features, storage, properties));

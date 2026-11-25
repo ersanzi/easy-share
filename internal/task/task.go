@@ -54,6 +54,10 @@ var (
 )
 
 type Task struct {
+	// Hidden 隐藏历史但保留下载归属，清历史不能解除路径保护。
+	Hidden bool `json:"hidden,omitempty"`
+	// OwnerID 是控制面与稳定账号的组合标识；无归属的历史云任务不能被认领。
+	OwnerID          string    `json:"ownerId,omitempty"`
 	ID               string    `json:"id"`
 	Kind             Kind      `json:"kind"`
 	FileName         string    `json:"fileName"`

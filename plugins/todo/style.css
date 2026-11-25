@@ -2,6 +2,10 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  --motion-fast: 120ms;
+  --motion-enter: 200ms;
+  --motion-exit: 120ms;
+  --motion-ease: cubic-bezier(.2,0,0,1);
   --bg: #f5f6f8; --card: #fff; --line: rgba(0,0,0,.08);
   --text: #1d1d1f; --dim: #86868b;
   --accent: #0a84ff; --green: #34c759; --danger: #ff3b30;
@@ -47,12 +51,12 @@ body {
 .row {
   display: flex; align-items: center; gap: 10px;
   background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-  padding: 9px 12px; transition: box-shadow .15s;
+  padding: 9px 12px;
 }
 .row:hover { box-shadow: 0 2px 10px rgba(0,0,0,.06); }
 .row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
-.row .text { flex: 1; line-height: 1.5; word-break: break-all; }
-.row.done .text { color: var(--dim); text-decoration: line-through; }
+.row .text { flex: 1; line-height: 1.5; word-break: break-all; transition: opacity var(--motion-fast) var(--motion-ease); }
+.row.done .text { color: var(--dim); text-decoration: line-through; opacity: .75; }
 .row time { color: var(--dim); font-size: 11px; white-space: nowrap; }
 .row .del { border: none; background: transparent; color: var(--dim); cursor: pointer; }
 .row .del:hover { color: var(--danger); }
@@ -64,8 +68,8 @@ body {
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,.32);
 }
-/* 作者样式压过 [hidden] 的 UA 默认 display:none，不补这条弹窗会进页面就空着常驻且 × 关不掉 */
-.sheet[hidden] { display: none; }
+/* 固定蒙层保留渲染盒以支持反向过渡，hidden 同时切断命中与焦点。 */
+.sheet[hidden] { display: flex; visibility: hidden; opacity: 0; pointer-events: none; }
 .sheet-card {
   width: min(620px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
   background: #fff; border-radius: 14px; padding: 18px 20px;
@@ -86,4 +90,21 @@ body {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
   background: rgba(29,29,31,.9); color: #fff; border-radius: 999px;
   padding: 7px 18px; font-size: 12px; z-index: 9;
+}
+
+.empty[hidden] { display: none; }
+.sheet, .toast { visibility: visible; opacity: 1; }
+.toast { display: block; pointer-events: none; }
+.toast[hidden] { display: block; visibility: hidden; opacity: 0; }
+button { transition: opacity var(--motion-fast) var(--motion-ease); }
+button:active:not(:disabled) { opacity: .7; }
+button:disabled, input:disabled { cursor: wait; opacity: .5; }
+.list[aria-busy="true"] { opacity: .65; }
+.list { transition: opacity var(--motion-fast) var(--motion-ease); }
+.save-status { min-height: 20px; padding: 0 14px; color: var(--dim); }
+@media (prefers-reduced-motion: no-preference) {
+  .sheet, .toast { transition: opacity var(--motion-enter) var(--motion-ease), visibility 0s; }
+  .sheet[hidden], .toast[hidden] { transition: opacity var(--motion-exit) var(--motion-ease), visibility 0s linear var(--motion-exit); }
+  .sheet-card { transform: translateY(0); transition: transform var(--motion-enter) var(--motion-ease); }
+  .sheet[hidden] .sheet-card { transform: translateY(6px); transition-duration: var(--motion-exit); }
 }

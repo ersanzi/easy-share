@@ -678,24 +678,28 @@ public class DriveFileService {
     }
 
     /**
-     * 设置文档可见部门（文档级可见性片 2 数据面）。deptIds 空 = 恢复全体可见。
+     * 设置文档可见部门（文档级可见性片 2 数据面）。仅显式空列表可清除限制、恢复继承。
      * 仅共享空间文件有此语义；目录行不存在时报错。
      *
-     * @return 更新后的逗号分隔部门串（空串=全体可见）
+     * @return 更新后的逗号分隔部门串（空串=清除部门限制，仍按成员角色和空间权限裁决）
      */
     public String setRegisteredVisibleDepts(String spaceType, Long ownerId, Long operatorId,
                                             String path, List<Long> deptIds) {
+        // 内部调用同样必须表达明确意图，不能把漏传列表当成解除限制。
+        if (deptIds == null) {
+            throw new ServiceException("可见部门列表不能为空，请明确提供部门列表或空数组");
+        }
         EsFile row = selectActiveByPath(spaceType, ownerId, path);
         if (row == null) {
             throw new ServiceException("文件不存在或未登记目录层");
         }
         // 操作者校验：个人空间=owner 本人；共享空间=上传者或 manage 档（企业权限第三片）
         if (EsSpace.TYPE_PERSONAL.equals(spaceType)) {
-            if (!ownerId.equals(row.getOwnerId())) {
-                throw new ServiceException("只有文件的上传者可以调整可见范围");
+            if (!Objects.equals(operatorId, row.getOwnerId())) {
+                throw new ServiceException("只有文件的所有者可以调整可见范围");
             }
         } else {
-            fileRoleService.assertVisibilityManageable(row, operatorId);
+            return fileRoleService.replaceVisibleDepts(row.getFileId(), operatorId, serializeDepts(deptIds));
         }
         row.setVisibleDepts(serializeDepts(deptIds));
         fileMapper.updateById(row);

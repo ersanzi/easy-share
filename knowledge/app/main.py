@@ -21,12 +21,14 @@ from app.wps_addon.routes import router as wps_router
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 # AUTH_ENABLED=true 时要求登录的业务前缀；/auth、/health、/docs、/lab、/debug（回环守卫）不受令牌保护
-_PROTECTED_PREFIXES = ("/documents", "/jobs", "/query", "/ingest", "/lab/api/uploads", "/meetings")
+_PROTECTED_PREFIXES = ("/documents", "/jobs", "/query", "/ingest", "/lab/api/uploads", "/meetings", "/stats")
 
 # 控制面功能权限矩阵对这些前缀生效：知识问答（knowledge）、会议听记（meeting）。
-# 只在令牌解析出了控制面身份时生效——本地账号的档案在本地，不受矩阵管辖（行为与引入前一致）。
+# 企业部署仅接受控制面身份；未配置控制面的独立部署保留本地账号。
 _FEATURE_PREFIXES = (
     ("/documents", "knowledge"),
+    ("/jobs", "knowledge"),
+    ("/stats", "knowledge"),
     ("/query", "knowledge"),
     ("/ingest", "knowledge"),
     ("/lab/api/uploads", "knowledge"),
@@ -69,35 +71,49 @@ def create_app(services: AppServices | None = None) -> FastAPI:
 
     @application.middleware("http")
     async def auth_middleware(request, call_next):
-        # 带合法令牌一律解析出用户（auth 关闭时 /auth/me 等仍可用）；仅 auth_enabled 时强制保护业务前缀
+        enterprise = resolved_services.sso is not None or bool(resolved_services.config.control_plane_url)
+        # 注销直接交给令牌所属权威处理；不要求先成功读取身份/权限，否则撤权后无法退出。
+        if request.method == "POST" and request.url.path.rstrip("/") == "/auth/logout":
+            return await call_next(request)
+        # 企业模式不允许本地签发独立身份；已有本地令牌也不能绕过撤权。
+        if enterprise and request.method == "POST" and request.url.path.rstrip("/") in ("/auth/bootstrap", "/auth/users"):
+            return JSONResponse({"detail": "请通过企业账号服务登录和管理账号"}, status_code=403)
+        # 独立部署由 auth_enabled 控制；企业部署始终强制身份与功能授权。
         # 令牌两处可取：Authorization 头，或 GET 请求的 ?token=（供 clean.md 引用链接直开）
         auth_header = request.headers.get("authorization", "")
         token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
         if not token and request.method == "GET":
             token = request.query_params.get("token", "")
         if token and resolved_services.users is not None:
-            user = await run_in_threadpool(resolved_services.users.resolve_token, token)
-            if user is None and resolved_services.sso is not None:
-                # 本地令牌未命中：回查控制面验票（SSO，带缓存；未配置控制面时跳过）
+            user = None
+            if not enterprise:
+                user = await run_in_threadpool(resolved_services.users.resolve_token, token)
+            elif resolved_services.sso is not None:
+                # 企业身份逐请求回查，远端不可用时没有本地后门。
                 user = await run_in_threadpool(resolved_services.sso.resolve, token)
             if user:
                 request.state.user = user
                 if user.get("authority") == "ruoyi":
                     request.state.control_plane_token = token
         if (
-            resolved_services.config.auth_enabled
+            (resolved_services.config.auth_enabled or enterprise)
             and request.url.path.startswith(_PROTECTED_PREFIXES)
             and not hasattr(request.state, "user")
         ):
             return JSONResponse({"detail": "未登录或令牌无效"}, status_code=401)
         user = getattr(request.state, "user", None)
         feature = _required_feature(request.url.path)
-        # features 缺失 = 本地账号（不是控制面身份），不受矩阵管辖，放行
-        if feature and user is not None and user.get("features") is not None:
-            if not user["features"].get(feature, True):
+        required = [feature] if feature else []
+        # 会议归档是知识写入，不能靠会议权限绕过知识功能关闭。
+        if request.url.path.startswith("/meetings/") and request.url.path.rstrip("/").endswith("/archive"):
+            required.append("knowledge")
+        if required and user is not None and user.get("authority") == "ruoyi":
+            if any((user.get("features") or {}).get(name) is not True for name in required):
                 return JSONResponse(
                     {"detail": "该功能已被管理员关闭，请联系管理员"}, status_code=403
                 )
+        if request.url.path == "/stats" and (user is None or user.get("role") != "admin"):
+            return JSONResponse({"detail": "需要管理员权限"}, status_code=403)
         return await call_next(request)
 
     @application.get("/")

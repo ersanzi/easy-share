@@ -65,7 +65,7 @@ func TestServiceLifecycle(t *testing.T) {
 	if !status.Configured || !status.LoggedIn || status.Username != "alice" || status.ServerURL != "http://kb:8000" {
 		t.Fatalf("signed-in status = %+v", status)
 	}
-	if got := service.Current(); got != session {
+	if got := service.Current(); got.Token != session.Token || got.Username != session.Username || !service.IsCurrent(got) {
 		t.Fatalf("current = %+v", got)
 	}
 

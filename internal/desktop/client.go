@@ -27,6 +27,7 @@ type Snapshot struct {
 }
 type Client struct {
 	baseURL, token string
+	accountToken   string
 	http           *http.Client
 	// slowHTTP 无客户端级超时，供长链路调用（知识问答多跳 LLM）使用，由 Core 侧上下文兜底。
 	slowHTTP *http.Client
@@ -35,6 +36,14 @@ type Client struct {
 func NewClient(baseURL, token string) *Client {
 	return &Client{baseURL: baseURL, token: token, http: &http.Client{Timeout: 10 * time.Second}, slowHTTP: &http.Client{}}
 }
+
+// WithAccountToken 为任务调用固定发起者身份，不修改其他并发请求所持的客户端。
+func (client *Client) WithAccountToken(token string) *Client {
+	scoped := *client
+	scoped.accountToken = token
+	return &scoped
+}
+
 func (client *Client) request(ctx context.Context, method, path string, input, output any) error {
 	return client.do(ctx, client.http, method, path, input, output)
 }
@@ -51,6 +60,7 @@ func (client *Client) slowRequestRaw(ctx context.Context, method, path string, p
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	request.Header.Set("Content-Type", "application/octet-stream")
 	response, err := client.slowHTTP.Do(request)
 	if err != nil {
@@ -87,6 +97,7 @@ func (client *Client) do(ctx context.Context, httpClient *http.Client, method, p
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := httpClient.Do(request)
 	if err != nil {
@@ -233,6 +244,7 @@ func (client *Client) KnowledgeDocumentSource(ctx context.Context, fileID, versi
 		return nil, err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	response, err := client.slowHTTP.Do(request)
 	if err != nil {
 		return nil, err
@@ -506,6 +518,7 @@ func (client *Client) MeetingUpload(ctx context.Context, contentType string, bod
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	request.Header.Set("Content-Type", contentType)
 	response, err := client.slowHTTP.Do(request)
 	if err != nil {
@@ -527,6 +540,7 @@ func (client *Client) MeetingAudioStream(ctx context.Context, id string, writer 
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	response, err := client.slowHTTP.Do(request)
 	if err != nil {
 		return err
@@ -554,6 +568,7 @@ func (client *Client) MeetingExportStream(ctx context.Context, id, format string
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.token)
+	request.Header.Set("X-EasyShare-Account-Token", client.accountToken)
 	response, err := client.slowHTTP.Do(request)
 	if err != nil {
 		return err
@@ -586,6 +601,7 @@ func (client *Client) SubscribeEvents(ctx context.Context, onEvent func(raw []by
 	wsURL := strings.Replace(client.baseURL, "http://", "ws://", 1) + "/api/events"
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+client.token)
+	header.Set("X-EasyShare-Account-Token", client.accountToken)
 
 	connection, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
@@ -601,4 +617,9 @@ func (client *Client) SubscribeEvents(ctx context.Context, onEvent func(raw []by
 		}
 		onEvent(data)
 	}
+}
+
+// CheckTaskPath 检查应用发起的打开文件操作是否跨越任务所属账号。
+func (client *Client) CheckTaskPath(ctx context.Context, path string) error {
+	return client.request(ctx, http.MethodPost, "/api/tasks/check-path", map[string]string{"path": path}, nil)
 }

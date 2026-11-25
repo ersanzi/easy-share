@@ -230,10 +230,12 @@ public class DriveController {
      *
      * <p>不带 {@code sinceVersion} 表示**全量重建**：返回当前完整列表 +
      * {@code newestSpaceVersion}，客户端从此版本继续增量。
-     * 带 {@code sinceVersion} 则只返回变更日志（不再附带全量对象）。
+     * 个人空间带 {@code sinceVersion} 时返回一页连续变更；返回的版本只到本页末尾。
      *
-     * <p>变更日志是差异流而非真相源；日志被裁剪或客户端离线太久时，
-     * 客户端应退全量重建（即不带 sinceVersion 再调一次）。
+     * <p>共享空间的文件版本不含成员、角色、部门和账号状态变化，无法证明旧缓存仍被授权。
+     * 其增量请求一律返回重置错误，客户端必须清空缓存并不带 sinceVersion 全量同步。
+     * 不能成功返回空增量或只增加 files 字段：旧客户端会保留已撤权的缓存文件。
+     * 删除和移动日志中的历史路径也不能作为撤权 tombstone 下发，可能泄露从未可见的名称。
      */
     @GetMapping("/changes")
     public R<ChangesVo> changes(
@@ -242,6 +244,9 @@ public class DriveController {
         Long userId = LoginHelper.getUserId();
         String prefix = readablePrefix(space);
         Long ownerId = ownerIdOf(space, userId);
+        if (sinceVersion != null && EsSpace.TYPE_SHARED.equals(space)) {
+            return resetChanges(sinceVersion, "共享空间权限需要重新核验");
+        }
         long newest = changeLogService.currentVersion(space, ownerId);
         if (sinceVersion == null) {
             DriveFileService.Listing listing = fileService.list(
@@ -259,13 +264,15 @@ public class DriveController {
             List<FileVo> full = objects.stream()
                 .map(object -> toFileVo(object, listing, activeRows, uploaderNames))
                 .toList();
-            // 全量重建意味着客户端即将拿到完整列表：老日志从此无人需要，顺手裁剪
-            // （切片 2 的日志回收；失败不影响列举）
-            changeLogService.trim(changeLogTrimKeep);
-            // 列表可能刚把旧marker认领为持久目录；返回完成后的空间版本作为增量游标。
-            return R.ok(new ChangesVo(changeLogService.currentVersion(space, ownerId), null, full, null));
+            changeLogService.trim(space, ownerId, changeLogTrimKeep);
+            // 只交付列举开始前的水位；补登记和并发写入留待下一轮，避免列表未看到却跳过事件。
+            return R.ok(new ChangesVo(newest, null, full, null, false, false));
         }
-        List<ChangeVo> changes = changeLogService.changesAfter(space, ownerId, sinceVersion)
+        var page = changeLogService.changesAfter(space, ownerId, sinceVersion, newest);
+        if (page.resetRequired()) {
+            return resetChanges(sinceVersion, "同步游标失效或变更日志不完整");
+        }
+        List<ChangeVo> changes = page.entries()
             .stream()
             .map(log -> {
                 // 变更日志只记身份；给客户端补上 size/lastModified，
@@ -279,7 +286,15 @@ public class DriveController {
                     Boolean.TRUE.equals(log.getDirectory()));
             })
             .toList();
-        return R.ok(new ChangesVo(newest, sinceVersion, null, changes));
+        return R.ok(new ChangesVo(page.nextVersion(), sinceVersion, null, changes, false, page.hasMore()));
+    }
+
+    /** 业务码与显式标记同时返回，兼容只检查 R.code 的旧客户端失败后退全量。 */
+    private static R<ChangesVo> resetChanges(long sinceVersion, String reason) {
+        R<ChangesVo> response = R.fail(409, "DRIVE_SYNC_RESET_REQUIRED：" + reason
+            + "，请清空本地缓存和游标后重新全量同步");
+        response.setData(new ChangesVo(sinceVersion, sinceVersion, null, null, true, false));
+        return response;
     }
 
     /**
@@ -623,8 +638,8 @@ public class DriveController {
     }
 
     /**
-     * 设置文档可见部门（文档级可见性，2026-09-06）。visibleDepts 空数组=恢复全体可见。
-     * 操作者校验：个人空间=owner、共享空间=上传者本人。
+     * 设置文档可见部门。visibleDepts 必须显式提供，空数组表示清除部门限制、恢复继承。
+     * 操作者校验：个人空间=owner、共享空间=可管理成员。
      *
      * @param body 相对路径与可见部门 ID 清单
      * @return 实际写入的逗号分隔部门串
@@ -1031,13 +1046,15 @@ public class DriveController {
     /**
      * 增量列举结果。
      *
-     * @param newestSpaceVersion 客户端下次增量拉取应带的版本号
+     * @param newestSpaceVersion 成功时客户端下次增量应带的已交付版本；有后续页时不等于空间最新版本
      * @param sinceVersion       本次请求带入的版本；null 表示这是全量重建
      * @param files              仅全量重建时非空：当前完整文件列表
      * @param changes            仅增量拉取时非空：sinceVersion 之后的变更
+     * @param resetRequired      必须清空本地缓存及游标，重新全量同步；此时不交付文件或历史事件
+     * @param hasMore            本次读取水位内仍有后续页，继续携带 newestSpaceVersion 拉取
      */
     public record ChangesVo(long newestSpaceVersion, Long sinceVersion,
-                            List<FileVo> files, List<ChangeVo> changes) {
+                            List<FileVo> files, List<ChangeVo> changes, boolean resetRequired, boolean hasMore) {
     }
 
     /**
@@ -1104,6 +1121,6 @@ public class DriveController {
     public record VisibilityBo(
         @NotBlank(message = "文件路径不能为空") String path,
         @NotBlank(message = "空间不能为空") String space,
-        List<Long> visibleDepts) {
+        @NotNull(message = "可见部门列表不能为空，请明确提供部门列表或空数组") List<Long> visibleDepts) {
     }
 }

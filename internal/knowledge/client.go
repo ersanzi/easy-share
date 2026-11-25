@@ -24,12 +24,14 @@ const (
 
 // Session 一次登录会话。ServerURL 为空表示未配置，Token 为空表示未登录。
 type Session struct {
-	ServerURL string `json:"serverUrl"`
-	Token     string `json:"token"`
-	Username  string `json:"username"`
-	Role      string `json:"role"`
-	ExpiresAt string `json:"expiresAt"`
-	Mode      string `json:"mode,omitempty"`
+	// generation 仅标记本进程会话世代，不落盘或暴露给前端。
+	generation uint64
+	ServerURL  string `json:"serverUrl"`
+	Token      string `json:"token"`
+	Username   string `json:"username"`
+	Role       string `json:"role"`
+	ExpiresAt  string `json:"expiresAt"`
+	Mode       string `json:"mode,omitempty"`
 }
 
 // StatusView 面向前端的登录态视图，永不包含令牌。

@@ -16,6 +16,8 @@ import org.dromara.easyshare.drive.mapper.SysUserDeptMapper;
 import org.dromara.easyshare.drive.service.PermissionRoleService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.dromara.easyshare.drive.service.PermissionSubjectService;
+import org.dromara.easyshare.drive.service.PermissionWriteService;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
@@ -53,7 +55,8 @@ class PermissionRoleServiceTest {
         sysUserDeptMapper = mock(SysUserDeptMapper.class);
         sysDeptRowMapper = mock(SysDeptRowMapper.class);
         service = new PermissionRoleService(roleMapper, userRoleMapper, permissionMapper,
-            sysUserDeptMapper, sysDeptRowMapper);
+            sysUserDeptMapper, sysDeptRowMapper, PermissionTestFixtures.directory(sysUserDeptMapper, sysDeptRowMapper),
+            mock(PermissionWriteService.class));
     }
 
     private static EsPermissionRole role(long roleId, String scope, boolean knowledge, boolean meeting,
@@ -270,6 +273,7 @@ class PermissionRoleServiceTest {
         row.setDeptId(deptId);
         row.setParentId(parentId);
         row.setDeptName("部门" + deptId);
+        row.setStatus("0");
         row.setDelFlag("0");
         return row;
     }

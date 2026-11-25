@@ -43,6 +43,15 @@ func (server *Server) knowledgeUnavailable(writer http.ResponseWriter) bool {
 	return false
 }
 
+// 迟到的旧账号响应不得在注销或切换账号后继续交付给当前页面。
+func (server *Server) knowledgeSessionCurrent(writer http.ResponseWriter, session knowledge.Session) bool {
+	if server.knowledge.IsCurrent(session) {
+		return true
+	}
+	writeJSON(writer, http.StatusConflict, ErrorResponse{Code: "knowledge_session_changed", Message: "知识账号状态已变化，请重试"})
+	return false
+}
+
 // knowledgeStatus 返回本地登录态，不做网络探测，保证 UI 秒开。
 func (server *Server) knowledgeStatus(writer http.ResponseWriter, _ *http.Request) {
 	if server.knowledgeUnavailable(writer) {
@@ -75,6 +84,11 @@ func (server *Server) knowledgeLogin(writer http.ResponseWriter, request *http.R
 	}
 
 	client := knowledge.NewClient(input.ServerURL)
+	revision, err := server.knowledge.BeginSignIn()
+	if err != nil {
+		writeKnowledgeError(writer, "clear prior session", err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 15*time.Second)
 	defer cancel()
 	session, err := client.Login(ctx, input.Username, input.Password)
@@ -82,7 +96,11 @@ func (server *Server) knowledgeLogin(writer http.ResponseWriter, request *http.R
 		writeKnowledgeError(writer, "login", err)
 		return
 	}
-	if err := server.knowledge.SignIn(session); err != nil {
+	if err := server.knowledge.CompleteSignIn(revision, session); err != nil {
+		if errors.Is(err, knowledge.ErrSessionChanged) {
+			writeJSON(writer, http.StatusConflict, ErrorResponse{Code: "knowledge_session_changed", Message: err.Error()})
+			return
+		}
 		log.Printf("knowledge login persist: %v", err)
 		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "knowledge_persist_failed", Message: "登录成功但保存会话失败"})
 		return
@@ -93,7 +111,7 @@ func (server *Server) knowledgeLogin(writer http.ResponseWriter, request *http.R
 
 // knowledgeRegisterSSO 接收桌面端登录后下发的控制面令牌，把它登记为知识会话。
 // 只有远端 /auth/me 认这张令牌才落会话：知识服务没接 SSO（旧部署 / 未配置
-// CONTROL_PLANE_URL）时这里失败，知识页回落到手动登录，不影响客户端账号登录本身。
+// CONTROL_PLANE_URL）时这里失败；旧企业身份已撤销，独立登录保持可用。
 // 令牌沿用控制面有效期，知识服务按它解析出的 features 强制功能权限。
 func (server *Server) knowledgeRegisterSSO(writer http.ResponseWriter, request *http.Request) {
 	if server.knowledgeUnavailable(writer) {
@@ -116,6 +134,11 @@ func (server *Server) knowledgeRegisterSSO(writer http.ResponseWriter, request *
 		writeJSON(writer, http.StatusBadRequest, ErrorResponse{Code: "invalid_credentials", Message: "缺少客户端账号令牌"})
 		return
 	}
+	revision, err := server.knowledge.BeginSSO()
+	if err != nil {
+		writeKnowledgeError(writer, "clear prior sso session", err)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
 	defer cancel()
 	user, err := knowledge.NewClient(input.ServerURL).Me(ctx, token)
@@ -124,11 +147,10 @@ func (server *Server) knowledgeRegisterSSO(writer http.ResponseWriter, request *
 		switch {
 		case errors.As(err, &remote) && remote.Status == http.StatusUnauthorized:
 			// 知识服务不认这张令牌：统一登录没启用，或控制面会话已失效。
-			// 不覆盖本机已有的手动登录会话，用户仍可用知识账号口令进来。
-			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_sso_rejected", Message: "知识服务未接受客户端账号，请手动登录知识服务"})
+			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_sso_rejected", Message: "知识服务未接受企业身份，请重新登录企业账号"})
 		default:
 			log.Printf("knowledge sso probe: %v", err)
-			writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "knowledge_sso_unavailable", Message: "无法确认知识服务已接入统一登录，请手动登录知识服务"})
+			writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "knowledge_sso_unavailable", Message: "无法确认企业身份，请检查服务连接后重试"})
 		}
 		return
 	}
@@ -139,7 +161,11 @@ func (server *Server) knowledgeRegisterSSO(writer http.ResponseWriter, request *
 		Role:      user.Role,
 		Mode:      knowledge.ModeSSO,
 	}
-	if err := server.knowledge.SignIn(session); err != nil {
+	if err := server.knowledge.CompleteSignIn(revision, session); err != nil {
+		if errors.Is(err, knowledge.ErrSessionChanged) {
+			writeJSON(writer, http.StatusConflict, ErrorResponse{Code: "knowledge_session_changed", Message: err.Error()})
+			return
+		}
 		log.Printf("knowledge sso persist: %v", err)
 		writeJSON(writer, http.StatusInternalServerError, ErrorResponse{Code: "knowledge_persist_failed", Message: "统一登录成功但保存会话失败"})
 		return
@@ -202,7 +228,7 @@ func (server *Server) knowledgeStats(writer http.ResponseWriter, request *http.R
 		writeKnowledgeError(writer, "stats", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, stats)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, stats)
 }
 
 // knowledgeQuery 代理远端 /query。全局 WriteTimeout 30s 不够 LLM 链路，先解除期限再转发。
@@ -248,7 +274,7 @@ func (server *Server) knowledgeQuery(writer http.ResponseWriter, request *http.R
 		var remote *knowledge.RemoteError
 		if errors.As(err, &remote) && remote.Status == http.StatusUnauthorized {
 			// 令牌已失效：清掉本地会话，前端刷新登录态后自然回到登录页。
-			if signErr := server.knowledge.SignOut(); signErr != nil {
+			if signErr := server.knowledge.SignOutIf(session); signErr != nil {
 				log.Printf("knowledge sign out on expired token: %v", signErr)
 			}
 			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_auth_expired", Message: "登录已失效，请重新登录"})
@@ -257,7 +283,9 @@ func (server *Server) knowledgeQuery(writer http.ResponseWriter, request *http.R
 		writeKnowledgeError(writer, "query", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, answer)
+	if server.knowledgeSessionCurrent(writer, session) {
+		server.writeKnowledgeJSON(writer, session, http.StatusOK, answer)
+	}
 }
 
 // writeKnowledgeError 将远端/网络错误映射为面向用户的可读响应。
@@ -266,6 +294,8 @@ func writeKnowledgeError(writer http.ResponseWriter, operation string, err error
 	switch {
 	case errors.As(err, &remote) && remote.Status == http.StatusUnauthorized:
 		writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_invalid_credentials", Message: "账号或密码错误"})
+	case errors.As(err, &remote) && remote.Status == http.StatusForbidden:
+		writeJSON(writer, http.StatusForbidden, ErrorResponse{Code: "knowledge_forbidden", Message: remote.Detail})
 	case errors.As(err, &remote):
 		log.Printf("knowledge %s: remote %d: %s", operation, remote.Status, remote.Detail)
 		writeJSON(writer, http.StatusBadGateway, ErrorResponse{Code: "knowledge_upstream_error", Message: "知识服务返回错误：" + remote.Detail})
@@ -278,12 +308,12 @@ func writeKnowledgeError(writer http.ResponseWriter, operation string, err error
 // writeKnowledgeDocumentError 阅读页/原件下载的错误映射：
 // 403/404/413 是文档级语义，直接透传；401 清掉本地会话，让前端回到登录页；
 // 其余仍走通用网关错误。
-func (server *Server) writeKnowledgeDocumentError(writer http.ResponseWriter, operation string, err error) {
+func (server *Server) writeKnowledgeDocumentError(writer http.ResponseWriter, operation string, err error, session knowledge.Session) {
 	var remote *knowledge.RemoteError
 	if errors.As(err, &remote) {
 		switch remote.Status {
 		case http.StatusUnauthorized:
-			if signErr := server.knowledge.SignOut(); signErr != nil {
+			if signErr := server.knowledge.SignOutIf(session); signErr != nil {
 				log.Printf("knowledge sign out on expired token: %v", signErr)
 			}
 			writeJSON(writer, http.StatusUnauthorized, ErrorResponse{Code: "knowledge_auth_expired", Message: "登录已失效，请重新登录"})
@@ -335,10 +365,10 @@ func (server *Server) knowledgeProcessDriveFile(writer http.ResponseWriter, requ
 	defer cancel()
 	job, err := knowledge.NewClient(session.ServerURL).ProcessDriveFile(ctx, session.Token, input.FileID, input.VersionID)
 	if err != nil {
-		server.writeKnowledgeDocumentError(writer, "process drive file", err)
+		server.writeKnowledgeDocumentError(writer, "process drive file", err, session)
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, job)
+	server.writeKnowledgeJSON(writer, session, http.StatusAccepted, job)
 }
 
 // knowledgeDocuments 代理知识库文档清单（最新任务状态 + 最近成功版本）。
@@ -359,10 +389,12 @@ func (server *Server) knowledgeDocuments(writer http.ResponseWriter, request *ht
 	}
 	list, err := knowledge.NewClient(session.ServerURL).Documents(request.Context(), session.Token, limit)
 	if err != nil {
-		server.writeKnowledgeDocumentError(writer, "documents", err)
+		server.writeKnowledgeDocumentError(writer, "documents", err, session)
 		return
 	}
-	writeJSON(writer, http.StatusOK, list)
+	if server.knowledgeSessionCurrent(writer, session) {
+		server.writeKnowledgeJSON(writer, session, http.StatusOK, list)
+	}
 }
 
 // knowledgeDocumentView 代理远端文档阅读页数据（manifest + 结构化正文）。
@@ -379,10 +411,12 @@ func (server *Server) knowledgeDocumentView(writer http.ResponseWriter, request 
 		request.Context(), session.Token, request.PathValue("file_id"), request.PathValue("version_id"),
 	)
 	if err != nil {
-		server.writeKnowledgeDocumentError(writer, "document view", err)
+		server.writeKnowledgeDocumentError(writer, "document view", err, session)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	if server.knowledgeSessionCurrent(writer, session) {
+		server.writeKnowledgeJSON(writer, session, http.StatusOK, view)
+	}
 }
 
 // knowledgeDocumentSource 代理原件下载（流式透传，解除 Core 30s 写超时）。
@@ -399,10 +433,13 @@ func (server *Server) knowledgeDocumentSource(writer http.ResponseWriter, reques
 		request.Context(), session.Token, request.PathValue("file_id"), request.PathValue("version_id"),
 	)
 	if err != nil {
-		server.writeKnowledgeDocumentError(writer, "document source", err)
+		server.writeKnowledgeDocumentError(writer, "document source", err, session)
 		return
 	}
 	defer response.Body.Close()
+	if !server.knowledgeSessionCurrent(writer, session) {
+		return
+	}
 
 	controller := http.NewResponseController(writer)
 	_ = controller.SetWriteDeadline(time.Time{})
@@ -411,9 +448,10 @@ func (server *Server) knowledgeDocumentSource(writer http.ResponseWriter, reques
 			writer.Header().Set(header, value)
 		}
 	}
-	writer.WriteHeader(response.StatusCode)
-	if _, err := io.Copy(writer, response.Body); err != nil {
-		log.Printf("knowledge document source stream: %v", err)
+	guarded := &knowledgeResponseWriter{ResponseWriter: writer, service: server.knowledge, session: session}
+	guarded.WriteHeader(response.StatusCode)
+	if _, err := io.Copy(guarded, response.Body); err != nil {
+		server.finishKnowledgeStream(guarded, "document source", err)
 	}
 }
 
@@ -447,7 +485,7 @@ func (server *Server) knowledgeMeetingCreate(writer http.ResponseWriter, request
 		writeKnowledgeError(writer, "meeting upload", err)
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusAccepted, meeting)
 }
 
 // knowledgeMeetings 代理会议列表（不含分段全文）。
@@ -472,7 +510,7 @@ func (server *Server) knowledgeMeetings(writer http.ResponseWriter, request *htt
 		writeKnowledgeError(writer, "meetings", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"meetings": meetings})
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, map[string]any{"meetings": meetings})
 }
 
 // knowledgeMeetingByID 取路径中的会议 ID。
@@ -496,7 +534,7 @@ func (server *Server) knowledgeMeeting(writer http.ResponseWriter, request *http
 		writeKnowledgeError(writer, "meeting", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingDelete 代理删除会议记录与音频。
@@ -514,7 +552,7 @@ func (server *Server) knowledgeMeetingDelete(writer http.ResponseWriter, request
 		writeKnowledgeError(writer, "meeting delete", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]bool{"deleted": true})
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, map[string]bool{"deleted": true})
 }
 
 // knowledgeMeetingRename 代理发言人改名。
@@ -541,7 +579,7 @@ func (server *Server) knowledgeMeetingRename(writer http.ResponseWriter, request
 		writeKnowledgeError(writer, "meeting rename", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingArchive 代理归档入库。
@@ -561,7 +599,7 @@ func (server *Server) knowledgeMeetingArchive(writer http.ResponseWriter, reques
 		writeKnowledgeError(writer, "meeting archive", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingAudio 代理音频回放（流式透传，解除读写期限）。
@@ -576,9 +614,9 @@ func (server *Server) knowledgeMeetingAudio(writer http.ResponseWriter, request 
 	controller := http.NewResponseController(writer)
 	_ = controller.SetReadDeadline(time.Time{})
 	_ = controller.SetWriteDeadline(time.Time{})
-	if err := knowledge.NewClient(session.ServerURL).StreamMeetingAudio(request.Context(), session.Token, knowledgeMeetingByID(request), writer); err != nil {
-		// 响应头可能已写出，只能记日志
-		log.Printf("knowledge meeting audio: %v", err)
+	guarded := &knowledgeResponseWriter{ResponseWriter: writer, service: server.knowledge, session: session}
+	if err := knowledge.NewClient(session.ServerURL).StreamMeetingAudio(request.Context(), session.Token, knowledgeMeetingByID(request), guarded); err != nil {
+		server.finishKnowledgeStream(guarded, "meeting audio", err)
 	}
 }
 
@@ -602,7 +640,7 @@ func (server *Server) knowledgeMeetingMindmap(writer http.ResponseWriter, reques
 		writeKnowledgeError(writer, "meeting mindmap", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingSummaryRegen 代理按模板重新生成总结（harness/LLM 慢链路）。
@@ -629,7 +667,7 @@ func (server *Server) knowledgeMeetingSummaryRegen(writer http.ResponseWriter, r
 		writeKnowledgeError(writer, "meeting summary regen", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingAsk 代理听记 AI 问答（纪要+转写全文进上下文，LLM 慢链路）。
@@ -659,7 +697,7 @@ func (server *Server) knowledgeMeetingAsk(writer http.ResponseWriter, request *h
 		writeKnowledgeError(writer, "meeting ask", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingKeywordsRegen 代理关键词区块补跑（LLM 慢链路）。
@@ -681,7 +719,7 @@ func (server *Server) knowledgeMeetingKeywordsRegen(writer http.ResponseWriter, 
 		writeKnowledgeError(writer, "meeting keywords regen", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // --- 待办（一等实体的增删改，对标钉钉 MinutesTodoI；快链路，沿用全局 30s 期限） ---
@@ -707,7 +745,7 @@ func (server *Server) knowledgeMeetingTodoAdd(writer http.ResponseWriter, reques
 		writeKnowledgeError(writer, "meeting todo add", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingTodoUpdate 编辑待办内容/负责人/期限或勾选完成。
@@ -732,7 +770,7 @@ func (server *Server) knowledgeMeetingTodoUpdate(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting todo update", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingTodoDelete 删除一条待办。
@@ -752,7 +790,7 @@ func (server *Server) knowledgeMeetingTodoDelete(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting todo delete", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // --- 实时上屏（推流边说边出字；预览性质，终态仍由整段离线重跑给出） ---
@@ -772,7 +810,7 @@ func (server *Server) knowledgeMeetingStreamWarm(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting stream warm", err)
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, map[string]bool{"warming": true})
+	server.writeKnowledgeJSON(writer, session, http.StatusAccepted, map[string]bool{"warming": true})
 }
 
 // knowledgeMeetingStreamOpen 开实时会话，先落一条 recording 记录。
@@ -796,7 +834,7 @@ func (server *Server) knowledgeMeetingStreamOpen(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting stream open", err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusCreated, meeting)
 }
 
 // knowledgeMeetingStreamChunk 转发一片 PCM 给知识服务，回当前上屏字幕。
@@ -827,7 +865,7 @@ func (server *Server) knowledgeMeetingStreamChunk(writer http.ResponseWriter, re
 		writeKnowledgeError(writer, "meeting stream chunk", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, view)
 }
 
 // knowledgeMeetingStreamStop 结束推流会话，回完整实时字幕行。
@@ -848,7 +886,7 @@ func (server *Server) knowledgeMeetingStreamStop(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting stream stop", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, view)
 }
 
 // knowledgeMeetingLivePoints 会中要点（LLM 慢链路，随录随长）。
@@ -869,7 +907,7 @@ func (server *Server) knowledgeMeetingLivePoints(writer http.ResponseWriter, req
 		writeKnowledgeError(writer, "meeting live points", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"points": points})
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, map[string]any{"points": points})
 }
 
 // knowledgeLiveCheckTimeout 会中快检上限：它必须比知识服务自己的硬上限（25s）再短一截，
@@ -895,7 +933,7 @@ func (server *Server) knowledgeMeetingLiveCheck(writer http.ResponseWriter, requ
 		writeKnowledgeError(writer, "meeting live check", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingLiveSession 取录制会话当前状态（前端轮询兜底：推流断了字也不停在半路）。
@@ -914,7 +952,7 @@ func (server *Server) knowledgeMeetingLiveSession(writer http.ResponseWriter, re
 		writeKnowledgeError(writer, "meeting live session", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, view)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, view)
 }
 
 // knowledgeMeetingSpeakerMerge 合并两位发言人（快链路）。
@@ -942,7 +980,7 @@ func (server *Server) knowledgeMeetingSpeakerMerge(writer http.ResponseWriter, r
 		writeKnowledgeError(writer, "meeting speaker merge", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // knowledgeMeetingSegmentUpdate 改一句转写正文（快链路）。
@@ -974,7 +1012,7 @@ func (server *Server) knowledgeMeetingSegmentUpdate(writer http.ResponseWriter, 
 		writeKnowledgeError(writer, "meeting segment update", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, meeting)
 }
 
 // --- 个性化热词与重新转写（对标钉钉 hotwords / retranscribe） ---
@@ -995,7 +1033,7 @@ func (server *Server) knowledgeMeetingHotwords(writer http.ResponseWriter, reque
 		writeKnowledgeError(writer, "meeting hotwords list", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingHotwordsAdd 批量新增热词（校验在知识服务，错误文案直达）。
@@ -1021,7 +1059,7 @@ func (server *Server) knowledgeMeetingHotwordsAdd(writer http.ResponseWriter, re
 		writeKnowledgeError(writer, "meeting hotwords add", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingHotwordDelete 删除一条热词。
@@ -1045,7 +1083,7 @@ func (server *Server) knowledgeMeetingHotwordDelete(writer http.ResponseWriter, 
 		writeKnowledgeError(writer, "meeting hotword delete", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, result)
 }
 
 // knowledgeMeetingRetranscribe 重新转写整场（异步受理，前端轮询详情）。
@@ -1064,7 +1102,7 @@ func (server *Server) knowledgeMeetingRetranscribe(writer http.ResponseWriter, r
 		writeKnowledgeError(writer, "meeting retranscribe", err)
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, meeting)
+	server.writeKnowledgeJSON(writer, session, http.StatusAccepted, meeting)
 }
 
 // --- 声纹（生物特征数据：可查可删） ---
@@ -1085,7 +1123,7 @@ func (server *Server) knowledgeMeetingVoiceprints(writer http.ResponseWriter, re
 		writeKnowledgeError(writer, "meeting voiceprints list", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"voiceprints": items})
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, map[string]any{"voiceprints": items})
 }
 
 // knowledgeMeetingVoiceprintDelete 删除一条声纹。
@@ -1109,7 +1147,7 @@ func (server *Server) knowledgeMeetingVoiceprintDelete(writer http.ResponseWrite
 		writeKnowledgeError(writer, "meeting voiceprint delete", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"voiceprints": items})
+	server.writeKnowledgeJSON(writer, session, http.StatusOK, map[string]any{"voiceprints": items})
 }
 
 // knowledgeMeetingExport 代理备忘录导出文件（markdown|docx，流式透传）。
@@ -1129,7 +1167,8 @@ func (server *Server) knowledgeMeetingExport(writer http.ResponseWriter, request
 	controller := http.NewResponseController(writer)
 	_ = controller.SetReadDeadline(time.Time{})
 	_ = controller.SetWriteDeadline(time.Time{})
-	if err := knowledge.NewClient(session.ServerURL).StreamMeetingExport(request.Context(), session.Token, knowledgeMeetingByID(request), format, writer); err != nil {
-		log.Printf("knowledge meeting export: %v", err)
+	guarded := &knowledgeResponseWriter{ResponseWriter: writer, service: server.knowledge, session: session}
+	if err := knowledge.NewClient(session.ServerURL).StreamMeetingExport(request.Context(), session.Token, knowledgeMeetingByID(request), format, guarded); err != nil {
+		server.finishKnowledgeStream(guarded, "meeting export", err)
 	}
 }

@@ -42,6 +42,8 @@ node scripts/diag/check-release-pipeline.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node --test scripts/diag/release-version.test.mjs scripts/diag/publish-release.test.mjs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node --test scripts/diag/static-ui-motion.test.mjs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/diag/check-doc-refs.mjs --self-test
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node scripts/diag/check-doc-refs.mjs docs

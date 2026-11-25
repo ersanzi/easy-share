@@ -21,7 +21,7 @@ public interface EsUserRoleMapper {
 
     /** 某账号拥有的角色（含角色自身的五项开关与范围） */
     @Select("""
-        SELECT r.role_id, r.role_name, r.admin_scope,
+        SELECT r.role_id, r.role_name, r.admin_scope, r.scope_dept_ids,
                r.knowledge, r.meeting, r.drive, r.shared, r.plugin
         FROM es_user_role ur
         JOIN es_permission_role r ON r.role_id = ur.role_id

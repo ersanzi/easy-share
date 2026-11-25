@@ -68,6 +68,8 @@ public class PermissionRoleService {
     private final EsUserPermissionMapper permissionMapper;
     private final SysUserDeptMapper sysUserDeptMapper;
     private final SysDeptRowMapper sysDeptRowMapper;
+    private final PermissionSubjectService subjects;
+    private final PermissionWriteService writes;
 
     /**
      * 全部角色（管理页角色列表）。
@@ -75,6 +77,7 @@ public class PermissionRoleService {
      * @return 角色及成员数
      */
     public List<RoleVo> list() {
+        subjects.requireActiveSuperAdmin();
         Map<Long, Long> counts = userRoleMapper.selectAll().stream()
             .collect(Collectors.groupingBy(UserRoleBinding::getRoleId, Collectors.counting()));
         return roleMapper.selectList(Wrappers.<EsPermissionRole>lambdaQuery()
@@ -101,6 +104,8 @@ public class PermissionRoleService {
     @Transactional(rollbackFor = Exception.class)
     public RoleVo save(Long roleId, String roleName, String adminScope, List<Long> scopeDeptIds,
                        boolean knowledge, boolean meeting, boolean drive, boolean shared, boolean plugin) {
+        writes.begin();
+        writes.requireSuperAdmin();
         String name = roleName == null ? "" : roleName.trim();
         if (name.isEmpty()) {
             throw new ServiceException("角色名不能为空");
@@ -110,6 +115,9 @@ public class PermissionRoleService {
         }
         String scope = normalizeScope(adminScope);
         String deptIdsCsv = serializeScopeDeptIds(scope, scopeDeptIds);
+        for (Long deptId : parseScopeDeptIds(deptIdsCsv)) {
+            if (!subjects.activeDept(deptId)) throw new ServiceException("指定部门不存在或已停用");
+        }
         EsPermissionRole duplicate = roleMapper.selectOne(Wrappers.<EsPermissionRole>lambdaQuery()
             .eq(EsPermissionRole::getRoleName, name).last("LIMIT 1"));
         if (duplicate != null && !duplicate.getRoleId().equals(roleId)) {
@@ -125,6 +133,7 @@ public class PermissionRoleService {
                 throw new ServiceException("角色不存在或已删除");
             }
         }
+        RoleVo before = roleId == null ? null : RoleVo.of(role, 0L);
         role.setRoleName(name);
         role.setAdminScope(scope);
         role.setScopeDeptIds(deptIdsCsv);
@@ -139,7 +148,9 @@ public class PermissionRoleService {
             roleMapper.updateById(role);
         }
         long memberCount = userRoleMapper.selectUserIdsOfRole(role.getRoleId()).size();
-        return RoleVo.of(role, memberCount);
+        RoleVo saved = RoleVo.of(role, memberCount);
+        writes.audit("role.save", role.getRoleId(), before, saved);
+        return saved;
     }
 
     /**
@@ -153,6 +164,8 @@ public class PermissionRoleService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long roleId) {
+        writes.begin();
+        writes.requireSuperAdmin();
         EsPermissionRole role = roleId == null ? null : roleMapper.selectById(roleId);
         if (role == null) {
             return;
@@ -169,11 +182,11 @@ public class PermissionRoleService {
                 row = new EsUserPermission();
                 row.setUserId(userId);
             }
-            row.setKnowledge(!Boolean.FALSE.equals(role.getKnowledge()));
-            row.setMeeting(!Boolean.FALSE.equals(role.getMeeting()));
-            row.setDrive(!Boolean.FALSE.equals(role.getDrive()));
-            row.setShared(!Boolean.FALSE.equals(role.getShared()));
-            row.setPlugin(!Boolean.FALSE.equals(role.getPlugin()));
+            row.setKnowledge(Boolean.TRUE.equals(role.getKnowledge()));
+            row.setMeeting(Boolean.TRUE.equals(role.getMeeting()));
+            row.setDrive(Boolean.TRUE.equals(role.getDrive()));
+            row.setShared(Boolean.TRUE.equals(role.getShared()));
+            row.setPlugin(Boolean.TRUE.equals(role.getPlugin()));
             if (insert) {
                 permissionMapper.insert(row);
             } else {
@@ -181,31 +194,42 @@ public class PermissionRoleService {
             }
         }
         roleMapper.deleteById(roleId);
+        writes.audit("role.delete", roleId, Map.of("role", RoleVo.of(role, userIds.size()), "userIds", userIds), null);
     }
 
     /**
-     * 整组替换某成员的角色（空列表 = 回到逐账号配置）。
+     * 整组替换某成员的角色（空列表 = 保留当前功能限制并解除角色）。
      *
      * @param userId  账号 ID
-     * @param roleIds 角色 ID 列表，可空
+     * @param roleIds 角色 ID 列表；清空必须明确提交空列表
      */
     @Transactional(rollbackFor = Exception.class)
     public void assignRoles(Long userId, List<Long> roleIds) {
-        SysUserDept user = userId == null ? null : sysUserDeptMapper.selectById(userId);
-        if (user == null || "2".equals(user.getDelFlag())) {
-            throw new ServiceException("账号不存在或已删除");
-        }
-        Set<Long> ids = new HashSet<>();
-        if (roleIds != null) {
-            roleIds.stream().filter(id -> id != null && id > 0).forEach(ids::add);
-        }
+        writes.begin(userId);
+        writes.requireSuperAdmin();
+        subjects.requireActiveUser(userId);
+        if (roleIds == null || roleIds.stream().anyMatch(id -> id == null || id <= 0))
+            throw new ServiceException("角色标识非法；移除全部角色请明确提交空列表");
+        Set<Long> ids = new java.util.TreeSet<>(roleIds);
         if (!ids.isEmpty() && roleMapper.selectBatchIds(ids).size() != ids.size()) {
             throw new ServiceException("存在已被删除的角色，请刷新后重试");
         }
-        userRoleMapper.deleteByUser(userId);
-        for (Long roleId : ids) {
-            userRoleMapper.insertRow(userId, roleId);
+        List<Long> before = userRoleMapper.selectRoleIdsOfUser(userId);
+        // 最后一个角色撤销时保留生效限制，不能唤醒旧的全开快照或缺行缺省值。
+        if (ids.isEmpty() && !before.isEmpty()) {
+            List<EsPermissionRole> previous = userRoleMapper.selectRolesOfUser(userId);
+            PermissionVo snapshot = previous.size() == before.size()
+                ? PermissionVo.union(userId, previous) : PermissionVo.none(userId);
+            EsUserPermission row = permissionMapper.selectById(userId);
+            boolean insert = row == null;
+            if (insert) { row = new EsUserPermission(); row.setUserId(userId); }
+            row.setKnowledge(snapshot.knowledge()); row.setMeeting(snapshot.meeting());
+            row.setDrive(snapshot.drive()); row.setShared(snapshot.shared()); row.setPlugin(snapshot.plugin());
+            if (insert) permissionMapper.insert(row); else permissionMapper.updateById(row);
         }
+        userRoleMapper.deleteByUser(userId);
+        for (Long roleId : ids) userRoleMapper.insertRow(userId, roleId);
+        writes.audit("role.assign", userId, before, ids);
     }
 
     /**
@@ -215,7 +239,8 @@ public class PermissionRoleService {
      * @return 角色列表
      */
     public List<EsPermissionRole> rolesOf(Long userId) {
-        if (userId == null || userId <= 0) {
+        // 停用后的旧会话仍可能调用 mine，角色名称与功能开关必须使用相同的有效主体边界。
+        if (subjects.activeUser(userId) == null) {
             return List.of();
         }
         return userRoleMapper.selectRolesOfUser(userId);
@@ -233,9 +258,7 @@ public class PermissionRoleService {
      * @return all / dept_children / dept / specified / none
      */
     public String adminScopeOf(Long userId) {
-        if (userId == null || userId <= 0) {
-            return SCOPE_NONE;
-        }
+        if (subjects.activeUser(userId) == null) return SCOPE_NONE;
         if (LoginHelper.isSuperAdmin(userId)) {
             return SCOPE_ALL;
         }
@@ -254,7 +277,7 @@ public class PermissionRoleService {
                     }
                     yield ownDept != null && ownDept > 0;
                 }
-                case SCOPE_SPECIFIED -> parseScopeDeptIds(role.getScopeDeptIds()).isEmpty() == false;
+                case SCOPE_SPECIFIED -> !activeScopeDeptIds(role.getScopeDeptIds()).isEmpty();
                 case SCOPE_ALL -> true;
                 default -> false;
             };
@@ -273,9 +296,9 @@ public class PermissionRoleService {
      * @return 可管理为 true
      */
     public boolean canManage(Long actorId, Long targetId) {
-        if (targetId == null || targetId <= 0) {
-            return false;
-        }
+        if (subjects.activeUser(targetId) == null) return false;
+        // 范围管理员不具有管理超级管理员的权力，即便二者属于同一部门。
+        if (LoginHelper.isSuperAdmin(targetId) && !LoginHelper.isSuperAdmin(actorId)) return false;
         MemberRange range = rangeOf(actorId);
         if (range == null) {
             return false;
@@ -333,8 +356,10 @@ public class PermissionRoleService {
                 .map(rolesById::get)
                 .filter(java.util.Objects::nonNull)
                 .toList();
-            PermissionVo flags = FeaturePermissionService.effective(
-                user.getUserId(), roles, rows.get(user.getUserId()));
+            boolean active = subjects.activeUser(user.getUserId()) != null;
+            PermissionVo flags = active && roleIds.size() == roles.size()
+                ? FeaturePermissionService.effective(user.getUserId(), roles, rows.get(user.getUserId()))
+                : PermissionVo.none(user.getUserId());
             members.add(new AdminMemberVo(
                 user.getUserId(),
                 user.getUserName(),
@@ -349,13 +374,13 @@ public class PermissionRoleService {
                 flags.plugin(),
                 List.copyOf(roleIds),
                 roles.stream().map(EsPermissionRole::getRoleName).toList(),
-                scopeOfMember(user.getUserId(), roles, user.getDeptId())));
+                active ? scopeOfMember(user.getUserId(), roles, user.getDeptId()) : SCOPE_NONE));
         }
         return members;
     }
 
     /** 单个成员的管理范围（管理页显示「子管理员」徽标用，展示值；真实裁剪见 {@link #rangeOf}） */
-    private static String scopeOfMember(Long userId, List<EsPermissionRole> roles, Long deptId) {
+    private String scopeOfMember(Long userId, List<EsPermissionRole> roles, Long deptId) {
         if (LoginHelper.isSuperAdmin(userId)) {
             return SCOPE_ALL;
         }
@@ -367,7 +392,7 @@ public class PermissionRoleService {
             }
             boolean valid = switch (scope) {
                 case SCOPE_DEPT, SCOPE_DEPT_CHILDREN -> deptId != null && deptId > 0;
-                case SCOPE_SPECIFIED -> role.getScopeDeptIds() != null && !role.getScopeDeptIds().isBlank();
+                case SCOPE_SPECIFIED -> !activeScopeDeptIds(role.getScopeDeptIds()).isEmpty();
                 case SCOPE_ALL -> true;
                 default -> false;
             };
@@ -390,9 +415,7 @@ public class PermissionRoleService {
      * 三处共用这一个解析，保证「列表显示的值」和「实际拦截的值」不分叉。
      */
     private MemberRange rangeOf(Long actorId) {
-        if (actorId == null || actorId <= 0) {
-            return null;
-        }
+        if (subjects.activeUser(actorId) == null) return null;
         if (LoginHelper.isSuperAdmin(actorId)) {
             return MemberRange.ALL;
         }
@@ -411,7 +434,7 @@ public class PermissionRoleService {
             switch (scope) {
                 case SCOPE_ALL -> all = true;
                 case SCOPE_SPECIFIED -> {
-                    Set<Long> ids = parseScopeDeptIds(role.getScopeDeptIds());
+                    Set<Long> ids = activeScopeDeptIds(role.getScopeDeptIds());
                     if (!ids.isEmpty()) {
                         deptIds.addAll(ids);
                         anyValid = true;
@@ -449,7 +472,7 @@ public class PermissionRoleService {
             .ne(SysDeptRow::getDelFlag, "2"));
         Map<Long, List<Long>> childrenOf = new HashMap<>();
         for (SysDeptRow dept : depts) {
-            if (dept.getParentId() != null) {
+            if ("0".equals(dept.getStatus()) && "0".equals(dept.getDelFlag()) && dept.getParentId() != null) {
                 childrenOf.computeIfAbsent(dept.getParentId(), key -> new ArrayList<>()).add(dept.getDeptId());
             }
         }
@@ -477,10 +500,19 @@ public class PermissionRoleService {
         for (String part : csv.split(",")) {
             String trimmed = part.trim();
             if (trimmed.matches("\\d+")) {
-                ids.add(Long.valueOf(trimmed));
+                try {
+                    long id = Long.parseLong(trimmed);
+                    if (id > 0) ids.add(id);
+                } catch (NumberFormatException ignored) {
+                    // 历史范围字段损坏时只丢弃非法片段，不能把异常解释成全部成员。
+                }
             }
         }
         return ids;
+    }
+
+    private Set<Long> activeScopeDeptIds(String csv) {
+        return parseScopeDeptIds(csv).stream().filter(subjects::activeDept).collect(Collectors.toSet());
     }
 
     /**

@@ -1,0 +1,78 @@
+{
+  "date": "2026-11-25T13:20:53.937Z",
+  "browser": "158.0.4370.33",
+  "viewport": {
+    "width": 1440,
+    "height": 960
+  },
+  "source": "真实 Vue 源码 + 独立浏览器 Wails 替身",
+  "checks": [
+    {
+      "name": "抽屉连续反向/单实例/退出隔离",
+      "same": true,
+      "count": 1,
+      "inert": true,
+      "opacity": "1"
+    },
+    {
+      "name": "确认框键盘循环/退出",
+      "passed": true
+    },
+    {
+      "name": "连续页面切换落在最新目标",
+      "passed": true
+    },
+    {
+      "name": "键盘跨越屏外渲染边界",
+      "passed": true
+    },
+    {
+      "name": "系统减少动态效果",
+      "preference": true,
+      "drawerTransform": "none",
+      "progressTransition": "none",
+      "animations": 0,
+      "overflow": 0
+    },
+    {
+      "name": "1024×720 尺寸变化",
+      "overflow": 0,
+      "bottom": 720,
+      "height": 720
+    }
+  ],
+  "measurements": [
+    {
+      "name": "千行列表16条进度动画",
+      "rows": 1000,
+      "longTasks": [],
+      "frames": 496,
+      "p50Ms": 10,
+      "p95Ms": 10.100000000000364,
+      "maxMs": 50.09999999999991,
+      "framesOver25Ms": 1,
+      "durationMs": 5008.10000000298,
+      "overflowPx": 0,
+      "layoutCount": 0,
+      "layoutMs": 0,
+      "scriptMs": 16.583000000000002
+    },
+    {
+      "name": "千行列表滚动与真实事件更新",
+      "rows": 1000,
+      "longTasks": [],
+      "frames": 489,
+      "p50Ms": 10,
+      "p95Ms": 10.100000000000364,
+      "maxMs": 120.10000000000036,
+      "framesOver25Ms": 1,
+      "durationMs": 5004.800000002981,
+      "overflowPx": 0,
+      "layoutCount": 33,
+      "layoutMs": 18.727,
+      "scriptMs": 32.260999999999996
+    }
+  ],
+  "passed": true,
+  "errors": []
+}

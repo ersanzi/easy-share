@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { vContentMotion } from '../directives/contentMotion'
 import type { ServiceStatus } from '../types/core'
 
 defineProps<{ status: ServiceStatus }>()
@@ -15,7 +16,7 @@ defineEmits<{
         <span class="section-label">共享空间</span>
         <h2>EasyShare 共享</h2>
       </div>
-      <span :class="['mapping-badge', status.webdav ? 'mapped' : '']">
+      <span v-content-motion="status.webdav" role="status" :class="['mapping-badge', status.webdav ? 'mapped' : '']">
         <i />{{ status.webdav ? '运行中' : '未启动' }}
       </span>
     </header>
@@ -34,13 +35,10 @@ defineEmits<{
     </dl>
 
     <div class="drive-actions">
-      <button v-if="!status.webdav" class="primary-button wide" type="button" @click="$emit('start')">
-        <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>
-        启动共享
-      </button>
-      <button v-else class="secondary-button wide destructive-text" type="button" @click="$emit('stop')">
-        <svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
-        停止共享
+      <button v-content-motion="status.webdav" :class="status.webdav ? 'secondary-button wide destructive-text' : 'primary-button wide'" type="button" @click="status.webdav ? $emit('stop') : $emit('start')">
+        <svg v-if="!status.webdav" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>
+        <svg v-else viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+        {{ status.webdav ? '停止共享' : '启动共享' }}
       </button>
     </div>
 

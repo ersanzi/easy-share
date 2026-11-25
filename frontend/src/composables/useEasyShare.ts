@@ -29,6 +29,20 @@ const reportError = (operation: string, value: unknown) => {
 
 type ErrorSource = 'refresh' | 'operation' | ''
 
+const deviceTask = (task: TransferTask) => !task.ownerId && (!task.kind || task.kind === 'lan_send' || task.kind === 'lan_receive')
+
+// 轮询与事件共用稳定行身份；未变任务不触发整表 VNode 重建。
+const retainTaskRows = (previous: TransferTask[], incoming: TransferTask[]) => {
+  const byId = new Map(previous.map(task => [task.id, task]))
+  const tasks = incoming.map(task => {
+    const old = byId.get(task.id)
+    if (!old) return task
+    const keys = Object.keys(task) as Array<keyof TransferTask>
+    return keys.length === Object.keys(old).length && keys.every(key => Object.is(old[key], task[key])) ? old : task
+  })
+  return tasks.length === previous.length && tasks.every((task, index) => task === previous[index]) ? previous : tasks
+}
+
 export function useEasyShare() {
   const snapshot = ref<CoreSnapshot>(emptySnapshot())
   const loading = ref(true)
@@ -60,15 +74,23 @@ export function useEasyShare() {
     && driveSpaces.value.some(space => space.spaceType === 'shared' && !!space.permission))
   const refreshDriveSpaces = async () => {
     const revision = ++spaceRevision
-    driveSpaces.value = []
-    if (!currentUser.value.loggedIn || !currentUser.value.features?.drive) { selectedDriveSpace.value = 'personal'; return }
+    if (!currentUser.value.loggedIn || !currentUser.value.features?.drive) {
+      driveSpaces.value = []
+      selectedDriveSpace.value = 'personal'
+      return
+    }
     try {
       const spaces = await core.mySpaces()
       if (!disposed && revision === spaceRevision) driveSpaces.value = spaces ?? []
-    } catch { /* 无权或服务离线时不猜共享空间可用。 */ }
+    } catch {
+      if (!disposed && revision === spaceRevision) driveSpaces.value = []
+    }
     if (revision === spaceRevision && !sharedDriveAvailable.value) selectedDriveSpace.value = 'personal'
   }
-  watch(currentUser, () => { void refreshDriveSpaces() })
+  // 头像/昵称更新不触发空间清空；身份或功能变化才重新裁决。
+  watch([() => currentUser.value.userId, () => currentUser.value.loggedIn,
+    () => currentUser.value.features?.drive, () => currentUser.value.features?.shared],
+  () => { driveSpaces.value = []; void refreshDriveSpaces() })
   const loggingIn = ref(false)
   // 在线升级：启动自动检查（Go 侧 24h 节流）发现新版本时记录版本号，
   // 设置入口据此打红点；用户检查/下载后由设置页自身状态接管。
@@ -76,7 +98,10 @@ export function useEasyShare() {
   let timer: number | undefined
   let disposed = false
   let errorSource: ErrorSource = ''
+  let loginRevision = 0
   let authRevision = 0
+  let snapshotRevision = 0
+  let refreshing: Promise<boolean> | null = null
 
   const inactive = () => disposed || shuttingDown.value || stopped.value
 
@@ -97,24 +122,38 @@ export function useEasyShare() {
     errorSource = source
   }
 
-  const refresh = async () => {
-    if (inactive()) return false
-    try {
-      const next = await core.snapshot()
+  const refresh = (): Promise<boolean> => {
+    if (inactive()) return Promise.resolve(false)
+    if (refreshing) return refreshing
+    const revision = snapshotRevision
+    refreshing = Promise.resolve().then(() => core.snapshot()).then(next => {
       if (inactive()) return false
-      snapshot.value = next
-      // Operation failures (especially automatic mapping failures) must remain
-      // visible instead of disappearing on the next one-second status poll.
+      // 轮询开始后收到的实时任务更近，旧快照不能把完成状态退回运行中。
+      if (revision === snapshotRevision) {
+        snapshot.value = { ...next, tasks: retainTaskRows(snapshot.value.tasks, next.tasks ?? []) }
+      }
       if (errorSource === 'refresh') clearError()
       return true
-    } catch (value) {
+    }).catch(value => {
       reportError('刷新状态', value)
-      if (!inactive()) setError('refresh', value)
+      if (!inactive() && revision === snapshotRevision) setError('refresh', value)
       return false
-    } finally {
+    }).finally(() => {
+      refreshing = null
       if (!disposed) loading.value = false
-    }
+    })
+    return refreshing
   }
+
+  // 换号/撤权立即清掉已经画出的账号历史，迟到快照不能重新填回。
+  watch([() => currentUser.value.userId || '', () => currentUser.value.loggedIn, () => currentUser.value.features?.drive === true], () => {
+    snapshotRevision++
+    snapshot.value.tasks = snapshot.value.tasks.filter(deviceTask)
+    const current = snapshotRevision
+    void (refreshing ?? Promise.resolve()).then(() => {
+      if (!inactive() && current === snapshotRevision) void refresh()
+    })
+  }, { flush: 'sync' })
 
   const act = async (operation: string, action: () => Promise<unknown>) => {
     if (inactive()) return false
@@ -183,6 +222,7 @@ export function useEasyShare() {
     if (!document.hidden) {
       // 窗口恢复：立即刷新一次补齐隐藏期间可能遗漏的状态
       void refresh()
+      void syncAuth()
     }
   }
 
@@ -251,6 +291,8 @@ export function useEasyShare() {
       switch (event.type) {
         case 'transfer.updated': {
           const task = event.data as TransferTask
+          if (!deviceTask(task) && (!currentUser.value.loggedIn || !currentUser.value.features?.drive)) break
+          snapshotRevision++
           const index = snapshot.value.tasks.findIndex(t => t.id === task.id)
           if (index >= 0) {
             snapshot.value.tasks[index] = task
@@ -307,11 +349,19 @@ export function useEasyShare() {
     const revision = ++authRevision
     return Promise.resolve(core.currentUser())
       .then(user => { if (!disposed && user && authRevision === revision) currentUser.value = user })
-      .catch(() => undefined)
+      .catch(value => {
+        if (disposed || authRevision !== revision) return
+        // 身份可保留，无法确认的管理权/功能权必须收起，恢复窗口时可重新核验。
+        currentUser.value = { ...currentUser.value, isAdmin: false, adminScope: '', features: { ...emptyUser.features! } }
+        setError('operation', '暂时无法确认访问权限，请恢复连接后重试')
+        reportError('刷新访问权限', value)
+      })
   }
 
   // 桌面端后台刷新了账号态（资料修改、启动校验拿到新权限）：重新取一次。
-  const handleUserUpdated = () => { void syncAuth() }
+  const handleUserUpdated = () => {
+    void syncAuth().then(() => { if (!disposed) void refreshDriveSpaces() })
+  }
 
   onMounted(() => {
     disposed = false
@@ -380,6 +430,8 @@ export function useEasyShare() {
     loggingIn,
     updateAvailable,
     login: async (username: string, password: string): Promise<boolean> => {
+      if (disposed || loggingIn.value) return false
+      const attempt = ++loginRevision
       const revision = ++authRevision
       loggingIn.value = true
       try {
@@ -389,17 +441,21 @@ export function useEasyShare() {
         clearError()
         return true
       } catch (value) {
-        error.value = errorMessage(value)
-        errorSource = 'operation'
+        if (!disposed && authRevision === revision) setError('operation', value)
         return false
       } finally {
-        loggingIn.value = false
+        if (!disposed && loginRevision === attempt) loggingIn.value = false
       }
     },
     logout: async () => {
       authRevision++
-      try { await core.logout() } catch { /* 本地清除即可 */ }
+      loginRevision++
+      loggingIn.value = false
+      // 先撤去界面权限与旧数据；迟到的退出响应不能覆盖后来登录的账号。
       currentUser.value = { ...emptyUser }
+      driveSpaces.value = []
+      spaceRevision++
+      try { await core.logout() } catch { /* 本地清除即可 */ }
     },
     openAdminConsole: async () => {
       try {

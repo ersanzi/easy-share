@@ -2,6 +2,10 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  --motion-fast: 120ms;
+  --motion-enter: 200ms;
+  --motion-exit: 120ms;
+  --motion-ease: cubic-bezier(.2,0,0,1);
   --bg: #f5f6f8; --card: #fff; --line: rgba(0,0,0,.08);
   --text: #1d1d1f; --dim: #86868b; --accent: #0a84ff;
 }
@@ -26,4 +30,11 @@ button {
   padding: 8px 16px; font-size: 13px; cursor: pointer;
   background: var(--accent); color: #fff;
 }
-button:active { opacity: .85; }
+button { transition: opacity var(--motion-fast) var(--motion-ease); }
+button:active:not(:disabled) { opacity: .85; }
+button:disabled { cursor: wait; opacity: .5; }
+main p { min-height: 1.6em; }
+@media (prefers-reduced-motion: no-preference) {
+  main[data-state="ready"] #hint, main[data-state="error"] #hint { animation: state-in var(--motion-enter) var(--motion-ease); }
+}
+@keyframes state-in { from { opacity: .5; } to { opacity: 1; } }

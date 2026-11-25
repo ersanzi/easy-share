@@ -3,6 +3,33 @@
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+// 内容先落到最终态；动画只作提示，可取消，宿主不支持 WAAPI 时直接可见。
+var stateMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: no-preference)') : null;
+var stateMotions = [];
+function revealState(element) {
+  stateMotions.slice().forEach(function (entry) {
+    if (entry.element === element) entry.animation.cancel();
+  });
+  if (!stateMotionQuery || !stateMotionQuery.matches || !element.animate) return;
+  var tokens = getComputedStyle(document.documentElement);
+  var animation = element.animate([{ opacity: .55 }, { opacity: 1 }], {
+    duration: parseFloat(tokens.getPropertyValue('--motion-enter')) || 200,
+    easing: tokens.getPropertyValue('--motion-ease').trim() || 'cubic-bezier(.2,0,0,1)'
+  });
+  var entry = { element: element, animation: animation };
+  stateMotions.push(entry);
+  animation.onfinish = animation.oncancel = function () {
+    var index = stateMotions.indexOf(entry);
+    if (index >= 0) stateMotions.splice(index, 1);
+  };
+}
+if (stateMotionQuery) {
+  var stopStateMotion = function () {
+    if (!stateMotionQuery.matches) stateMotions.slice().forEach(function (entry) { entry.animation.cancel(); });
+  };
+  if (stateMotionQuery.addEventListener) stateMotionQuery.addEventListener('change', stopStateMotion);
+  else if (stateMotionQuery.addListener) stateMotionQuery.addListener(stopStateMotion);
+}
 
 // ---------------------------------------------------------------------------
 // Tab 切换
@@ -30,36 +57,76 @@ $$(".sub-tab").forEach((tab) => {
 // Tab 1: 单文档透视
 // ---------------------------------------------------------------------------
 async function loadDocuments() {
-  const resp = await fetch("/debug/documents");
-  const data = await resp.json();
-  const select = $("#doc-select");
-  select.innerHTML = '<option value="">选择已入库文档…</option>';
-  for (const doc of data.documents) {
-    const opt = document.createElement("option");
-    opt.value = doc.file_id;
-    opt.textContent = `${doc.filename} (${doc.file_id})`;
-    select.appendChild(opt);
+  const button = $("#btn-refresh-docs");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  $("#inspect-status").textContent = "正在刷新文档列表…";
+  try {
+    const resp = await fetch("/debug/documents");
+    if (!resp.ok) throw new Error("读取失败（" + resp.status + "）");
+    const data = await resp.json();
+    const select = $("#doc-select");
+    const selected = select.value;
+    select.innerHTML = '<option value="">选择已入库文档…</option>';
+    for (const doc of data.documents) {
+      const opt = document.createElement("option");
+      opt.value = doc.file_id;
+      opt.textContent = `${doc.filename} (${doc.file_id})`;
+      select.appendChild(opt);
+    }
+    if (Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+    else if (selected) inspectDocument("");
+    $("#inspect-status").textContent = data.documents.length ? "文档列表已更新" : "暂无已入库文档";
+  } catch (err) {
+    $("#inspect-status").textContent = "文档列表读取失败：" + err.message;
+  } finally {
+    button.disabled = false;
+    button.setAttribute("aria-busy", "false");
   }
 }
 
+let inspectRevision = 0;
 async function inspectDocument(fileId) {
-  if (!fileId) return;
+  const revision = ++inspectRevision;
+  if (!fileId) {
+    $("#inspect-content").style.display = "none";
+    $("#inspect-content").classList.remove("loading");
+    $("#inspect-content").setAttribute("aria-busy", "false");
+    $("#inspect-empty").style.display = "block";
+    $("#inspect-empty").textContent = "选择一份文档查看管线产物";
+    $("#inspect-status").textContent = "";
+    return;
+  }
   $("#inspect-content").style.display = "grid";
   $("#inspect-empty").style.display = "none";
   $("#inspect-content").classList.add("loading");
+  $("#inspect-content").setAttribute("aria-busy", "true");
+  $("#inspect-status").textContent = "正在读取文档…";
 
   try {
-    const resp = await fetch(`/debug/document/${fileId}`);
+    const resp = await fetch("/debug/document/" + encodeURIComponent(fileId));
+    if (!resp.ok) throw new Error("读取失败（" + resp.status + "）");
     const data = await resp.json();
+    if (revision !== inspectRevision) return;
     renderCleanMarkdown(data.clean_markdown);
     renderChunks(data.chunks);
     renderBlocks(data.document);
     renderDiff(data.cleaning_actions);
     renderStats(data.stats, data.manifest);
+    $("#inspect-status").textContent = "文档已更新";
+    revealState($("#inspect-content"));
   } catch (err) {
-    console.error("inspect failed:", err);
+    if (revision !== inspectRevision) return;
+    $("#inspect-content").style.display = "none";
+    $("#inspect-empty").style.display = "block";
+    $("#inspect-empty").textContent = "文档读取失败：" + err.message;
+    $("#inspect-status").textContent = "读取失败，请重新选择文档重试";
   } finally {
-    $("#inspect-content").classList.remove("loading");
+    if (revision === inspectRevision) {
+      $("#inspect-content").classList.remove("loading");
+      $("#inspect-content").setAttribute("aria-busy", "false");
+    }
   }
 }
 
@@ -191,13 +258,17 @@ $("#doc-select").addEventListener("change", (e) => inspectDocument(e.target.valu
 // Tab 2: 检索调试
 // ---------------------------------------------------------------------------
 async function doSearch() {
+  if ($("#btn-search").disabled) return;
   const question = $("#query-input").value.trim();
   if (!question) return;
   const topK = parseInt($("#query-topk").value) || 5;
 
   $("#retrieve-results").innerHTML = "";
-  $("#retrieve-empty").style.display = "none";
+  $("#retrieve-empty").style.display = "block";
+  $("#retrieve-empty").textContent = "正在检索…";
   $("#btn-search").classList.add("loading");
+  $("#btn-search").disabled = true;
+  $("#retrieve-results").setAttribute("aria-busy", "true");
 
   try {
     const resp = await fetch("/debug/query", {
@@ -205,12 +276,17 @@ async function doSearch() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, top_k: topK, strategies: ["vector", "bm25", "hybrid", "reranked", "multi_hop"] }),
     });
+    if (!resp.ok) throw new Error("请求失败（" + resp.status + "）");
     const data = await resp.json();
     renderMultiStrategy(data, question);
+    $("#retrieve-empty").style.display = "none";
+    revealState($("#retrieve-results"));
   } catch (err) {
-    $("#retrieve-results").innerHTML = `<div class="empty-state">检索失败: ${err.message}</div>`;
+    $("#retrieve-empty").textContent = "检索失败：" + err.message;
   } finally {
     $("#btn-search").classList.remove("loading");
+    $("#btn-search").disabled = false;
+    $("#retrieve-results").setAttribute("aria-busy", "false");
   }
 }
 
@@ -270,13 +346,17 @@ $("#query-input").addEventListener("keydown", (e) => { if (e.key === "Enter") do
 // Tab 3: 生成审计
 // ---------------------------------------------------------------------------
 async function doGenerate() {
+  if ($("#btn-generate").disabled) return;
   const question = $("#gen-input").value.trim();
   if (!question) return;
   const topK = parseInt($("#gen-topk").value) || 5;
 
   $("#gen-content").style.display = "none";
-  $("#gen-empty").style.display = "none";
+  $("#gen-empty").style.display = "block";
+  $("#gen-empty").textContent = "正在生成与审计…";
   $("#btn-generate").classList.add("loading");
+  $("#btn-generate").disabled = true;
+  $("#gen-content").setAttribute("aria-busy", "true");
 
   try {
     const resp = await fetch("/debug/generate", {
@@ -284,13 +364,18 @@ async function doGenerate() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, top_k: topK }),
     });
+    if (!resp.ok) throw new Error("请求失败（" + resp.status + "）");
     const data = await resp.json();
     renderGeneration(data);
+    $("#gen-empty").style.display = "none";
+    revealState($("#gen-content"));
   } catch (err) {
     $("#gen-empty").style.display = "block";
     $("#gen-empty").textContent = `生成失败: ${err.message}`;
   } finally {
     $("#btn-generate").classList.remove("loading");
+    $("#btn-generate").disabled = false;
+    $("#gen-content").setAttribute("aria-busy", "false");
   }
 }
 
@@ -401,14 +486,23 @@ function highlightKeywords(html, keywords) {
 // Tab 4: 健康度仪表盘
 // ---------------------------------------------------------------------------
 async function loadHealth() {
+  const button = $("#btn-health");
+  if (button.disabled) return;
+  button.disabled = true;
   const container = $("#health-content");
+  container.setAttribute("aria-busy", "true");
   container.innerHTML = '<div class="empty-state">加载中…</div>';
   try {
     const resp = await fetch("/debug/health");
+    if (!resp.ok) throw new Error("请求失败（" + resp.status + "）");
     const data = await resp.json();
     renderHealth(data);
+    revealState(container);
   } catch (err) {
-    container.innerHTML = `<div class="empty-state">加载失败: ${err.message}</div>`;
+    container.textContent = "加载失败：" + err.message;
+  } finally {
+    button.disabled = false;
+    container.setAttribute("aria-busy", "false");
   }
 }
 

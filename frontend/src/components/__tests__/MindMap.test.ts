@@ -112,6 +112,7 @@ describe('MindMap', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -138,6 +139,47 @@ describe('MindMap', () => {
     // 卸载后再等一拍，让 markmap 的 rAF/timer 收干净（否则会漏报 unhandled error 污染其它用例）
     wrapper.unmount()
     await flush(150)
+  })
+
+  it('does not report an obsolete loader failure over a newer rendered map', async () => {
+    let rejectOld!: (reason: Error) => void
+    const delayed = vi.fn<() => ReturnType<typeof loader>>()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject }))
+      .mockImplementation(loader)
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const wrapper = mount(MindMap, { props: { markdown: MARKDOWN, duration: 0, loader: delayed }, attachTo: document.body })
+    expect(await waitFor(() => delayed.mock.calls.length === 1)).toBe(true)
+    await wrapper.setProps({ markdown: '# 新的会议内容' })
+    expect(await waitFor(() => !!wrapper.find('svg').element.textContent?.includes('新的会议内容'))).toBe(true)
+    rejectOld(new Error('过期请求失败'))
+    await flush(30)
+    expect(wrapper.text()).not.toContain('导图渲染失败')
+    expect(log).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('ignores a pending library result after unmount', async () => {
+    let finish!: (value: Awaited<ReturnType<typeof loader>>) => void
+    const delayed = vi.fn(() => new Promise<Awaited<ReturnType<typeof loader>>>(resolve => { finish = resolve }))
+    const create = vi.spyOn(markmapView.Markmap, 'create')
+    const wrapper = mount(MindMap, { props: { markdown: MARKDOWN, loader: delayed }, attachTo: document.body })
+    expect(await waitFor(() => delayed.mock.calls.length === 1)).toBe(true)
+    wrapper.unmount()
+    finish(await loader())
+    await flush(30)
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('disables SVG movement under reduced motion and releases the preference listener', async () => {
+    const preference = { matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }
+    vi.stubGlobal('matchMedia', vi.fn(() => preference))
+    const create = vi.spyOn(markmapView.Markmap, 'create')
+    const wrapper = mount(MindMap, { props: { markdown: MARKDOWN, duration: 300, loader }, attachTo: document.body })
+    expect(await waitFor(() => create.mock.calls.length === 1)).toBe(true)
+    expect(create.mock.calls[0]?.[1]?.duration).toBe(0)
+    wrapper.unmount()
+    expect(preference.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
+    await flush(30)
   })
 
   it('空内容给出引导文案而不是崩溃', async () => {

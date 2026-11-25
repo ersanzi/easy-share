@@ -67,6 +67,7 @@
       <button class="ghost danger" id="clearBtn" type="button" title="清空全部记录">清空</button>
     </header>
 
+    <p class="load-status" id="loadStatus" role="status" aria-live="polite"></p>
     <div class="flow" id="flow">
       <!-- 分组区块由 JS 按 天 渲染进这里 -->
     </div>
@@ -98,6 +99,7 @@
     <button class="chip" data-chipkind="url" type="button">链接</button>
     <button class="chip" data-chipkind="files" type="button">文件</button>
   </div>
+  <p class="load-status" id="panelLoadStatus" role="status" aria-live="polite"></p>
   <div class="panel-list" id="panelList"><!-- 行由 JS 渲染 --></div>
   <div class="panel-foot">
     <span id="panelHotkey" hidden><kbd>Win+V</kbd> 唤起</span>
@@ -108,7 +110,7 @@
   <div class="panel-empty" id="panelEmpty" hidden>暂无匹配记录</div>
 </div>
 
-<div id="toast" hidden></div>
+<div id="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

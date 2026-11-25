@@ -60,8 +60,9 @@ type App struct {
 	trayOnce     sync.Once
 
 	// 账号控制面（RuoYi）会话。token 只保管在桌面端进程，不下发前端。
-	accountMu      sync.RWMutex
-	accountSession *account.Session
+	accountMu        sync.RWMutex
+	accountSession   *account.Session
+	taskEventsCancel context.CancelFunc
 	// accountRevision 使同账号资料请求的迟到结果无法覆盖新资料或注销后的状态。
 	accountRevision    uint64
 	accountRefreshOnce sync.Once
@@ -267,12 +268,15 @@ func (a *App) coreClient() (*desktop.Client, error) {
 }
 
 func (a *App) GetSnapshot() (desktop.Snapshot, error) {
-	client, err := a.coreClient()
+	client, session, err := a.taskClient()
 	if err != nil {
 		a.reportError("get snapshot", err)
 		return desktop.Snapshot{}, err
 	}
 	result, err := client.Snapshot(a.ctx)
+	if !a.taskSessionCurrent(session) {
+		return desktop.Snapshot{}, staleProfileError()
+	}
 	a.reportError("get snapshot", err)
 	// 个人云盘归控制面管，Core 无从判断可用性，故由桌面端按会话状态覆盖。
 	result.Status.CloudEnabled = a.cloudAvailable()
@@ -412,17 +416,24 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 		a.logger.Printf("login failed for %q: %v", username, err)
 		return AuthUser{}, err
 	}
+	// 与知识会话同步/注销串行提交，避免旧注销在新账号登录后清掉其会话。
+	a.knowledgeSyncMu.Lock()
 	a.accountMu.Lock()
 	if a.accountRevision != loginRevision {
 		a.accountMu.Unlock()
+		a.knowledgeSyncMu.Unlock()
 		return AuthUser{}, staleProfileError()
 	}
+	a.cancelTaskEventsLocked()
 	a.accountSession = session
 	a.accountRevision++
-	a.features = account.AllFeatures()
-	a.adminScope = ""
+	a.features = account.FeatureFlags{}
+	a.adminScope = account.AdminScopeNone
 	a.accountMu.Unlock()
-	// 权限与头像要登录后才知道；拉不到就按全开 + 现有头像显示，入口不因抖动消失。
+	// 新账号接管前清理旧企业知识会话；后续探测失败也不能继续借用旧身份。
+	a.clearKnowledgeSSOLocked()
+	a.knowledgeSyncMu.Unlock()
+	// 权限与头像要登录后才知道；未确认权限时功能保持关闭。
 	a.syncAccountProfile(ctx, client, session)
 	a.SetDropSpace("")
 	a.saveAccountSession(session)
@@ -439,14 +450,19 @@ func (a *App) Login(username, password string) (AuthUser, error) {
 
 // Logout 清除本地会话，并尽力通知控制面登出。
 func (a *App) Logout() {
+	a.knowledgeSyncMu.Lock()
 	a.accountMu.Lock()
 	session := a.accountSession
 	a.accountMu.Unlock()
-	a.clearAccountSession()
+	if !a.clearAccountSessionIf(session) {
+		a.knowledgeSyncMu.Unlock()
+		return
+	}
 	// 统一登录得来的知识会话随账号一起失效；用户手动登录的知识会话保留，不动用户自己的配置。
-	a.clearKnowledgeSSO()
+	a.clearKnowledgeSSOLocked()
 	// 先卸盘再通知控制面：会话已清空，挂着的盘此刻已经不可用，留着只会让用户点进去报错
 	a.unmountAllSpaces()
+	a.knowledgeSyncMu.Unlock()
 	if session == nil {
 		return
 	}
@@ -486,15 +502,20 @@ func (a *App) saveAccountSession(session *account.Session) {
 }
 
 func (a *App) clearAccountSession() {
-	a.clearAccountSessionIf(nil)
+	a.clearAccountSessionMatching(nil, false)
 }
 
 func (a *App) clearAccountSessionIf(expected *account.Session) bool {
+	return a.clearAccountSessionMatching(expected, true)
+}
+
+func (a *App) clearAccountSessionMatching(expected *account.Session, compare bool) bool {
 	a.accountMu.Lock()
-	if expected != nil && a.accountSession != expected {
+	if compare && a.accountSession != expected {
 		a.accountMu.Unlock()
 		return false
 	}
+	a.cancelTaskEventsLocked()
 	a.accountSession = nil
 	a.accountRevision++
 	a.features = account.FeatureFlags{}
@@ -531,11 +552,12 @@ func (a *App) restoreAccountSession() {
 		return
 	}
 	a.accountMu.Lock()
+	a.cancelTaskEventsLocked()
 	a.accountSession = session
 	a.accountRevision++
-	// 落盘会话不含权限快照：恢复时先按全开显示，等下面异步校验拿到真实配置再收口。
-	a.features = account.AllFeatures()
-	a.adminScope = ""
+	// 落盘身份不能作为授权证据；等待控制面实时确认。
+	a.features = account.FeatureFlags{}
+	a.adminScope = account.AdminScopeNone
 	a.accountMu.Unlock()
 	a.logger.Printf("restored account session for %s", session.User.UserName)
 	// 前端可能早于 Core 启动完成读取过未登录态；恢复后发布不含令牌的用户快照。
@@ -562,12 +584,14 @@ func (a *App) validateAccountSession() {
 	if err := a.refreshAccountSession(ctx, client, session); err == nil {
 		return
 	} else if errors.Is(err, account.ErrUnauthorized) {
+		a.knowledgeSyncMu.Lock()
+		defer a.knowledgeSyncMu.Unlock()
 		// 旧账号的迟到401必须与清空原子比较，不能越过新的登录世代。
 		if !a.clearAccountSessionIf(session) {
 			return
 		}
 		a.logger.Printf("account session rejected: %v", err)
-		a.clearKnowledgeSSO()
+		a.clearKnowledgeSSOLocked()
 		a.unmountAllSpaces()
 		a.publishTrayUser()
 		if a.ctx != nil {
@@ -676,7 +700,7 @@ func (a *App) syncKnowledgeAccess() {
 }
 
 // registerKnowledgeSSO 用当前账号令牌登记知识会话。知识服务没接统一登录（旧部署、
-// 未配置控制面）时这里探测失败：不覆盖已有的手动登录会话，知识页回落到手动登录。
+// 未配置控制面）时探测失败，保持未登录；不能继续借用上一账号的知识会话。
 func (a *App) registerKnowledgeSSO(serverURL string) {
 	serverURL = strings.TrimSpace(serverURL)
 	if serverURL == "" {
@@ -703,7 +727,7 @@ func (a *App) registerKnowledgeSSO(serverURL string) {
 	a.accountMu.RLock()
 	current := a.accountSession
 	a.accountMu.RUnlock()
-	if current == nil || current.Token != session.Token {
+	if current != session {
 		if err := a.KnowledgeLogout(); err != nil {
 			a.logger.Printf("revoke stale knowledge sso: %v", err)
 		}
@@ -719,6 +743,11 @@ func (a *App) registerKnowledgeSSO(serverURL string) {
 func (a *App) clearKnowledgeSSO() {
 	a.knowledgeSyncMu.Lock()
 	defer a.knowledgeSyncMu.Unlock()
+	a.clearKnowledgeSSOLocked()
+}
+
+// 调用方持有 knowledgeSyncMu，使身份提交与跨进程注销处于同一顺序。
+func (a *App) clearKnowledgeSSOLocked() {
 	status, err := a.KnowledgeStatus()
 	if err != nil || !status.LoggedIn || status.Mode != knowledge.ModeSSO {
 		return
@@ -850,7 +879,7 @@ func (a *App) currentUserLocked() AuthUser {
 		UserName:   u.UserName,
 		NickName:   u.NickName,
 		Avatar:     u.Avatar,
-		IsAdmin:    a.accountSession.IsAdmin(),
+		IsAdmin:    a.adminScope == account.AdminScopeAll && a.accountSession.IsAdmin(),
 		AdminScope: a.adminScope,
 		Features:   a.features,
 	}
@@ -866,14 +895,13 @@ func (a *App) notifyAccountChanged() {
 }
 
 // syncAccountProfile 拉取功能权限与头像地址，写回会话与 App.features。
-// 读不到时保持「五项全开 + 会话里已有的头像」：入口显隐只是可用性提示，
-// 真正的拦截在控制面与知识服务，不该因为一次网络抖动就把入口全藏起来。
+// 读不到权限时关闭全部功能与管理入口；头像仍保留已知展示值。
 func (a *App) syncAccountProfile(ctx context.Context, client *account.Client, session *account.Session) {
 	request, valid := a.beginAccountProfileRequest(session)
 	if !valid {
 		return
 	}
-	flags, scope, avatar := a.readAccountProfile(ctx, client, session)
+	flags, scope, avatar, _ := a.readAccountProfile(ctx, client, session)
 	a.accountMu.Lock()
 	if a.accountSession == session && a.accountRevision == request {
 		session.User.Avatar = avatar
@@ -883,14 +911,20 @@ func (a *App) syncAccountProfile(ctx context.Context, client *account.Client, se
 	a.accountMu.Unlock()
 }
 
-func (a *App) readAccountProfile(ctx context.Context, client *account.Client, session *account.Session) (account.FeatureFlags, string, string) {
-	flags := account.AllFeatures()
-	scope := ""
-	if got, err := client.MyPermission(ctx, session.Token); err == nil && got != nil {
+func (a *App) readAccountProfile(ctx context.Context, client *account.Client, session *account.Session) (account.FeatureFlags, string, string, error) {
+	flags := account.FeatureFlags{}
+	scope := account.AdminScopeNone
+	got, permissionErr := client.MyPermission(ctx, session.Token)
+	if permissionErr == nil && got != nil && got.UserID != "" && got.UserID != session.User.UserID {
+		permissionErr = fmt.Errorf("权限应答与当前账号不一致")
+	}
+	if permissionErr == nil && got != nil {
 		flags = got.FeatureFlags
-		scope = got.AdminScope
-	} else if err != nil {
-		a.logger.Printf("read feature permissions (keep all enabled): %v", err)
+		if account.HasAdminEntry(got.AdminScope) {
+			scope = got.AdminScope
+		}
+	} else if permissionErr != nil {
+		a.logger.Printf("read feature permissions (deny until confirmed): %v", permissionErr)
 	}
 	avatar := session.User.AvatarURL
 	if avatar == "" {
@@ -903,7 +937,7 @@ func (a *App) readAccountProfile(ctx context.Context, client *account.Client, se
 	} else {
 		a.logger.Printf("read account avatar (keep existing): %v", err)
 	}
-	return flags, scope, avatar
+	return flags, scope, avatar, permissionErr
 }
 
 // absoluteAccountURL 把控制面返回的相对地址补成可直接渲染的绝对地址。
@@ -1162,7 +1196,10 @@ func (a *App) adminSession() (*account.Client, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if !session.IsAdmin() {
+	a.accountMu.RLock()
+	allowed := a.accountSession == session && a.adminScope == account.AdminScopeAll && session.IsAdmin()
+	a.accountMu.RUnlock()
+	if !allowed {
 		return nil, "", fmt.Errorf("当前账号没有管理权限")
 	}
 	return client, token, nil
@@ -1178,9 +1215,9 @@ func (a *App) permissionAdminSession() (*account.Client, string, error) {
 		return nil, "", err
 	}
 	a.accountMu.RLock()
-	scope := a.adminScope
+	allowed := a.accountSession == session && account.HasAdminEntry(a.adminScope)
 	a.accountMu.RUnlock()
-	if !session.IsAdmin() && !account.HasAdminEntry(scope) {
+	if !allowed {
 		return nil, "", fmt.Errorf("当前账号没有管理权限")
 	}
 	return client, token, nil
@@ -1582,7 +1619,7 @@ func (a *App) OpenFile(path string) error {
 	if path == "" {
 		return nil
 	}
-	err := fsutil.OpenFile(path)
+	err := a.openTaskPath(path, fsutil.OpenFile)
 	a.reportError("open file", err)
 	return err
 }
@@ -1592,7 +1629,7 @@ func (a *App) ShowInFolder(path string) error {
 	if path == "" {
 		return nil
 	}
-	err := fsutil.ShowInFolder(path)
+	err := a.openTaskPath(path, fsutil.ShowInFolder)
 	a.reportError("show in folder", err)
 	return err
 }
@@ -1624,7 +1661,7 @@ func (a *App) openReceiveFolder(openFolder func(string) error) error {
 }
 
 func (a *App) ClearHistory() error {
-	client, err := a.coreClient()
+	client, _, err := a.taskClient()
 	if err == nil {
 		err = client.ClearTasks(a.ctx)
 	}
@@ -1633,7 +1670,7 @@ func (a *App) ClearHistory() error {
 }
 
 func (a *App) DeleteTask(id string) error {
-	client, err := a.coreClient()
+	client, _, err := a.taskClient()
 	if err == nil {
 		err = client.DeleteTask(a.ctx, id)
 	}
@@ -1731,6 +1768,9 @@ func (a *App) driveClient() (*drive.Client, string, error) {
 	capabilities, err := client.Capabilities(a.ctx, session.Token)
 	if err != nil {
 		return nil, "", err
+	}
+	if !a.taskSessionCurrent(session) {
+		return nil, "", staleProfileError()
 	}
 	client.VerifyUploadCommit = capabilities.UploadCommitVerification
 	// 大文件会话持久化目录：与 config.json 同级（数据根），进程重启后同指纹
@@ -2162,7 +2202,7 @@ func (a *App) uploadClients() (*desktop.Client, *drive.Client, string, error) {
 	if err != nil {
 		return nil, nil, "", err
 	}
-	return core, driveClient, token, nil
+	return core.WithAccountToken(token), driveClient, token, nil
 }
 
 // uploadSingleFile 上传单个文件：字节经控制面预签名直传 RustFS，
@@ -2459,10 +2499,17 @@ func (a *App) startCloudDownloadInSpace(space, key, dir, name string) error {
 	if err != nil {
 		return err
 	}
+	a.accountMu.RLock()
+	session := a.accountSession
+	a.accountMu.RUnlock()
 	client, token, err := a.driveClient()
 	if err != nil {
 		return err
 	}
+	if session == nil || session.Token != token || !a.taskSessionCurrent(session) {
+		return staleProfileError()
+	}
+	core = core.WithAccountToken(token)
 	body, size, err := client.Open(a.ctx, token, space, key)
 	if err != nil {
 		a.reportError("cloud download", err)
@@ -2475,6 +2522,9 @@ func (a *App) startCloudDownloadInSpace(space, key, dir, name string) error {
 		}
 	}()
 
+	if !a.taskSessionCurrent(session) {
+		return staleProfileError()
+	}
 	explicitTarget := name != ""
 	if dir == "" {
 		dir, err = a.downloadDirectory()
@@ -2520,12 +2570,12 @@ func (a *App) startCloudDownloadInSpace(space, key, dir, name string) error {
 		return createErr
 	}
 	started = true
-	go a.copyCloudDownload(core, created.ID, body, temp, target, size)
+	go a.copyCloudDownload(core, created.ID, body, temp, target, size, session)
 	return nil
 }
 
 // copyCloudDownload 把远端流写进临时文件，200ms 节流上报进度，完成后原子落位。
-func (a *App) copyCloudDownload(core *desktop.Client, taskID string, body io.ReadCloser, file *os.File, target string, total int64) {
+func (a *App) copyCloudDownload(core *desktop.Client, taskID string, body io.ReadCloser, file *os.File, target string, total int64, session *account.Session) {
 	defer body.Close()
 	tempPath := file.Name()
 	start := time.Now()
@@ -2542,6 +2592,10 @@ func (a *App) copyCloudDownload(core *desktop.Client, taskID string, body io.Rea
 	buffer := make([]byte, 256*1024)
 	for {
 		read, readErr := body.Read(buffer)
+		if !a.taskSessionCurrent(session) {
+			fail(staleProfileError())
+			return
+		}
 		if read > 0 {
 			if _, writeErr := file.Write(buffer[:read]); writeErr != nil {
 				fail(driveerr.Wrap(fmt.Errorf("写入本地文件失败：%w", writeErr), driveerr.CodeLocal))
@@ -2572,12 +2626,30 @@ func (a *App) copyCloudDownload(core *desktop.Client, taskID string, body io.Rea
 		}
 	}
 
+	// 短读不得落位成成功文件；控制面失联或撤权后也不再提交本地结果。
+	if total > 0 && written != total {
+		fail(fmt.Errorf("下载内容长度不符：收到 %d，预期 %d", written, total))
+		return
+	}
+	if err := core.CheckTaskPath(a.ctx, target); err != nil {
+		fail(err)
+		return
+	}
+
 	if err := file.Close(); err != nil {
 		_ = os.Remove(tempPath)
 		a.failTask(core, taskID, driveerr.Wrap(fmt.Errorf("关闭本地文件失败：%w", err), driveerr.CodeLocal))
 		return
 	}
-	if err := placeDownloadedFile(tempPath, target); err != nil {
+	a.accountMu.RLock()
+	if session == nil || a.accountSession != session {
+		a.accountMu.RUnlock()
+		fail(staleProfileError())
+		return
+	}
+	placeErr := placeDownloadedFile(tempPath, target)
+	a.accountMu.RUnlock()
+	if err := placeErr; err != nil {
 		_ = os.Remove(tempPath)
 		a.failTask(core, taskID, driveerr.Wrap(fmt.Errorf("保存文件失败：%w", err), driveerr.CodeLocal))
 		return
@@ -3269,7 +3341,7 @@ func (a *App) eventStream() {
 		if a.isQuitting() {
 			return
 		}
-		client, err := a.coreClient()
+		client, session, err := a.taskClient()
 		if err != nil {
 			time.Sleep(backoff)
 			backoff = min(backoff*2, maxBackoff)
@@ -3277,13 +3349,31 @@ func (a *App) eventStream() {
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		a.accountMu.Lock()
+		if a.accountSession != session {
+			a.accountMu.Unlock()
+			cancel()
+			continue
+		}
+		a.taskEventsCancel = cancel
+		a.accountMu.Unlock()
 		err = client.SubscribeEvents(ctx, func(raw []byte) {
+			// 会话检查与交付串行，旧订阅不能把任务和路径交给新账号。
+			a.accountMu.RLock()
+			defer a.accountMu.RUnlock()
+			if a.accountSession != session {
+				return
+			}
 			// 转发原始 JSON 给前端，前端按 type 字段分发
 			runtime.EventsEmit(a.ctx, "core-event", string(raw))
 			// 传输完成/失败时弹系统通知
 			a.notifyTransfer(raw)
 		})
 		cancel()
+		if !a.taskSessionCurrent(session) {
+			backoff = time.Second
+			continue
+		}
 
 		if a.isQuitting() {
 			return

@@ -16,25 +16,27 @@
   <button id="weekly" class="primary">生成周报</button>
 </header>
 
-<main id="list" class="list"></main>
+<p id="saveStatus" class="save-status" role="status" aria-live="polite"></p>
+<button id="retryLoad" class="secondary" hidden>重试读取</button>
+<main id="list" class="list" aria-busy="true"></main>
 <p id="empty" class="empty" hidden>还没有待办。把要做的事记下来，周五一键生成周报。</p>
 
-<div id="reportPanel" class="sheet" hidden>
+<div id="reportPanel" class="sheet" role="dialog" aria-modal="true" aria-labelledby="reportTitle" aria-hidden="true" inert hidden>
   <div class="sheet-card">
     <header class="sheet-head">
-      <h2>本周周报</h2>
+      <h2 id="reportTitle">本周周报</h2>
       <button id="closeReport" class="ghost" aria-label="关闭">✕</button>
     </header>
     <pre id="reportBody" class="report-body"></pre>
     <footer class="sheet-foot">
       <button id="copyReport" class="primary">复制全文</button>
       <button id="saveReport" class="secondary">存入我的云盘</button>
-      <span id="reportHint" class="hint"></span>
+      <span id="reportHint" class="hint" role="status" aria-live="polite"></span>
     </footer>
   </div>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
 <script src="/plugins/_sdk/eshare.js"></script>
 <script src="app.js"></script>
 </body>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { presenceMotion, vContentMotion } from './directives/contentMotion'
 import ActivityDrawer from './components/ActivityDrawer.vue'
 import AdminPanel from './components/AdminPanel.vue'
 import CloudPanel from './components/CloudPanel.vue'
@@ -56,7 +57,9 @@ const sectionMeta: Record<SectionId, { label: string; title: string; subtitle: s
 }
 const railSection = computed(() => sectionOf(view.value))
 // 功能权限只决定入口显隐；拦截在控制面与知识服务，这里藏按钮不是鉴权。
-const features = computed(() => app.currentUser.value.features)
+const features = computed(() => app.currentUser.value.features ?? {
+  knowledge: false, meeting: false, drive: false, shared: false, plugin: false,
+})
 const sectionVisible = (id: SectionId) => {
   switch (id) {
     case 'drive': return features.value.drive
@@ -330,8 +333,8 @@ const avatarText = computed(() => {
       >
         <svg viewBox="0 0 24 24"><path d="M5 7h14v12H5z"/><path d="M8 4h8M9 11h6M9 15h4"/></svg>
         <span>活动</span>
-        <b v-if="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
-        <b v-if="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
+        <b v-if="activeTaskCount" v-content-motion="activeTaskCount" class="activity-badge">{{ activeTaskCount }}</b>
+        <b v-if="failedTaskCount" v-content-motion="failedTaskCount" class="activity-badge failed">! {{ failedTaskCount }}</b>
       </button>
 
       <!-- 当前账号：头像（点击进设置）+ 昵称 + 登出 -->
@@ -379,6 +382,7 @@ const avatarText = computed(() => {
       @cancel="settle(false)"
     />
     <!-- 拖拽发送：设备选择浮层 -->
+    <Transition v-bind="presenceMotion" name="es-dialog">
     <DevicePicker
       v-if="app.droppedFiles.value.length || app.droppedDirs.value.length"
       :files="app.droppedFiles.value"
@@ -389,12 +393,19 @@ const avatarText = computed(() => {
       @cancel="app.cancelDrop"
     />
 
+    </Transition>
+
+    <Transition v-bind="presenceMotion" name="es-drawer">
     <ActivityDrawer
-      v-if="activityOpen"
+      v-show="activityOpen"
+      :open="activityOpen"
       :tasks="app.snapshot.value.tasks"
+      :inert="!activityOpen"
       @close="closeActivityDrawer"
       @view-all="showAllTasks"
     />
+
+    </Transition>
 
     <div class="app-body">
       <!-- ① 图标轨（对标 WPS 左轨）：只放产品域，图标 + 10px 标签，选中抬起成白底胶囊。
@@ -531,7 +542,7 @@ const avatarText = computed(() => {
         </div>
       </aside>
 
-      <section :class="['workspace', activePlugin ? 'is-plugin' : '']">
+      <section v-content-motion="view" :class="['workspace', activePlugin ? 'is-plugin' : '']">
         <!-- ═══ 设置页 ═══ -->
         <SettingsPanel v-if="view === 'settings'" @logout="app.logout" />
 
@@ -567,7 +578,7 @@ const avatarText = computed(() => {
               </button>
             </header>
 
-            <div v-if="app.error.value" class="alert" role="alert">
+            <div v-if="app.error.value" v-content-motion="app.error.value" class="alert" role="alert">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
               <span class="alert-copy">
                 <b>{{ app.error.value }}</b>
@@ -645,7 +656,7 @@ const avatarText = computed(() => {
                     aria-valuemin="0"
                     aria-valuemax="100"
                   >
-                    <i :style="{ width: `${taskProgress(task)}%` }" />
+                    <i :style="{ transform: `scaleX(${taskProgress(task) / 100})` }" />
                   </div>
                   <div v-if="task.status === 'pending' && taskKind(task) === 'lan_receive'" class="relay-task-actions">
                     <button class="relay-mini" type="button" @click="app.reject(task.id)">拒绝</button>

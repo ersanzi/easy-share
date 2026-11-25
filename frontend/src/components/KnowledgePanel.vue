@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
+import { EventsOn } from '../../wailsjs/runtime/runtime'
 import { core } from '../services/core'
 import { useEasyShare } from '../composables/useEasyShare'
 import { isLoopbackURL } from '../utils/net'
@@ -18,6 +19,12 @@ import type {
 // 状态自包含（同 SettingsPanel 模式）：登录态/健康度/会话消息均为本视图私有。
 
 const app = useEasyShare()
+let disposed = false
+let statusRequest = 0
+let healthRequest = 0
+let documentsRequest = 0
+let askRequest = 0
+const stopEvents: Array<() => void> = []
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -85,38 +92,48 @@ const ssoSession = computed(() => status.value.mode === 'sso')
 const accountLoggedIn = computed(() => Boolean(app.currentUser.value.userName))
 
 const refreshStatus = async () => {
+  if (disposed) return
+  const request = ++statusRequest
   try {
-    status.value = await core.knowledgeStatus()
+    const result = await core.knowledgeStatus()
+    if (!disposed && request === statusRequest) status.value = result
   } catch (e) {
-    loginError.value = e instanceof Error ? e.message : String(e)
+    if (!disposed && request === statusRequest) loginError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    statusLoading.value = false
+    if (!disposed && request === statusRequest) statusLoading.value = false
   }
 }
 
 // 控制面下发的地址变了 → 宿主已失效旧会话，立刻回登录表单并说明原因
 const onTargetChanged = () => {
+  resetSessionContent()
   loginError.value = '知识服务地址已由管理员更新，请重新登录'
   void refreshStatus()
 }
 
 const probeHealth = async () => {
-  if (!status.value.loggedIn) {
+  const request = ++healthRequest
+  if (disposed || !status.value.loggedIn) {
     health.value = null
     return
   }
   try {
-    health.value = await core.knowledgeHealth()
+    const result = await core.knowledgeHealth()
+    if (!disposed && request === healthRequest) health.value = result
   } catch {
-    health.value = null
+    if (!disposed && request === healthRequest) health.value = null
   }
 }
 
 // 宿主用客户端账号自动登录知识服务（或随账号登出清掉会话）后广播此事件：
 // 无需员工再输密码，页面自己切到已登录态。
 const onSessionChanged = async () => {
+  resetSessionContent()
   await refreshStatus()
-  if (status.value.loggedIn) loginError.value = ''
+  if (status.value.loggedIn) {
+    loginError.value = ''
+    if (activeTab.value === 'documents') void loadDocuments()
+  }
   await probeHealth()
 }
 
@@ -128,11 +145,7 @@ watch(() => status.value.serverUrl, value => {
 // 登录态被 Core 清掉（令牌失效/主动退出）时清空会话消息
 watch(() => status.value.loggedIn, value => {
   if (!value) {
-    messages.value = []
-    readerOpen.value = false
-    documents.value = []
-    documentsError.value = ''
-    clearDocumentPoll()
+    resetSessionContent()
   } else if (activeTab.value === 'documents') {
     void loadDocuments()
   }
@@ -146,14 +159,17 @@ const submitLogin = async () => {
     return
   }
   loginBusy.value = true
+  const request = ++statusRequest
   try {
-    status.value = await core.knowledgeLogin(serverUrl.value.trim(), username.value.trim(), password.value)
+    const result = await core.knowledgeLogin(serverUrl.value.trim(), username.value.trim(), password.value)
+    if (disposed || request !== statusRequest) return
+    status.value = result
     password.value = ''
     await probeHealth()
   } catch (e) {
-    loginError.value = e instanceof Error ? e.message : String(e)
+    if (!disposed && request === statusRequest) loginError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loginBusy.value = false
+    if (!disposed && request === statusRequest) loginBusy.value = false
   }
 }
 
@@ -177,6 +193,8 @@ const ask = async () => {
   draft.value = ''
   messages.value.push({ role: 'user', text: question })
   messages.value.push({ role: 'assistant', text: '', pending: true })
+  const last = messages.value[messages.value.length - 1]
+  const request = ++askRequest
   asking.value = true
   await scrollToBottom()
   let answer = null
@@ -187,7 +205,7 @@ const ask = async () => {
     // Core 网关返回的错误信息（如"登录已失效""无法连接知识服务器"）可直接展示
     failMessage = e instanceof Error && e.message ? e.message : ''
   }
-  const last = messages.value[messages.value.length - 1]
+  if (disposed || request !== askRequest) return
   if (answer) {
     last.text = answer.answer
     last.contexts = answer.contexts
@@ -209,13 +227,14 @@ const openReader = async (fileID: string, versionID: string, blockIds: string[] 
   readerView.value = null
   readerFocus.value = blockIds
   readerNotice.value = ''
+  readerDownloading.value = false
   const requestId = ++readerRequest
   try {
     const result = await core.knowledgeDocument(fileID, versionID)
-    if (requestId !== readerRequest) return
+    if (disposed || requestId !== readerRequest) return
     readerView.value = result
   } catch (e) {
-    if (requestId !== readerRequest) return
+    if (disposed || requestId !== readerRequest) return
     readerError.value = e instanceof Error ? e.message : '读取原文失败，请稍后重试。'
     // 令牌失效时 Core 已清会话；刷新登录态会关闭阅读页并回到登录表单
     void refreshStatus()
@@ -232,15 +251,14 @@ const openSource = (context: KnowledgeContext) => {
 const closeReader = () => {
   readerRequest += 1
   readerOpen.value = false
-  readerView.value = null
-  readerError.value = ''
-  readerFocus.value = []
-  readerNotice.value = ''
+  readerDownloading.value = false
+  // 保留关闭时的正文，让退出过渡完整结束。
 }
 
 const downloadSource = async () => {
   const view = readerView.value
-  if (!view) return
+  if (!view || readerDownloading.value) return
+  const request = readerRequest
   const fileID = view.manifest.file_id || view.document.file_id
   const versionID = view.manifest.version_id || view.document.version_id
   if (!fileID || !versionID) return
@@ -252,11 +270,13 @@ const downloadSource = async () => {
       versionID,
       view.manifest.filename || view.document.filename || '文档',
     )
+    if (disposed || request !== readerRequest) return
     if (saved) readerNotice.value = `已保存到 ${saved}`
   } catch (e) {
+    if (disposed || request !== readerRequest) return
     readerNotice.value = e instanceof Error ? e.message : '保存失败，请稍后重试。'
   } finally {
-    readerDownloading.value = false
+    if (!disposed && request === readerRequest) readerDownloading.value = false
   }
 }
 
@@ -277,27 +297,31 @@ function clearDocumentPoll() {
 }
 
 async function loadDocuments(quiet = false) {
-  if (!status.value.loggedIn) return
+  if (disposed || !status.value.loggedIn) return
+  const request = ++documentsRequest
+  clearDocumentPoll()
   if (!quiet) {
     documentsLoading.value = true
     documentsError.value = ''
   }
   try {
     const result = await core.knowledgeDocuments(200)
+    if (disposed || request !== documentsRequest) return
     documents.value = result.documents
     scheduleDocumentPoll()
   } catch (e) {
+    if (disposed || request !== documentsRequest) return
     if (!quiet) documentsError.value = e instanceof Error ? e.message : '读取文档清单失败，请稍后重试。'
     clearDocumentPoll()
     void refreshStatus()
   } finally {
-    if (!quiet) documentsLoading.value = false
+    if (!disposed && request === documentsRequest) documentsLoading.value = false
   }
 }
 
 function scheduleDocumentPoll() {
   clearDocumentPoll()
-  if (activeTab.value !== 'documents' || !status.value.loggedIn) return
+  if (disposed || activeTab.value !== 'documents' || !status.value.loggedIn) return
   if (!documents.value.some(doc => doc.status === 'queued' || doc.status === 'processing')) return
   documentsTimer = setTimeout(() => { void loadDocuments(true) }, 3000)
 }
@@ -317,15 +341,35 @@ const openDocument = (doc: KnowledgeDocumentSummary) => {
   void openReader(doc.file_id, doc.read_version_id)
 }
 
-onBeforeUnmount(clearDocumentPoll)
-onBeforeUnmount(() => EventsOff('knowledge:target-changed'))
-onBeforeUnmount(() => EventsOff('knowledge:session-changed'))
+function resetSessionContent() {
+  ++statusRequest
+  loginBusy.value = false
+  ++askRequest
+  ++documentsRequest
+  ++healthRequest
+  asking.value = false
+  messages.value = []
+  health.value = null
+  closeReader()
+  documents.value = []
+  documentsError.value = ''
+  documentsLoading.value = false
+  clearDocumentPoll()
+}
+
+onBeforeUnmount(() => {
+  disposed = true
+  ++statusRequest
+  resetSessionContent()
+  stopEvents.forEach(stop => stop())
+})
 
 const onMountedPrefill = async () => {
-  EventsOn('knowledge:target-changed', onTargetChanged)
-  EventsOn('knowledge:session-changed', onSessionChanged)
+  stopEvents.push(EventsOn('knowledge:target-changed', onTargetChanged))
+  stopEvents.push(EventsOn('knowledge:session-changed', onSessionChanged))
   await refreshStatus()
   await probeHealth()
+  if (disposed) return
   // 未配置过服务器时自动填好：服务地址来自登录后下发的服务拓扑（控制面登记，
   // 未登记则同主机推导），账号预填当前登录名——员工只差输一次密码。
   if (status.value.configured || status.value.loggedIn) return
@@ -342,7 +386,7 @@ onMounted(onMountedPrefill)
 </script>
 
 <template>
-  <div class="knowledge-panel">
+  <div v-content-motion="statusLoading ? 'loading' : status.loggedIn ? activeTab : 'login'" class="knowledge-panel">
     <header class="workspace-header">
       <div>
         <span class="section-label">知识</span>
@@ -351,11 +395,13 @@ onMounted(onMountedPrefill)
       </div>
     </header>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <div v-if="loginError" class="alert" role="alert">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4m0 4h.01M10 3.8 2.6 17a2 2 0 0 0 1.8 3h15.2a2 2 0 0 0 1.8-3L14 3.8a2.3 2.3 0 0 0-4 0Z"/></svg>
       <span class="alert-copy"><b>{{ loginError }}</b></span>
       <button type="button" aria-label="关闭" @click="loginError = ''">×</button>
     </div>
+    </Transition>
 
     <!-- 登录表单：未配置或未登录 -->
     <div v-if="!statusLoading && !status.loggedIn" class="card knowledge-login-card">
@@ -400,7 +446,7 @@ onMounted(onMountedPrefill)
             placeholder="你的密码"
           />
         </div>
-        <button class="primary-button knowledge-login-submit" type="submit" :disabled="loginBusy">
+        <button v-content-motion="loginBusy" class="primary-button knowledge-login-submit" type="submit" :disabled="loginBusy">
           {{ loginBusy ? '正在连接…' : '登录' }}
         </button>
       </form>
@@ -461,7 +507,7 @@ onMounted(onMountedPrefill)
         </div>
         <div v-for="(message, index) in messages" :key="index" :class="['knowledge-message', message.role]">
           <div v-if="message.role === 'user'" class="knowledge-bubble">{{ message.text }}</div>
-          <div v-else class="knowledge-answer">
+          <div v-content-motion="message.pending ? 'pending' : message.failed ? 'error' : 'ready'" v-else class="knowledge-answer">
             <p v-if="message.pending" class="knowledge-pending">
               <span class="knowledge-spinner" aria-hidden="true" />正在检索知识库…
             </p>
@@ -529,6 +575,7 @@ onMounted(onMountedPrefill)
     <div v-else class="knowledge-loading">正在获取登录状态…</div>
 
     <Teleport to="body">
+      <Transition v-bind="presenceMotion" name="es-dialog">
       <KnowledgeReader
         v-if="readerOpen"
         :view="readerView"
@@ -540,6 +587,7 @@ onMounted(onMountedPrefill)
         @close="closeReader"
         @download="downloadSource"
       />
+      </Transition>
     </Teleport>
   </div>
 </template>

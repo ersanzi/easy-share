@@ -63,6 +63,9 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      - name: 插件与知识静态页面动效守卫
+        run: node --test scripts/diag/static-ui-motion.test.mjs
+
       - name: 前端类型检查（vue-tsc）
         working-directory: frontend
         run: npx vue-tsc --noEmit

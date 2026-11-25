@@ -36,11 +36,11 @@ public record RoleVo(
             role.getRoleName(),
             role.getAdminScope(),
             parseDeptIds(role.getScopeDeptIds()),
-            !Boolean.FALSE.equals(role.getKnowledge()),
-            !Boolean.FALSE.equals(role.getMeeting()),
-            !Boolean.FALSE.equals(role.getDrive()),
-            !Boolean.FALSE.equals(role.getShared()),
-            !Boolean.FALSE.equals(role.getPlugin()),
+            Boolean.TRUE.equals(role.getKnowledge()),
+            Boolean.TRUE.equals(role.getMeeting()),
+            Boolean.TRUE.equals(role.getDrive()),
+            Boolean.TRUE.equals(role.getShared()),
+            Boolean.TRUE.equals(role.getPlugin()),
             memberCount);
     }
 
@@ -49,9 +49,15 @@ public record RoleVo(
         if (csv == null || csv.isBlank()) {
             return List.of();
         }
-        return java.util.Arrays.stream(csv.split(","))
-            .map(String::trim).filter(s -> s.matches("\\d+"))
-            .map(Long::valueOf)
-            .toList();
+        java.util.Set<Long> ids = new java.util.LinkedHashSet<>();
+        for (String part : csv.split(",")) {
+            try {
+                long id = Long.parseLong(part.trim());
+                if (id > 0) ids.add(id);
+            } catch (NumberFormatException ignored) {
+                // 损坏的历史范围不影响管理页列举，也不能扩大授权。
+            }
+        }
+        return List.copyOf(ids);
     }
 }

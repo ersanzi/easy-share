@@ -74,9 +74,11 @@ type FS struct {
 	// 空表示用系统临时目录（测试与未显式配置时的兜底）。
 	spoolDir string
 
-	mu       sync.Mutex
-	cache    []drive.Object
-	cachedAt time.Time
+	mu          sync.Mutex
+	listMu      sync.Mutex
+	cachedToken string
+	cache       []drive.Object
+	cachedAt    time.Time
 	// lastVersion 是上次全量/增量列举拿到的 spaceVersion。
 	//
 	// 有了它，同一挂载进程内的第二次列举不需要重列整空间：
@@ -197,82 +199,61 @@ func (f *FS) tokenOrErr() (string, error) {
 
 // objects 取对象清单，带短缓存。
 func (f *FS) objects(ctx context.Context) ([]drive.Object, error) {
+	// 串行提交清单，避免旧账号的慢响应在新账号之后覆盖缓存。
+	f.listMu.Lock()
+	defer f.listMu.Unlock()
 	token, err := f.tokenOrErr()
 	if err != nil {
 		return nil, err
 	}
 	f.mu.Lock()
-	if f.cache != nil && time.Since(f.cachedAt) < listTTL {
+	if f.cachedToken != token {
+		f.cache, f.cachedAt, f.lastVersion = nil, time.Time{}, 0
+		f.cachedToken = token
+	}
+	// 共享文件成员权限可独立于文件版本变化，不能用缓存或增量日志作为授权证据。
+	if f.space != drive.SpaceShared && f.cache != nil && time.Since(f.cachedAt) < listTTL {
 		cached := f.cache
 		f.mu.Unlock()
 		return cached, nil
 	}
+	base, since := f.cache, f.lastVersion
 	f.mu.Unlock()
 
-	// 优先走增量：同进程内第二次及以后的列举只拉差异，不再重列整空间。
-	//
-	// 这正是路线图切片 2 的生产落点——挂载盘是目录列表的最高频调用方
-	// （资源管理器一次浏览会连发多次 PROPFIND/Stat），它吃到增量，
-	// 增量列举才不只是“接口可用”，而是“生产在用”。
-	// 旧控制面 / 单测假客户端没有 Changes 能力时自动退回全量 Objects。
-	if cc, ok := f.client.(changeClient); ok {
-		f.mu.Lock()
-		base := f.cache
-		since := f.lastVersion
-		f.mu.Unlock()
-
+	var list []drive.Object
+	var newest int64
+	if cc, ok := f.client.(changeClient); ok && f.space != drive.SpaceShared {
 		var sincePtr *int64
-		// 只有**手里有底（base 非空）**时才能走增量：增量流只描述差异，
-		// 没有底就拼不出完整视图。
-		//
-		// ⚠️ 这条判据是被真机打出来的：原先写成「磁盘上有版本就走增量」，
-		// 于是缓存失效（write 后 invalidate）但 versions.json 里有 lastVersion 时，
-		// base=nil、变更集里只有本次写入的那一条，**其余对象全部从视图里消失**。
-		// 症状极其误导——不是报错，而是「删不掉 / 列表变空」：
-		// RemoveAll 拿着空 targets 直接 return nil，看起来删成功了。
 		if since > 0 && base != nil {
 			sincePtr = &since
 		}
-		result, err := cc.Changes(ctx, token, f.space, sincePtr)
-		if err != nil {
-			// 增量失败不等于全量失败：可能只是旧控制面尚未提供 /changes。
-			// 退回全量，行为与引入增量前一致；错误不掩盖网络层本身的故障。
-			list, listErr := f.client.Objects(ctx, token, f.space)
-			if listErr != nil {
-				return nil, listErr
+		result, changeErr := cc.Changes(ctx, token, f.space, sincePtr)
+		if changeErr != nil {
+			// 旧控制面可能没有增量接口；全量仍须重新经过服务端授权。
+			list, err = f.client.Objects(ctx, token, f.space)
+		} else if result == nil {
+			err = fmt.Errorf("空间变更应答为空")
+		} else {
+			newest = result.NewestSpaceVersion.Int64()
+			if sincePtr == nil {
+				list = result.Files
+			} else {
+				list = drive.ApplyChanges(base, result.Changes)
 			}
-			f.mu.Lock()
-			f.cache, f.cachedAt = list, time.Now()
-			f.mu.Unlock()
-			return list, nil
 		}
-		if sincePtr == nil {
-			f.mu.Lock()
-			f.cache, f.cachedAt = result.Files, time.Now()
-			f.lastVersion = result.NewestSpaceVersion.Int64()
-			f.mu.Unlock()
-			_ = f.versions.Save(f.space, f.lastVersion)
-			return result.Files, nil
-		}
-
-		// 把差异应用到上次缓存。复制与逐条合并都在 drive.ApplyChanges 里做——
-		// 那段语义与占位符挂载共用一份实现（见 internal/drive/changes_apply.go）。
-		merged := drive.ApplyChanges(base, result.Changes)
-		f.mu.Lock()
-		f.cache, f.cachedAt = merged, time.Now()
-		f.lastVersion = result.NewestSpaceVersion.Int64()
-		f.mu.Unlock()
-		_ = f.versions.Save(f.space, f.lastVersion)
-		return merged, nil
+	} else {
+		list, err = f.client.Objects(ctx, token, f.space)
 	}
-
-	list, err := f.client.Objects(ctx, token, f.space)
 	if err != nil {
 		return nil, err
 	}
+	if current, tokenErr := f.tokenOrErr(); tokenErr != nil || current != token {
+		return nil, fmt.Errorf("列举期间账号已变化: %w", os.ErrPermission)
+	}
 	f.mu.Lock()
-	f.cache, f.cachedAt = list, time.Now()
+	f.cache, f.cachedAt, f.lastVersion = list, time.Now(), newest
 	f.mu.Unlock()
+	_ = f.versions.Save(f.space, newest)
 	return list, nil
 }
 

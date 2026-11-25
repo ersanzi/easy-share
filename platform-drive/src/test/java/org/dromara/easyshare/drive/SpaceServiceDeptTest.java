@@ -13,6 +13,8 @@ import org.dromara.easyshare.drive.service.SpaceService;
 import org.dromara.easyshare.drive.service.SpaceUsageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.dromara.easyshare.drive.service.PermissionSubjectService;
+import org.dromara.easyshare.drive.service.PermissionWriteService;
 import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,7 +49,10 @@ class SpaceServiceDeptTest {
         FeaturePermissionService permission = mock(FeaturePermissionService.class);
         when(permission.sharedFeatureEnabled(anyLong())).thenReturn(true);
         service = new SpaceService(spaceMapper, memberMapper, usageService, capacityService,
-            userMapper, deptMapper, permission);
+            userMapper, deptMapper, permission, PermissionTestFixtures.directory(userMapper, deptMapper),
+            mock(PermissionWriteService.class));
+        var shared = new org.dromara.easyshare.drive.domain.EsSpace(); shared.setStatus("0");
+        when(spaceMapper.selectById(1L)).thenReturn(shared);
     }
 
     private static EsSpaceMember member(String type, long memberId, String permission) {
@@ -63,6 +68,7 @@ class SpaceServiceDeptTest {
         SysUserDept user = new SysUserDept();
         user.setUserId(userId);
         user.setDeptId(deptId);
+        user.setStatus("0"); user.setDelFlag("0");
         when(userMapper.selectById(userId)).thenReturn(user);
     }
 

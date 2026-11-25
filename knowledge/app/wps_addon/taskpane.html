@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EasyShare 知识</title>
   <style>
+    :root {
+      --motion-fast: 120ms;
+      --motion-enter: 200ms;
+      --motion-exit: 120ms;
+      --motion-ease: cubic-bezier(.2,0,0,1);
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
@@ -26,6 +32,8 @@
       border: 1px solid #006bd3; border-radius: 8px;
     }
     button:disabled { opacity: .5; cursor: not-allowed; }
+    button { transition: opacity var(--motion-fast) var(--motion-ease); }
+    button:active:not(:disabled) { opacity: .75; }
     button.secondary {
       color: #3a3a3c; background: #fff; border: 1px solid rgba(60,60,67,.2);
     }
@@ -51,7 +59,9 @@
     .spinner {
       display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px;
       border: 2px solid rgba(0,122,255,.2); border-top-color: #007aff; border-radius: 50%;
-      animation: spin .8s linear infinite;
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .spinner { animation: spin 900ms linear infinite; }
     }
     @keyframes spin { to { transform: rotate(360deg); } }
     .ask-row { display: flex; gap: 8px; margin-top: 8px; }
@@ -70,7 +80,7 @@
       <input id="username" type="text" autocomplete="username" placeholder="你的账号">
       <label for="password">密码</label>
       <input id="password" type="password" autocomplete="current-password" placeholder="你的密码">
-      <div id="loginError" class="error" style="display:none"></div>
+      <div id="loginError" class="error" role="alert" style="display:none"></div>
       <button id="loginBtn" class="btn-block" type="button">登录</button>
     </div>
   </div>
@@ -90,9 +100,9 @@
     <div class="ask-row">
       <button id="askBtn" type="button">查知识</button>
     </div>
-    <div id="askError" class="error" style="display:none"></div>
+    <div id="askError" class="error" role="alert" style="display:none"></div>
     <div id="result" class="card" style="display:none">
-      <div id="answerText" class="answer"></div>
+      <div id="answerText" class="answer" role="status" aria-live="polite"></div>
       <details id="sourcesBox" class="sources" style="display:none">
         <summary id="sourcesSummary">引用来源</summary>
         <ul id="sourcesList"></ul>
@@ -104,6 +114,33 @@
   // ---- 状态与工具（ES5：兼容老版 WPS 内嵌浏览器，不用 fetch/箭头函数/模板串） ----
   var TOKEN_KEY = 'es_wps_token'
   var USER_KEY = 'es_wps_user'
+  // 内容先落到最终态；动画只作提示，可取消，宿主不支持 WAAPI 时直接可见。
+  var stateMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: no-preference)') : null;
+  var stateMotions = [];
+  function revealState(element) {
+    stateMotions.slice().forEach(function (entry) {
+      if (entry.element === element) entry.animation.cancel();
+    });
+    if (!stateMotionQuery || !stateMotionQuery.matches || !element.animate) return;
+    var tokens = getComputedStyle(document.documentElement);
+    var animation = element.animate([{ opacity: .55 }, { opacity: 1 }], {
+      duration: parseFloat(tokens.getPropertyValue('--motion-enter')) || 200,
+      easing: tokens.getPropertyValue('--motion-ease').trim() || 'cubic-bezier(.2,0,0,1)'
+    });
+    var entry = { element: element, animation: animation };
+    stateMotions.push(entry);
+    animation.onfinish = animation.oncancel = function () {
+      var index = stateMotions.indexOf(entry);
+      if (index >= 0) stateMotions.splice(index, 1);
+    };
+  }
+  if (stateMotionQuery) {
+    var stopStateMotion = function () {
+      if (!stateMotionQuery.matches) stateMotions.slice().forEach(function (entry) { entry.animation.cancel(); });
+    };
+    if (stateMotionQuery.addEventListener) stateMotionQuery.addEventListener('change', stopStateMotion);
+    else if (stateMotionQuery.addListener) stateMotionQuery.addListener(stopStateMotion);
+  }
 
   function $(id) { return document.getElementById(id) }
   function getToken() { try { return window.localStorage.getItem(TOKEN_KEY) || '' } catch (e) { return '' } }
@@ -123,16 +160,25 @@
 
   function postJSON(path, body, token, onDone) {
     var xhr = new XMLHttpRequest()
+    var settled = false
+    function finish(status, payload) {
+      if (settled) return
+      settled = true
+      onDone(status, payload)
+    }
     xhr.open('POST', path, true)
+    xhr.timeout = path === '/query' ? 120000 : 30000
     xhr.setRequestHeader('Content-Type', 'application/json')
     if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token)
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return
       var payload = null
       try { payload = JSON.parse(xhr.responseText) } catch (e) {}
-      onDone(xhr.status, payload)
+      finish(xhr.status, payload)
     }
+    xhr.onerror = xhr.ontimeout = function () { finish(0, null) }
     xhr.send(JSON.stringify(body))
+    return xhr
   }
 
   function showError(id, message) {
@@ -140,6 +186,7 @@
     if (!message) { el.style.display = 'none'; return }
     el.textContent = message
     el.style.display = ''
+    revealState(el)
   }
 
   // ---- 读取 WPS 文字选区：任务窗格内可能通过 window.Application 或 wps.WpsApplication() 访问 ----
@@ -163,9 +210,11 @@
 
   // ---- 视图切换 ----
   function showLogin() {
+    cancelAsk()
     $('loginView').style.display = ''
     $('mainView').style.display = 'none'
     $('serverHint').textContent = '服务器：' + location.origin
+    revealState($('loginView'))
   }
 
   function showMain() {
@@ -173,17 +222,26 @@
     $('mainView').style.display = ''
     $('whoami').textContent = getSavedUser() || '已登录'
     $('serverHint2').textContent = location.origin
+    revealState($('mainView'))
   }
 
   // ---- 登录 ----
+  var authRevision = 0
   function doLogin() {
+    if ($('loginBtn').disabled) return
     var username = trim($('username').value)
     var password = $('password').value
     if (!username || !password) { showError('loginError', '请填写账号与密码'); return }
     $('loginBtn').disabled = true
+    $('loginBtn').textContent = '登录中…'
+    $('loginBtn').setAttribute('aria-busy', 'true')
     showError('loginError', '')
+    var revision = ++authRevision
     postJSON('/auth/login', { username: username, password: password }, '', function (status, payload) {
+      if (revision !== authRevision) return
       $('loginBtn').disabled = false
+      $('loginBtn').textContent = '登录'
+      $('loginBtn').setAttribute('aria-busy', 'false')
       if (status === 200 && payload && payload.token) {
         setSession(payload.token, payload.username || username)
         showMain()
@@ -194,8 +252,18 @@
   }
 
   function doLogout() {
+    var token = getToken()
+    var revision = ++authRevision
     clearSession()
     showLogin()
+    showError('loginError', '')
+    if (!token) return
+    postJSON('/auth/logout', {}, token, function (status, payload) {
+      if (revision !== authRevision || getToken()) return
+      if (status !== 200 || !payload || payload.logged_out !== true) {
+        showError('loginError', '已退出本机，但服务器会话注销未完成，请联系管理员确认')
+      }
+    })
   }
 
   // ---- 读取选区 → 填入输入框 ----
@@ -211,16 +279,38 @@
   }
 
   // ---- 提问 ----
+  var askRevision = 0
+  var askRequest = null
+  function cancelAsk() {
+    askRevision++
+    if (askRequest) askRequest.abort()
+    askRequest = null
+    $('askBtn').disabled = false
+    $('askBtn').textContent = '查知识'
+    $('result').setAttribute('aria-busy', 'false')
+    $('result').style.display = 'none'
+    $('answerText').textContent = ''
+    $('sourcesList').innerHTML = ''
+    showError('askError', '')
+  }
   function doAsk() {
+    if ($('askBtn').disabled) return
     var question = trim($('question').value)
     if (!question) { showError('askError', '请先输入或选取要查询的内容'); return }
     showError('askError', '')
     $('result').style.display = ''
-    $('answerText').innerHTML = '<span class="spinner"></span><span class="loading">正在检索知识库…</span>'
+    $('answerText').innerHTML = '<span class="spinner" aria-hidden="true"></span><span class="loading">正在检索知识库…</span>'
     $('sourcesBox').style.display = 'none'
     $('askBtn').disabled = true
-    postJSON('/query', { question: question }, getToken(), function (status, payload) {
+    $('askBtn').textContent = '查询中…'
+    $('result').setAttribute('aria-busy', 'true')
+    var revision = ++askRevision
+    askRequest = postJSON('/query', { question: question }, getToken(), function (status, payload) {
+      if (revision !== askRevision) return
+      askRequest = null
       $('askBtn').disabled = false
+      $('askBtn').textContent = '查知识'
+      $('result').setAttribute('aria-busy', 'false')
       if (status === 401) {
         clearSession()
         showLogin()
@@ -234,6 +324,7 @@
       }
       $('answerText').textContent = payload.answer || '（无回答）'
       renderSources(payload.contexts || [])
+      revealState($('result'))
     })
   }
 

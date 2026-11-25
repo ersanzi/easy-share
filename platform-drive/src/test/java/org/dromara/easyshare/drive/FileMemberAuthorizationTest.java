@@ -28,9 +28,17 @@ class FileMemberAuthorizationTest {
         spaceMembers = mock(EsSpaceMemberMapper.class);
         EsUserRoleMapper userRoles = mock(EsUserRoleMapper.class);
         when(userRoles.selectRolesOfUser(anyLong())).thenReturn(List.of());
-        FeaturePermissionService features = new FeaturePermissionService(mock(EsUserPermissionMapper.class), userRoles);
-        SpaceService spaces = new SpaceService(mock(EsSpaceMapper.class), spaceMembers, null, null, users, depts, features);
-        roles = new FileRoleService(members, files, spaces, users, depts);
+        var subjects = PermissionTestFixtures.directory(users, depts);
+        var writes = mock(PermissionWriteService.class);
+        EsSpaceMapper spaceMapper = mock(EsSpaceMapper.class);
+        EsSpace shared = new EsSpace(); shared.setStatus("0");
+        when(spaceMapper.selectById(1L)).thenReturn(shared);
+        EsSpaceMember actorGrant = new EsSpaceMember(); actorGrant.setPermission("write");
+        when(spaceMembers.selectOne(any())).thenReturn(actorGrant);
+        when(files.lockForPermissionUpdate(anyLong())).thenAnswer(call -> call.getArgument(0));
+        FeaturePermissionService features = new FeaturePermissionService(mock(EsUserPermissionMapper.class), userRoles, subjects, writes);
+        SpaceService spaces = new SpaceService(spaceMapper, spaceMembers, null, null, users, depts, features, subjects, writes);
+        roles = new FileRoleService(members, files, spaces, users, depts, writes);
         EsFile file = new EsFile();
         file.setFileId(100L); file.setSpaceType("shared"); file.setState("active"); file.setUploadBy(7L);
         when(files.selectById(100L)).thenReturn(file);
@@ -38,6 +46,7 @@ class FileMemberAuthorizationTest {
 
     @Test
     void candidateSearchChecksManageBeforeQueryingPeople() {
+        when(spaceMembers.selectOne(any())).thenReturn(null);
         assertThrows(org.dromara.common.core.exception.ServiceException.class,
             () -> roles.candidatesOf(100L, 8L, "张", 20));
         verify(users, never()).searchSharedCandidates(anyString(), anyInt());
@@ -61,6 +70,8 @@ class FileMemberAuthorizationTest {
 
     @Test
     void uploaderCannotGrantAnActiveEmployeeOutsideSharedSpace() {
+        EsSpaceMember actorGrant = new EsSpaceMember(); actorGrant.setPermission("write");
+        when(spaceMembers.selectOne(any())).thenReturn(actorGrant, null);
         SysUserDept outsider = new SysUserDept();
         outsider.setUserId(8L); outsider.setStatus("0"); outsider.setDelFlag("0");
         when(users.selectById(8L)).thenReturn(outsider);

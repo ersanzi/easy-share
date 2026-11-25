@@ -61,12 +61,33 @@ def bootstrap(body: Credentials, request: Request) -> UserResponse:
 @router.post("/login", response_model=LoginResponse)
 def login(body: Credentials, request: Request) -> LoginResponse:
     services = _services(request)
+    if services.sso is not None or services.config.control_plane_url:
+        if services.sso is None:
+            raise HTTPException(503, "企业账号服务尚未就绪")
+        return LoginResponse(**services.sso.login(body.username, body.password))
     user = services.users.verify(body.username, body.password)
     if user is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "用户名或口令错误")
     token, expires_at = services.users.issue_token(user["username"])
     return LoginResponse(token=token, username=user["username"], role=user["role"],
                          dept=user.get("dept", ""), expires_at=expires_at)
+
+
+@router.post("/logout")
+def logout(request: Request) -> dict:
+    """显式注销提交的会话。桌面知识会话解绑不调用此端点。"""
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not token:
+        raise HTTPException(401, "缺少需要注销的会话")
+    services = _services(request)
+    if services.sso is not None or services.config.control_plane_url:
+        if services.sso is None:
+            raise HTTPException(503, "企业账号服务尚未就绪")
+        services.sso.logout(token)
+    else:
+        services.users.revoke_token(token)
+    return {"logged_out": True}
 
 
 @router.get("/me", response_model=UserResponse)

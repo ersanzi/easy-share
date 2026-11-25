@@ -1,9 +1,10 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import SharedDrivePanel from '../SharedDrivePanel.vue'
+import { useConfirm } from '../../composables/useConfirm'
 const api = vi.hoisted(() => ({ cloudListInSpace: vi.fn(), cloudDownloadInSpace: vi.fn(), cloudDownloadAsInSpace: vi.fn(), cloudRenameInSpace: vi.fn(), cloudDeleteInSpace: vi.fn(), fileMemberList: vi.fn(), fileMemberReplace: vi.fn(), fileMemberCandidates: vi.fn(), knowledgeProcessDriveFile: vi.fn() }))
 vi.mock('../../services/core', () => ({ core: api }))
-beforeEach(() => { vi.clearAllMocks(); api.fileMemberList.mockResolvedValue([]) })
+beforeEach(() => { vi.resetAllMocks(); useConfirm().settle(false); api.fileMemberList.mockResolvedValue([]); api.fileMemberReplace.mockResolvedValue(undefined) })
 it('共享read只说明阅读权限，不提供原件下载或假预览', async () => {
   api.cloudListInSpace.mockResolvedValue([{ fileId:'9007199254740993', versionId:'2', key:'合同.pdf', name:'合同.pdf', size:12, effectiveRole:'read' }])
   const w = mount(SharedDrivePanel, { props: { operatorId:'7', knowledgeEnabled:true } })
@@ -38,4 +39,79 @@ it('切换账号清空旧文件并忽略旧请求迟到结果', async () => {
   await flushPromises()
   expect(w.text()).toContain('B.txt')
   expect(w.text()).not.toContain('A.txt')
+})
+
+const deferred = <T,>() => { let resolve!: (value: T) => void; let reject!: (reason: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b }); return { promise, resolve, reject } }
+const managedFile = { fileId: '20', versionId: '2', key: '合同.pdf', name: '合同.pdf', size: 12, effectiveRole: 'manage' }
+it('列表读取失败不显示空目录，也不能操作旧权限文件', async () => {
+  api.cloudListInSpace.mockResolvedValueOnce([managedFile]).mockRejectedValueOnce(new Error('权限服务离线'))
+  const w = mount(SharedDrivePanel, { props: { operatorId: '7' } }); await flushPromises()
+  await w.findAll('button').find(b => b.text() === '刷新')!.trigger('click'); await flushPromises()
+  expect(w.text()).toContain('权限服务离线')
+  expect(w.text()).not.toContain('当前目录没有可见文件')
+  expect(w.find('[data-testid="manage-members"]').exists()).toBe(false)
+})
+it('旧账号的改名结果不会关闭新账号改名表单或刷新新账号列表', async () => {
+  api.cloudListInSpace.mockResolvedValue([managedFile])
+  const pending = deferred<void>(); api.cloudRenameInSpace.mockReturnValueOnce(pending.promise)
+  const w = mount(SharedDrivePanel, { props: { operatorId: 'A' } }); await flushPromises()
+  await w.findAll('button').find(b => b.text() === '改名')!.trigger('click')
+  await w.get('input[aria-label="新文件名"]').setValue('旧账号改名.pdf')
+  await w.get('form[aria-label="共享文件改名"]').trigger('submit')
+  await w.setProps({ operatorId: 'B' }); await flushPromises()
+  await w.findAll('button').find(b => b.text() === '改名')!.trigger('click')
+  await w.get('input[aria-label="新文件名"]').setValue('新账号草稿.pdf')
+  pending.resolve(); await flushPromises()
+  expect((w.get('input[aria-label="新文件名"]').element as HTMLInputElement).value).toBe('新账号草稿.pdf')
+  expect(api.cloudListInSpace).toHaveBeenCalledTimes(2)
+  expect(w.text()).not.toContain('文件已重命名')
+})
+it('成员保存中禁止关闭弹层，背景不再可交互', async () => {
+  api.cloudListInSpace.mockResolvedValue([managedFile])
+  const pending = deferred<void>(); api.fileMemberReplace.mockReturnValueOnce(pending.promise)
+  const w = mount(SharedDrivePanel, { props: { operatorId: '7' } }); await flushPromises()
+  await w.get('[data-testid="manage-members"]').trigger('click'); await flushPromises()
+  await w.get('[data-testid="save-members"]').trigger('click')
+  expect(w.get('[data-testid="close-members"]').attributes('disabled')).toBeDefined()
+  expect(w.find('[inert]').exists()).toBe(true)
+  await w.get('[role="dialog"]').trigger('keydown', { key: 'Escape' })
+  expect(w.find('.file-member-editor').exists()).toBe(true)
+  pending.reject(new Error('保存拒绝')); await flushPromises()
+  expect(w.text()).toContain('保存拒绝')
+  expect(w.get('[data-testid="close-members"]').attributes('disabled')).toBeUndefined()
+})
+it('新操作失败会清掉旧成功提示且保留可重试入口', async () => {
+  api.cloudListInSpace.mockResolvedValue([managedFile])
+  api.knowledgeProcessDriveFile.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('入库失败'))
+  const w = mount(SharedDrivePanel, { props: { operatorId: '7', knowledgeEnabled: true } }); await flushPromises()
+  await w.get('[data-testid="process-knowledge"]').trigger('click'); await flushPromises()
+  expect(w.text()).toContain('已提交加入知识库')
+  await w.get('[data-testid="process-knowledge"]').trigger('click'); await flushPromises()
+  expect(w.text()).not.toContain('已提交加入知识库')
+  expect(w.text()).toContain('入库失败')
+})
+it('删除待确认时拒绝第二次操作，账号切换使确认失效', async () => {
+  api.cloudListInSpace.mockResolvedValue([managedFile])
+  const w = mount(SharedDrivePanel, { props: { operatorId: 'A' } }); await flushPromises()
+  await w.findAll('button').find(b => b.text() === '删除')!.trigger('click')
+  expect(useConfirm().confirmState.open).toBe(true)
+  expect(w.get('[data-testid="manage-members"]').attributes('disabled')).toBeDefined()
+  await w.setProps({ operatorId: 'B' }); await flushPromises()
+  useConfirm().settle(true); await flushPromises()
+  expect(api.cloudDeleteInSpace).not.toHaveBeenCalled()
+})
+it('缺失实际角色时不假称拥有只读权限', async () => {
+  api.cloudListInSpace.mockResolvedValue([{ ...managedFile, effectiveRole: undefined }])
+  const w = mount(SharedDrivePanel, { props: { operatorId: '7' } }); await flushPromises()
+  expect(w.text()).toContain('实际权限：尚未确认')
+  expect(w.find('.shared-file-actions button').exists()).toBe(false)
+})
+
+it('另存对话框取消返回空结果时不伪报已开始下载', async () => {
+  api.cloudListInSpace.mockResolvedValue([managedFile]); api.cloudDownloadAsInSpace.mockResolvedValue(undefined)
+  const w = mount(SharedDrivePanel, { props: { operatorId: '7' } }); await flushPromises()
+  await w.get('.shared-file-row').trigger('contextmenu', { clientX: 30, clientY: 40 })
+  await w.findAll('button').find(b => b.text() === '另存为…')!.trigger('click'); await flushPromises()
+  expect(api.cloudDownloadAsInSpace).toHaveBeenCalledWith('shared', '合同.pdf')
+  expect(w.text()).not.toContain('已开始下载')
 })

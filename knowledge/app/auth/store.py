@@ -133,6 +133,12 @@ class UserStore:
             conn.commit()
         return token, expires_at
 
+    def revoke_token(self, token: str) -> None:
+        """只撤销指定令牌，同账号其他客户端的会话保持独立。"""
+        with self.lock, self._connect() as conn:
+            conn.execute("DELETE FROM tokens WHERE token = ?", (token,))
+            conn.commit()
+
     def resolve_token(self, token: str) -> dict | None:
         if not token:
             return None

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { vContentMotion } from '../directives/contentMotion'
 import type { TransferTask } from '../types/core'
 import { core } from '../services/core'
 import {
@@ -159,7 +160,8 @@ const canConfirmReceive = (task: TransferTask) =>
     </div>
 
     <div v-else class="transfer-list">
-      <template v-for="entry in displayEntries" :key="entry.id">
+      <!-- 事件流以新对象替换任务；未变化的行复用 VNode，进度更新不重建整张长表。 -->
+      <template v-for="entry in displayEntries" :key="entry.id" v-memo="[entry.type === 'task' ? entry.task : entry]">
         <div v-if="entry.type === 'batch'" class="batch-group">
           <div class="batch-header">
             <div class="batch-info">
@@ -172,10 +174,10 @@ const canConfirmReceive = (task: TransferTask) =>
             <span class="batch-percent">{{ batchProgress(entry) }}%</span>
           </div>
           <div class="batch-track" role="progressbar" :aria-valuenow="batchProgress(entry)" aria-valuemin="0" aria-valuemax="100">
-            <i :style="{ width: `${batchProgress(entry)}%` }" />
+            <i :style="{ transform: `scaleX(${batchProgress(entry) / 100})` }" />
           </div>
           <div class="batch-items">
-            <article v-for="item in entry.tasks" :key="item.id" class="transfer-row compact" :data-task-id="item.id">
+            <article v-for="item in entry.tasks" :key="item.id" v-memo="[item]" class="transfer-row compact" :data-task-id="item.id">
               <div class="file-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
                 <span :class="['task-kind-marker', taskKind(item)]"><svg viewBox="0 0 16 16"><path :d="taskDirectionPath(item)"/></svg></span>
@@ -183,7 +185,7 @@ const canConfirmReceive = (task: TransferTask) =>
               <div class="transfer-content">
                 <div class="transfer-heading">
                   <div><strong>{{ item.fileName }}</strong><span>{{ taskAmountLabel(item) }}</span></div>
-                  <span :class="['task-status', item.status]">{{ taskStatusLabel(item.status) }}</span>
+                  <span v-content-motion="item.status" :class="['task-status', item.status]">{{ taskStatusLabel(item.status) }}</span>
                 </div>
                 <div class="transfer-meta">
                   <span>{{ taskProgress(item) }}%</span>
@@ -219,10 +221,10 @@ const canConfirmReceive = (task: TransferTask) =>
                 <strong>{{ entry.task.fileName }}</strong>
                 <span>{{ taskActionLabel(entry.task) }} · {{ taskAmountLabel(entry.task) }}</span>
               </div>
-              <span :class="['task-status', entry.task.status]">{{ taskStatusLabel(entry.task.status) }}</span>
+              <span v-content-motion="entry.task.status" :class="['task-status', entry.task.status]">{{ taskStatusLabel(entry.task.status) }}</span>
             </div>
             <div class="progress-track" role="progressbar" :aria-valuenow="taskProgress(entry.task)" aria-valuemin="0" aria-valuemax="100">
-              <i :style="{ width: `${taskProgress(entry.task)}%` }" />
+              <i :style="{ transform: `scaleX(${taskProgress(entry.task) / 100})` }" />
             </div>
             <div class="transfer-meta">
               <span>{{ taskProgress(entry.task) }}%</span>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { vContentMotion } from '../directives/contentMotion'
 import type { TransferTask } from '../types/core'
 import { core } from '../services/core'
 import {
@@ -18,9 +19,11 @@ import {
 
 const props = withDefaults(defineProps<{
   tasks: TransferTask[]
+  open?: boolean
   limit?: number
 }>(), {
   limit: 8,
+  open: true,
 })
 
 const emit = defineEmits<{
@@ -59,12 +62,25 @@ const showInFolder = (task: TransferTask) => {
   if (task.localPath) void core.showInFolder(task.localPath)
 }
 const handleKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape') close()
+  if (!props.open) return
+  if (event.key === 'Escape') { event.preventDefault(); close() }
+  if (event.key === 'Tab') {
+    const controls = closeButton.value?.closest('.activity-drawer')?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+    const first = controls?.[0], last = controls?.[controls.length - 1]
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+    if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+  }
 }
 
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
-  closeButton.value?.focus()
+  if (props.open) closeButton.value?.focus()
+})
+
+watch(() => props.open, async open => {
+  if (!open) return
+  await nextTick()
+  if (props.open) closeButton.value?.focus()
 })
 
 onBeforeUnmount(() => {
@@ -73,7 +89,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="activity-backdrop" @click.self="close">
+  <div :inert="!open" :aria-hidden="!open" class="activity-backdrop" @click.self="close">
     <aside class="activity-drawer" role="dialog" aria-modal="true" aria-labelledby="activity-title">
       <header class="activity-drawer-header">
         <div>
@@ -86,15 +102,15 @@ onBeforeUnmount(() => {
 
       <div class="activity-summary" aria-label="任务摘要">
         <div>
-          <strong>{{ activeCount }}</strong>
+          <strong v-content-motion="activeCount">{{ activeCount }}</strong>
           <span>进行中</span>
         </div>
         <div :class="{ warning: attentionCount > 0 }">
-          <strong>{{ attentionCount }}</strong>
+          <strong v-content-motion="attentionCount">{{ attentionCount }}</strong>
           <span>需处理</span>
         </div>
         <div :class="{ failed: failureCount > 0 }">
-          <strong>{{ failureCount }}</strong>
+          <strong v-content-motion="failureCount">{{ failureCount }}</strong>
           <span>失败</span>
         </div>
       </div>
@@ -143,11 +159,11 @@ onBeforeUnmount(() => {
                   <strong>{{ item.fileName }}</strong>
                   <span>{{ taskActionLabel(item) }} · {{ taskAmountLabel(item) }}</span>
                 </div>
-                <span :class="['task-status', item.status]">{{ taskStatusLabel(item.status) }}</span>
+                <span v-content-motion="item.status" :class="['task-status', item.status]">{{ taskStatusLabel(item.status) }}</span>
               </div>
 
               <div class="activity-progress" role="progressbar" :aria-valuenow="taskProgress(item)" aria-valuemin="0" aria-valuemax="100">
-                <i :style="{ width: `${taskProgress(item)}%` }" />
+                <i :style="{ transform: `scaleX(${taskProgress(item) / 100})` }" />
               </div>
 
               <div class="activity-meta">

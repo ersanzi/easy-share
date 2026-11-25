@@ -48,6 +48,7 @@ public class UserPermissionController {
 
     private final FeaturePermissionService permissionService;
     private final PermissionRoleService roleService;
+    private final org.dromara.easyshare.drive.service.PermissionWriteService writes;
 
     /**
      * 当前登录账号的功能权限与管理范围。
@@ -127,7 +128,7 @@ public class UserPermissionController {
     }
 
     /**
-     * 整组替换某成员的角色（仅超管）；空列表 = 回到逐账号配置。
+     * 整组替换某成员的角色（仅超管）；空列表 = 保留当前功能限制并解除角色。
      *
      * @param userId 账号 ID
      * @param body   角色 ID 列表
@@ -149,10 +150,13 @@ public class UserPermissionController {
      * @param body 账号与五项开关
      * @return 空响应
      */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     @PutMapping("/admin")
     public R<Void> save(@Validated @RequestBody SaveBo body) {
+        // 先取得跨实例写锁，再检查实时范围；角色、部门变更无法插入检查与提交之间。
+        writes.begin(body.userId());
         if (!roleService.canManage(LoginHelper.getUserId(), body.userId())) {
-            throw new ServiceException("只能修改本部门成员的功能权限");
+            throw new ServiceException("目标账号无效或不在当前可管理范围内");
         }
         permissionService.save(body.userId(), body.knowledge(), body.meeting(),
             body.drive(), body.shared(), body.plugin());
@@ -220,8 +224,8 @@ public class UserPermissionController {
     /**
      * 成员角色分配请求。
      *
-     * @param roleIds 角色 ID 列表；空列表=移除全部角色
+     * @param roleIds 角色 ID 列表；空列表=移除全部角色并保留当前功能限制
      */
-    public record AssignBo(List<Long> roleIds) {
+    public record AssignBo(@NotNull List<Long> roleIds) {
     }
 }

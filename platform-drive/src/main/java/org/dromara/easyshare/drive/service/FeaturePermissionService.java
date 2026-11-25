@@ -25,7 +25,8 @@ import java.util.List;
  *   <li>没有角色 → 沿用逐账号矩阵 {@code es_user_permission}；</li>
  *   <li>再没有行 → 五项全开，保证新账号开箱可用。</li>
  * </ol>
- * 逐账号行在用户有角色时不参与裁决，但**不删除**——移除角色后回到原有单独配置。
+ * 逐账号行在用户有角色时不参与裁决。移除最后一个角色会保存当前有效限制，
+ * 避免缺行或旧的宽松配置把撤权变成提权；后续可显式修改逐账号矩阵。
  *
  * @author EasyShare
  */
@@ -41,6 +42,8 @@ public class FeaturePermissionService {
 
     private final EsUserPermissionMapper mapper;
     private final EsUserRoleMapper userRoleMapper;
+    private final PermissionSubjectService subjects;
+    private final PermissionWriteService writes;
 
     /**
      * 判断账号是否启用某功能。
@@ -112,6 +115,7 @@ public class FeaturePermissionService {
      * @return 权限快照列表
      */
     public List<PermissionVo> listExplicit() {
+        subjects.requireActiveSuperAdmin();
         return mapper.selectList(Wrappers.<EsUserPermission>lambdaQuery()).stream()
             .map(PermissionVo::of)
             .toList();
@@ -135,19 +139,24 @@ public class FeaturePermissionService {
         if (userId == null || userId <= 0) {
             throw new ServiceException("账号标识非法");
         }
+        writes.begin(userId);
+        subjects.requireActiveUser(userId);
         if (!userRoleMapper.selectRoleIdsOfUser(userId).isEmpty()) {
             throw new ServiceException("该成员的功能权限由角色决定，请调整角色分配或先移除角色");
         }
         EsUserPermission existing = mapper.selectById(userId);
+        PermissionVo before = effective(userId, List.of(), existing);
         if (existing == null) {
             EsUserPermission row = new EsUserPermission();
             row.setUserId(userId);
             apply(row, knowledge, meeting, drive, shared, plugin);
             mapper.insert(row);
-            return;
+        } else {
+            apply(existing, knowledge, meeting, drive, shared, plugin);
+            mapper.updateById(existing);
         }
-        apply(existing, knowledge, meeting, drive, shared, plugin);
-        mapper.updateById(existing);
+        writes.audit("feature.save", userId, before,
+            new PermissionVo(userId, knowledge, meeting, drive, shared, plugin));
     }
 
     /** 取权限快照；非法 ID 视为五项全关（只可能来自内部调用，正常登录态到不了这里） */
@@ -155,7 +164,11 @@ public class FeaturePermissionService {
         if (userId == null || userId <= 0) {
             return new PermissionVo(0L, false, false, false, false, false);
         }
+        if (subjects.activeUser(userId) == null) return PermissionVo.none(userId);
         List<EsPermissionRole> roles = userRoleMapper.selectRolesOfUser(userId);
+        // 孤儿绑定不能退回缺省全开；历史坏数据按最小权限处理。
+        if (roles.size() != userRoleMapper.selectRoleIdsOfUser(userId).size())
+            return PermissionVo.none(userId);
         // 有角色时逐账号行不参与裁决，省掉这次查询
         EsUserPermission row = roles.isEmpty() ? mapper.selectById(userId) : null;
         return effective(userId, roles, row);

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import type { Peer } from '../types/core'
 
 const rootRef = ref<HTMLElement | null>(null)
 
-defineProps<{
+const props = defineProps<{
   files: string[]
   dirs: string[]
   peers: Peer[]
@@ -13,7 +14,7 @@ defineProps<{
 const emit = defineEmits<{ pick: [id: string]; cancel: [] }>()
 
 const onKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape') emit('cancel')
+  if (event.key === 'Escape' && !props.sending) emit('cancel')
 }
 
 onMounted(() => {
@@ -28,9 +29,9 @@ const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() ?? 
 
 <template>
   <div ref="rootRef" class="drop-overlay" role="dialog" aria-modal="true" aria-label="选择接收设备">
-    <div class="drop-backdrop" @click="$emit('cancel')" />
+    <div class="drop-backdrop" @click="!sending && $emit('cancel')" />
 
-    <section class="drop-card">
+    <section v-content-motion="peers.length === 0" class="drop-card" :aria-busy="sending">
       <header class="drop-head">
         <div class="drop-title">
           <span class="drop-glyph" aria-hidden="true">
@@ -92,10 +93,12 @@ const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() ?? 
         </button>
       </div>
 
+      <Transition v-bind="presenceMotion" name="es-fade">
       <footer v-if="sending" class="drop-sending">
         <span class="drop-spinner" aria-hidden="true" />
         正在发送…
       </footer>
+      </Transition>
     </section>
   </div>
 </template>

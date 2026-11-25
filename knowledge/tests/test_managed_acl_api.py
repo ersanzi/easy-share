@@ -27,6 +27,8 @@ def _control_plane(monkeypatch, services, content=b"policy secret travel"):
     def urlopen(request, **kwargs):
         state["calls"].append((request.full_url, request.headers, json.loads(request.data) if request.data else None))
         if request.full_url.endswith("getInfo"):
+            if request.get_header("Authorization") not in ("Bearer trusted-sso", "Bearer fixture-sso"):
+                return io.BytesIO(json.dumps({"code": 401}).encode())
             data = {"user": {"userId": "2", "userName": "reader", "deptId": "10"}, "roles": [], "permissions": []}
         elif request.full_url.endswith("/mine"):
             data = {"knowledge": True}
@@ -115,7 +117,7 @@ def test_legacy_managed_manifest_migrates_only_with_matching_server_digest(tmp_p
     state = _control_plane(monkeypatch, services)
     headers = {"Authorization": "Bearer trusted-sso"}
     with TestClient(create_app(services)) as client:
-        job = _wait(client, client.post("/documents/process", json={"file_id": "legacy", "version_id": "v1", "object_key": "source/legacy.txt"}).json(), {})
+        job = _wait(client, client.post("/documents/process", json={"file_id": "legacy", "version_id": "v1", "object_key": "source/legacy.txt"}, headers=headers).json(), headers)
         # 模拟升级前已有受管来源、但无控制面绑定的产物和索引。
         key = "derived/legacy/v1/manifest.json"
         manifest = json.loads(storage.objects[key]); manifest["object_key"] = "shared/policy.txt"
@@ -143,8 +145,8 @@ def test_local_same_name_cannot_impersonate_sso_legacy_owner(tmp_path, monkeypat
     with TestClient(create_app(services)) as client:
         job = _wait(client, client.post("/documents/process", json={"file_id": "sso-private", "version_id": "v1", "object_key": "source/policy.txt"}, headers=trusted).json(), trusted)
         local_headers = {"Authorization": f"Bearer {local}"}
-        assert client.get(f"/documents/{job['file_id']}/versions/v1/view", headers=local_headers).status_code == 403
-        assert client.post("/query", json={"question": "policy"}, headers=local_headers).json()["contexts"] == []
+        assert client.get(f"/documents/{job['file_id']}/versions/v1/view", headers=local_headers).status_code == 401
+        assert client.post("/query", json={"question": "policy"}, headers=local_headers).status_code == 401
 
 
 def test_text_or_untrusted_process_cannot_replace_bound_drive_document(tmp_path, monkeypatch):

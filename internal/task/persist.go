@@ -10,6 +10,8 @@ import (
 // tasks to the given file path. All tasks (including non-terminal) are
 // persisted so that queued/running/paused tasks survive restarts.
 func (s *Store) EnablePersistence(path string) {
+	s.persistMutex.Lock()
+	defer s.persistMutex.Unlock()
 	s.mutex.Lock()
 	s.persistPath = path
 	s.mutex.Unlock()
@@ -59,6 +61,9 @@ func (s *Store) loadHistory() {
 }
 
 func (s *Store) persist() {
+	// 串行取得快照并落盘，旧快照不能晚于清历史的归属记录覆盖磁盘。
+	s.persistMutex.Lock()
+	defer s.persistMutex.Unlock()
 	s.mutex.RLock()
 	path := s.persistPath
 	if path == "" {

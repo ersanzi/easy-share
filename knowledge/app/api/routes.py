@@ -426,6 +426,10 @@ def query(req: QueryRequest, request: Request) -> QueryResponse:
         else None
     )
     contexts = outcome.contexts if outcome else []
+    # 快搜与未配置 LLM 的分支同样可能经历耗时检索，返回正文前统一复核。
+    checked = [scope.get(c.get("doc_id")) for c in contexts]
+    if any(document is None for document in checked) or not all(access.decisions(checked)):
+        return QueryResponse(answer="知识来源权限已变化，请重新查询。")
     chunks = [
         RetrievedChunk(
             doc_id=context.get("doc_id"),

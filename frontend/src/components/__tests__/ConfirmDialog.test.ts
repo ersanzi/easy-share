@@ -52,4 +52,29 @@ describe('ConfirmDialog', () => {
     expect(document.activeElement?.classList.contains('secondary-button')).toBe(true)
     wrapper.unmount()
   })
+  it('关闭的确认框不处理其他页面的 Escape', async () => {
+    const wrapper = mountDialog({ open: false })
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(wrapper.emitted('cancel')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('Tab 在对话框内循环，退出将焦点还给发起按钮', async () => {
+    const trigger = document.createElement('button')
+    document.body.append(trigger)
+    trigger.focus()
+    const wrapper = mountDialog()
+    await wrapper.vm.$nextTick()
+    const cancel = document.querySelector('.confirm-actions .secondary-button') as HTMLButtonElement
+    const submit = document.querySelector('.confirm-submit') as HTMLButtonElement
+    expect(document.activeElement).toBe(cancel)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true }))
+    expect(document.activeElement).toBe(submit)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true }))
+    expect(document.activeElement).toBe(cancel)
+    await wrapper.setProps({ open: false })
+    expect(document.activeElement).toBe(trigger)
+    wrapper.unmount()
+    trigger.remove()
+  })
 })

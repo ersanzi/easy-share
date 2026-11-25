@@ -10,9 +10,10 @@ import (
 )
 
 type Store struct {
-	mutex       sync.RWMutex
-	tasks       map[string]Task
-	persistPath string
+	mutex        sync.RWMutex
+	persistMutex sync.Mutex
+	tasks        map[string]Task
+	persistPath  string
 }
 
 func NewStore() *Store {
@@ -104,7 +105,7 @@ func (s *Store) Update(id string, update func(*Task) error) (Task, error) {
 		s.mutex.Unlock()
 		return Task{}, ErrImmutableID
 	}
-	if next.CreatedAt != current.CreatedAt || next.TotalBytes != current.TotalBytes || next.Direction != current.Direction || next.FileName != current.FileName || next.LocalPath != current.LocalPath || next.Peer != current.Peer || next.Kind != current.Kind {
+	if next.Hidden != current.Hidden || next.OwnerID != current.OwnerID || next.CreatedAt != current.CreatedAt || next.TotalBytes != current.TotalBytes || next.Direction != current.Direction || next.FileName != current.FileName || next.LocalPath != current.LocalPath || next.Peer != current.Peer || next.Kind != current.Kind {
 		s.mutex.Unlock()
 		return Task{}, ErrImmutableField
 	}

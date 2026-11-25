@@ -1,5 +1,32 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+// 内容先落到最终态；动画只作提示，可取消，宿主不支持 WAAPI 时直接可见。
+var stateMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: no-preference)') : null;
+var stateMotions = [];
+function revealState(element) {
+  stateMotions.slice().forEach(function (entry) {
+    if (entry.element === element) entry.animation.cancel();
+  });
+  if (!stateMotionQuery || !stateMotionQuery.matches || !element.animate) return;
+  var tokens = getComputedStyle(document.documentElement);
+  var animation = element.animate([{ opacity: .55 }, { opacity: 1 }], {
+    duration: parseFloat(tokens.getPropertyValue('--motion-enter')) || 200,
+    easing: tokens.getPropertyValue('--motion-ease').trim() || 'cubic-bezier(.2,0,0,1)'
+  });
+  var entry = { element: element, animation: animation };
+  stateMotions.push(entry);
+  animation.onfinish = animation.oncancel = function () {
+    var index = stateMotions.indexOf(entry);
+    if (index >= 0) stateMotions.splice(index, 1);
+  };
+}
+if (stateMotionQuery) {
+  var stopStateMotion = function () {
+    if (!stateMotionQuery.matches) stateMotions.slice().forEach(function (entry) { entry.animation.cancel(); });
+  };
+  if (stateMotionQuery.addEventListener) stateMotionQuery.addEventListener('change', stopStateMotion);
+  else if (stateMotionQuery.addListener) stateMotionQuery.addListener(stopStateMotion);
+}
 
 const elements = {
   form: $("#upload-form"),
@@ -50,6 +77,9 @@ const stageLabels = {
   completed: "处理完成", failed: "处理失败",
 };
 const state = { jobs: [], selectedId: null, artifact: "clean.md", uploading: false, asking: false };
+let jobsRefreshing = false;
+let artifactRevision = 0, acceptanceRevision = 0;
+let artifactLoadingKey = "";
 
 // ---------------------------------------------------------------------------
 // 登录态：令牌存 localStorage；AUTH_ENABLED=true 时业务请求携带 Bearer
@@ -79,6 +109,7 @@ function handleAuthFailure() {
 }
 
 async function doLogin() {
+  if (elements.loginButton.disabled) return;
   const username = elements.loginUser.value.trim();
   const password = elements.loginPass.value;
   if (!username || !password) return;
@@ -132,7 +163,7 @@ function setSelectedFile(file) {
   elements.selectedFile.textContent = `${file.name} · ${formatBytes(file.size)}`;
   elements.dropTitle.textContent = file.name;
   elements.dropCopy.textContent = `${formatBytes(file.size)} · 点击可重新选择`;
-  elements.uploadButton.disabled = false;
+  elements.uploadButton.disabled = state.uploading;
 }
 
 function setFormMessage(message, isError = false) {
@@ -152,6 +183,9 @@ async function parseError(response) {
 async function uploadFile(file) {
   if (!file || state.uploading) return;
   state.uploading = true;
+  elements.form.setAttribute("aria-busy", "true");
+  elements.fileInput.disabled = true;
+  elements.dropZone.setAttribute("aria-disabled", "true");
   elements.uploadButton.disabled = true;
   elements.uploadButton.querySelector("span:first-child").textContent = "正在写入与排队…";
   setFormMessage("源文件正在写入 RustFS，请保持服务运行。", false);
@@ -171,6 +205,9 @@ async function uploadFile(file) {
     setFormMessage(error.message || "上传失败", true);
   } finally {
     state.uploading = false;
+    elements.form.setAttribute("aria-busy", "false");
+    elements.fileInput.disabled = false;
+    elements.dropZone.setAttribute("aria-disabled", "false");
     elements.uploadButton.querySelector("span:first-child").textContent = "写入 RustFS 并处理";
     elements.uploadButton.disabled = !elements.fileInput.files.length;
   }
@@ -190,6 +227,15 @@ function stageIndex(job) {
   return 0;
 }
 
+function setProgress(value, jobId) {
+  const progress = Math.max(0, Math.min(100, Number(value) || 0));
+  elements.progressFill.classList.toggle("is-updating", elements.progressFill.dataset.jobId === jobId);
+  elements.progressFill.dataset.jobId = jobId;
+  elements.progressFill.style.transform = "scaleX(" + progress / 100 + ")";
+  elements.currentProgress.textContent = progress + "%";
+  elements.progressFill.parentElement.setAttribute("aria-valuenow", String(progress));
+}
+
 function renderPipeline(job) {
   if (!job) {
     elements.currentStatus.textContent = "等待任务";
@@ -197,7 +243,7 @@ function renderPipeline(job) {
     elements.currentFilename.textContent = "—";
     elements.currentStage.textContent = "idle";
     elements.currentProgress.textContent = "0%";
-    elements.progressFill.style.width = "0%";
+    setProgress(0, "");
     elements.errorBox.hidden = true;
     $$("#pipeline-track li").forEach((item) => item.className = "");
     return;
@@ -207,7 +253,7 @@ function renderPipeline(job) {
   elements.currentFilename.textContent = job.filename;
   elements.currentStage.textContent = stageLabels[job.stage] || job.stage;
   elements.currentProgress.textContent = `${job.progress}%`;
-  elements.progressFill.style.width = `${job.progress}%`;
+  setProgress(job.progress, job.id);
 
   const currentIndex = stageIndex(job);
   $$("#pipeline-track li").forEach((item, index) => {
@@ -226,6 +272,7 @@ function createJobItem(job) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "job-item";
+  button.dataset.jobId = job.id;
   button.classList.toggle("is-selected", job.id === state.selectedId);
   button.addEventListener("click", () => selectJob(job.id));
 
@@ -249,8 +296,8 @@ function createJobItem(job) {
 }
 
 function renderJobs() {
-  elements.jobList.replaceChildren();
   if (!state.jobs.length) {
+    elements.jobList.replaceChildren();
     const empty = document.createElement("p");
     empty.className = "empty-state";
     empty.textContent = "还没有任务。上传一个测试文档开始观察。";
@@ -258,9 +305,25 @@ function renderJobs() {
     renderPipeline(null);
     return;
   }
-  state.jobs.forEach((job) => elements.jobList.append(createJobItem(job)));
   const selected = state.jobs.find((job) => job.id === state.selectedId) || state.jobs[0];
   state.selectedId = selected.id;
+  // 轮询只更新已有节点；焦点、滚动位置与选中态不被周期重建打断。
+  const rows = new Map(Array.from(elements.jobList.querySelectorAll(".job-item"), (row) => [row.dataset.jobId, row]));
+  elements.jobList.querySelectorAll(".empty-state").forEach((node) => node.remove());
+  let cursor = elements.jobList.firstElementChild;
+  state.jobs.forEach((job) => {
+    const row = rows.get(job.id) || createJobItem(job);
+    row.classList.toggle("is-selected", job.id === state.selectedId);
+    row.setAttribute("aria-pressed", String(job.id === state.selectedId));
+    row.querySelector(".job-state").className = "job-state " + job.status;
+    row.querySelector(".job-copy strong").textContent = job.filename;
+    row.querySelector(".job-copy span").textContent = formatTime(job.created_at) + " · " + (stageLabels[job.stage] || job.stage);
+    row.querySelector(".job-progress").textContent = job.status === "failed" ? "FAIL" : job.progress + "%";
+    if (row !== cursor) elements.jobList.insertBefore(row, cursor);
+    cursor = row.nextElementSibling;
+    rows.delete(job.id);
+  });
+  rows.forEach((row) => row.remove());
   renderPipeline(selected);
   if (selected.status === "completed") {
     elements.artifactContext.textContent = `${selected.file_id} / ${selected.version_id}`;
@@ -268,6 +331,10 @@ function renderJobs() {
 }
 
 async function refreshJobs() {
+  if (jobsRefreshing) return;
+  jobsRefreshing = true;
+  elements.refreshButton.disabled = true;
+  elements.refreshButton.setAttribute("aria-busy", "true");
   try {
     const response = await fetch("/lab/api/jobs?limit=30", { cache: "no-store" });
     if (!response.ok) throw new Error(await parseError(response));
@@ -275,7 +342,7 @@ async function refreshJobs() {
     if (!state.selectedId && state.jobs.length) state.selectedId = state.jobs[0].id;
     renderJobs();
     const selected = state.jobs.find((job) => job.id === state.selectedId);
-    if (selected?.status === "completed" && elements.artifactViewer.dataset.jobId !== selected.id) {
+    if (selected?.status === "completed" && elements.artifactViewer.dataset.jobId !== selected.id && artifactLoadingKey !== selected.id + ":" + state.artifact) {
       await Promise.all([loadArtifact(state.artifact), loadAcceptance(selected)]);
     }
   } catch (error) {
@@ -284,10 +351,19 @@ async function refreshJobs() {
     message.className = "empty-state";
     message.textContent = `任务读取失败：${error.message}`;
     elements.jobList.append(message);
+  } finally {
+    jobsRefreshing = false;
+    elements.refreshButton.disabled = false;
+    elements.refreshButton.setAttribute("aria-busy", "false");
   }
 }
 
 async function selectJob(jobId) {
+  ++artifactRevision;
+  ++acceptanceRevision;
+  artifactLoadingKey = "";
+  renderAcceptanceSummary(null);
+  elements.cockpitLink.hidden = true;
   state.selectedId = jobId;
   renderJobs();
   const selected = state.jobs.find((job) => job.id === jobId);
@@ -297,14 +373,19 @@ async function selectJob(jobId) {
     elements.artifactContext.textContent = selected ? "任务尚未完成" : "选择已完成任务";
     elements.artifactViewer.textContent = "派生产物将在任务完成后可用。";
     delete elements.artifactViewer.dataset.jobId;
+    elements.artifactViewer.parentElement.setAttribute("aria-busy", "false");
+    elements.cockpitLink.hidden = true;
     renderAcceptanceSummary(null);
   }
 }
 
 async function loadArtifact(name) {
   state.artifact = name;
+  const revision = ++artifactRevision;
   const selected = state.jobs.find((job) => job.id === state.selectedId);
   if (!selected || selected.status !== "completed") return;
+  artifactLoadingKey = selected.id + ":" + name;
+  elements.artifactViewer.parentElement.setAttribute("aria-busy", "true");
   $$(".artifact-tab").forEach((tab) => {
     const active = tab.dataset.artifact === name;
     tab.classList.toggle("is-active", active);
@@ -314,9 +395,11 @@ async function loadArtifact(name) {
   try {
     const url = `/documents/${encodeURIComponent(selected.file_id)}/versions/${encodeURIComponent(selected.version_id)}/artifacts/${encodeURIComponent(name)}`;
     const response = await apiFetch(url, { cache: "no-store" });
+    if (revision !== artifactRevision || selected.id !== state.selectedId) return;
     if (response.status === 401) { handleAuthFailure(); throw new Error("请先登录"); }
     if (!response.ok) throw new Error(await parseError(response));
     const text = await response.text();
+    if (revision !== artifactRevision || selected.id !== state.selectedId) return;
     if (name.endsWith(".json")) {
       try { elements.artifactViewer.textContent = JSON.stringify(JSON.parse(text), null, 2); }
       catch (_) { elements.artifactViewer.textContent = text; }
@@ -324,9 +407,16 @@ async function loadArtifact(name) {
       elements.artifactViewer.textContent = text;
     }
     elements.artifactViewer.dataset.jobId = selected.id;
+    revealState(elements.artifactViewer.parentElement);
     elements.artifactContext.textContent = `${selected.file_id} / ${selected.version_id}`;
   } catch (error) {
+    if (revision !== artifactRevision || selected.id !== state.selectedId) return;
     elements.artifactViewer.textContent = `读取失败：${error.message}`;
+  } finally {
+    if (revision === artifactRevision) {
+      artifactLoadingKey = "";
+      elements.artifactViewer.parentElement.setAttribute("aria-busy", "false");
+    }
   }
 }
 
@@ -370,6 +460,7 @@ function renderAcceptanceSummary(manifest) {
 }
 
 async function loadAcceptance(job) {
+  const revision = ++acceptanceRevision;
   if (!job || job.status !== "completed") {
     renderAcceptanceSummary(null);
     elements.cockpitLink.hidden = true;
@@ -380,15 +471,20 @@ async function loadAcceptance(job) {
   try {
     const url = `/documents/${encodeURIComponent(job.file_id)}/versions/${encodeURIComponent(job.version_id)}/artifacts/manifest.json`;
     const response = await apiFetch(url, { cache: "no-store" });
+    if (revision !== acceptanceRevision || job.id !== state.selectedId) return;
     if (response.status === 401) { handleAuthFailure(); return; }
     if (!response.ok) throw new Error(await parseError(response));
-    renderAcceptanceSummary(await response.json());
+    const manifest = await response.json();
+    if (revision !== acceptanceRevision || job.id !== state.selectedId) return;
+    renderAcceptanceSummary(manifest);
   } catch (_) {
+    if (revision !== acceptanceRevision || job.id !== state.selectedId) return;
     renderAcceptanceSummary(null);
   }
 }
 
 async function retrySelected() {
+  if (elements.retryButton.disabled) return;
   const selected = state.jobs.find((job) => job.id === state.selectedId);
   if (!selected || selected.status !== "failed") return;
   elements.retryButton.disabled = true;
@@ -467,6 +563,8 @@ function createCitationItem(context, index) {
 async function askQuestion(question) {
   if (!question || state.asking) return;
   state.asking = true;
+  elements.askResult.hidden = true;
+  elements.askForm.setAttribute("aria-busy", "true");
   elements.askButton.disabled = true;
   elements.askButton.querySelector("span:first-child").textContent = "检索与生成中…";
   setAskMessage("正在检索知识库…", false);
@@ -484,6 +582,7 @@ async function askQuestion(question) {
       ...(payload.contexts || []).map((context, index) => createCitationItem(context, index)),
     );
     elements.askResult.hidden = false;
+    revealState(elements.askResult);
     if (!(payload.contexts || []).length) {
       setAskMessage("知识库中没有命中相关片段；请先在上方上传并处理文档。", false);
     } else {
@@ -493,6 +592,7 @@ async function askQuestion(question) {
     setAskMessage(error.message || "查询失败", true);
   } finally {
     state.asking = false;
+    elements.askForm.setAttribute("aria-busy", "false");
     elements.askButton.querySelector("span:first-child").textContent = "提问";
     elements.askButton.disabled = !elements.askInput.value.trim();
   }
@@ -501,11 +601,28 @@ async function askQuestion(question) {
 elements.fileInput.addEventListener("change", () => setSelectedFile(elements.fileInput.files[0]));
 elements.form.addEventListener("submit", (event) => { event.preventDefault(); uploadFile(elements.fileInput.files[0]); });
 elements.dropZone.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); elements.fileInput.click(); }
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (!state.uploading) elements.fileInput.click(); }
 });
-["dragenter", "dragover"].forEach((name) => elements.dropZone.addEventListener(name, (event) => { event.preventDefault(); elements.dropZone.classList.add("is-dragging"); }));
-["dragleave", "drop"].forEach((name) => elements.dropZone.addEventListener(name, (event) => { event.preventDefault(); elements.dropZone.classList.remove("is-dragging"); }));
+// 子元素间拖动也会触发 dragleave；计数避免高亮忽隐忽现，拖动期间不加延迟。
+let dragDepth = 0;
+function resetDropState() { dragDepth = 0; elements.dropZone.classList.remove("is-dragging"); }
+elements.dropZone.addEventListener("dragenter", (event) => {
+  event.preventDefault();
+  if (state.uploading) return;
+  dragDepth += 1;
+  elements.dropZone.classList.add("is-dragging");
+});
+elements.dropZone.addEventListener("dragover", (event) => { event.preventDefault(); });
+elements.dropZone.addEventListener("dragleave", (event) => {
+  event.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) resetDropState();
+});
+document.addEventListener("dragend", resetDropState);
 elements.dropZone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  resetDropState();
+  if (state.uploading) return;
   const file = event.dataTransfer.files[0];
   if (!file) return;
   const transfer = new DataTransfer();

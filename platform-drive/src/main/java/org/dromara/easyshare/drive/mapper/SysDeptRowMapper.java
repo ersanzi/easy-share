@@ -13,7 +13,7 @@ public interface SysDeptRowMapper extends BaseMapperPlus<SysDeptRow, SysDeptRow>
     @org.apache.ibatis.annotations.Select("""
         SELECT d.dept_id, d.parent_id, d.dept_name, d.status, d.del_flag FROM sys_dept d
         WHERE d.status = '0' AND d.del_flag = '0'
-          AND LOCATE(LOWER(#{keyword}), LOWER(d.dept_name)) > 0
+          AND POSITION(LOWER(#{keyword}) IN LOWER(d.dept_name)) > 0
           AND EXISTS (SELECT 1 FROM es_space_member m WHERE m.space_id = 1
             AND m.member_type = 'dept' AND m.user_id = d.dept_id AND m.permission IN ('read', 'write'))
         ORDER BY d.dept_id LIMIT #{limit}

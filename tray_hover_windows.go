@@ -191,8 +191,8 @@ func (p *hoverPopup) run(ready chan<- error) {
 	defer close(p.done)
 	restoreDPI := winui.EnterPerMonitorDPI()
 	defer restoreDPI()
-	// 用户明确要求桌宠 reveal；仅将来明确的应用设置可禁用，不继承 Windows 全局开关。
-	p.reducedMotion = false
+	// 原生面板与 WebView 使用同一系统减少动态效果偏好。
+	p.reducedMotion = !winui.ClientAreaAnimationsEnabled()
 
 	// COM 初始化与释放必须在创建宠物/面板的同一线程，S_FALSE 也要成对释放。
 	releaseCOM, err := winui.AcquireCOMSTA()

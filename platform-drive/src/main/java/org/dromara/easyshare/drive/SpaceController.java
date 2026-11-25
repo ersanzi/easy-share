@@ -47,6 +47,7 @@ public class SpaceController {
     private final org.dromara.easyshare.drive.mapper.SysUserDeptMapper userDeptMapper;
     private final org.dromara.easyshare.drive.mapper.SysDeptRowMapper deptRowMapper;
     private final org.dromara.easyshare.drive.service.FeaturePermissionService featurePermission;
+    private final org.dromara.easyshare.drive.service.PermissionSubjectService subjects;
 
     /**
      * 当前登录账号可见的空间：个人空间 + 有权限时的共享空间。
@@ -87,6 +88,7 @@ public class SpaceController {
     @SaCheckRole("superadmin")
     @GetMapping("/admin/list")
     public R<List<SpaceVo>> adminList() {
+        subjects.requireActiveSuperAdmin();
         Map<String, Long> usage = usageService.usedBytesGrouped();
         List<SpaceVo> result = new ArrayList<>();
         EsSpace shared = spaceService.findShared();
@@ -105,6 +107,7 @@ public class SpaceController {
     @SaCheckRole("superadmin")
     @GetMapping("/admin/capacity")
     public R<CapacityVo> capacity() {
+        subjects.requireActiveSuperAdmin();
         long committed = 0L;
         int unlimited = 0;
         for (EsSpace space : spaceService.listAll()) {
@@ -140,6 +143,7 @@ public class SpaceController {
     @SaCheckRole("superadmin")
     @GetMapping("/admin/shared-members")
     public R<List<MemberVo>> sharedMembers() {
+        subjects.requireActiveSuperAdmin();
         List<MemberVo> result = new ArrayList<>();
         for (org.dromara.easyshare.drive.domain.EsSpaceMember member : spaceService.listSharedMembers()) {
             String name = "";
@@ -165,6 +169,7 @@ public class SpaceController {
     @SaCheckRole("superadmin")
     @GetMapping("/admin/depts")
     public R<List<DeptVo>> depts() {
+        subjects.requireActiveSuperAdmin();
         List<DeptVo> result = new ArrayList<>();
         spaceService.listDepts().forEach(dept ->
             result.add(new DeptVo(String.valueOf(dept.getDeptId()), dept.getDeptName())));

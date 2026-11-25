@@ -100,7 +100,8 @@ type Service struct {
 	store *Store
 	mutex sync.RWMutex
 	// session 当前会话；Token 仅经 Current() 在 Core 内部使用。
-	session Session
+	session  Session
+	revision uint64
 }
 
 // NewService 加载既有会话（缺文件即未配置态）。
@@ -136,22 +137,82 @@ func (service *Service) Current() Session {
 
 // SignIn 更新会话并落盘。
 func (service *Service) SignIn(session Session) error {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	service.revision++
+	return service.signInLocked(session)
+}
+
+func (service *Service) signInLocked(session Session) error {
 	if err := service.store.Save(session); err != nil {
 		return err
 	}
-	service.mutex.Lock()
+	session.generation = service.revision
 	service.session = session
-	service.mutex.Unlock()
 	return nil
 }
 
 // SignOut 清空会话并删除落盘文件。
 func (service *Service) SignOut() error {
-	if err := service.store.Clear(); err != nil {
-		return err
-	}
 	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	return service.signOutLocked()
+}
+
+func (service *Service) signOutLocked() error {
+	service.revision++
+	// 即使文件删除失败，也不能让当前进程继续使用旧身份。
 	service.session = Session{}
-	service.mutex.Unlock()
-	return nil
+	return service.store.Clear()
+}
+
+// BeginSignIn 撤销旧身份并登记新请求；网络探测期间不再借用旧账号。
+func (service *Service) BeginSignIn() (uint64, error) {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	err := service.signOutLocked()
+	return service.revision, err
+}
+
+// BeginSSO 为自动探测预留世代；独立登录不因服务不支持 SSO 而被清除。
+// 旧企业会话仍立即撤销，后续注销或登录也仍能使本次探测失效。
+func (service *Service) BeginSSO() (uint64, error) {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if service.session.Token != "" && service.session.Mode != ModeSSO {
+		service.revision++
+		return service.revision, nil
+	}
+	err := service.signOutLocked()
+	return service.revision, err
+}
+
+// ErrSessionChanged 表示当前登录/注销已取代了迟到的请求。
+var ErrSessionChanged = errors.New("知识账号状态已变化，请重试")
+
+// CompleteSignIn 只有发起请求时的世代仍有效才能保存会话。
+func (service *Service) CompleteSignIn(revision uint64, session Session) error {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if service.revision != revision {
+		return ErrSessionChanged
+	}
+	return service.signInLocked(session)
+}
+
+// IsCurrent 用于响应发送前阻止旧账号内容落入新账号页面。
+func (service *Service) IsCurrent(session Session) bool {
+	service.mutex.RLock()
+	defer service.mutex.RUnlock()
+	return service.session == session && session.Token != ""
+}
+
+// SignOutIf 旧请求的401不能清理后续登录，即使重新签入使用了同一令牌。
+func (service *Service) SignOutIf(session Session) error {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	if service.session != session {
+		return nil
+	}
+	return service.signOutLocked()
 }

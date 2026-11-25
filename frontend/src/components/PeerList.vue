@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { vContentMotion } from '../directives/contentMotion'
 import type { Peer } from '../types/core'
 
 defineProps<{ peers: Peer[] }>()
@@ -6,7 +7,7 @@ defineEmits<{ send: [id: string] }>()
 </script>
 
 <template>
-  <section class="card peer-panel">
+  <section v-content-motion="peers.length === 0" class="card peer-panel">
     <header class="card-header">
       <div>
         <span class="section-label">附近</span>

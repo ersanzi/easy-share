@@ -39,17 +39,36 @@ func (a *App) refreshAccountSession(ctx context.Context, client *account.Client,
 		return nil
 	}
 	fresh, err := client.SessionInfo(ctx, session.Token)
+	if err == nil && (fresh.User.UserID == "" || fresh.User.UserID != session.User.UserID) {
+		err = staleProfileError()
+	}
 	if err != nil {
+		// 离线保留身份供展示，但不能保留上一轮生效的管理员或功能授权。
+		a.accountMu.Lock()
+		changed := a.accountSession == session && a.accountRevision == revision
+		if changed {
+			a.features = account.FeatureFlags{}
+			a.adminScope = account.AdminScopeNone
+			session.Roles = nil
+			session.Permissions = nil
+		}
+		a.accountMu.Unlock()
+		if changed {
+			a.notifyAccountChanged()
+		} else {
+			// 新请求已完成或已换人；迟到401也不能触发外层注销当前会话。
+			return nil
+		}
 		return err
 	}
-	flags, scope, avatar := a.readAccountProfile(ctx, client, fresh)
+	flags, scope, avatar, permissionErr := a.readAccountProfile(ctx, client, fresh)
 	fresh.User.Avatar = avatar
 	if !a.commitAccountProfile(session, fresh, revision, flags, scope) {
 		return nil
 	}
 	a.saveAccountSession(session)
 	a.notifyAccountChanged()
-	return nil
+	return permissionErr
 }
 
 func (a *App) startAccountProfileRefresh() {

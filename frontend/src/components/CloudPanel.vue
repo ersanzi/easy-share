@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { CloudFile, CloudPreview as CloudPreviewData, ShareLink, VersionEntry, AuthUser, Space, SpaceType } from '../types/core'
 import SharedDrivePanel from './SharedDrivePanel.vue'
@@ -18,6 +19,13 @@ const emit = defineEmits<{ upload: [targetDir: string]; uploadFolder: [targetDir
 
 const files = ref<CloudFile[]>([])
 const loading = ref(false)
+const filesError = ref('')
+let disposed = false
+let filesRequest = 0
+let previewRequest = 0
+let versionsRequest = 0
+let sharesRequest = 0
+let usageRequest = 0
 const shareUrl = ref('')
 const shareExpires = ref('')
 const shareId = ref('')
@@ -35,14 +43,16 @@ const cfapiPath = ref('')
 const spaceUsage = ref<{ usedBytes: number; quotaBytes: number } | null>(null)
 
 const loadSpaceUsage = async () => {
+  const request = ++usageRequest
   try {
     const spaces = await core.mySpaces()
+    if (disposed || request !== usageRequest) return
     const personal = spaces.find((s) => s.spaceType === 'personal')
     if (personal) {
       spaceUsage.value = { usedBytes: personal.usedBytes, quotaBytes: personal.quotaBytes }
     }
   } catch {
-    spaceUsage.value = null
+    if (!disposed && request === usageRequest) spaceUsage.value = null
   }
 }
 
@@ -92,13 +102,18 @@ const view = computed(() =>
 )
 
 const loadFiles = async () => {
+  if (disposed) return
+  const request = ++filesRequest
   loading.value = true
+  filesError.value = ''
   try {
-    files.value = await core.cloudListInSpace('personal')
-  } catch {
-    files.value = []
+    const result = await core.cloudListInSpace('personal')
+    if (!disposed && request === filesRequest) files.value = result
+  } catch (e) {
+    if (disposed || request !== filesRequest) return
+    filesError.value = e instanceof Error ? e.message : '文件列表加载失败，请重试'
   } finally {
-    loading.value = false
+    if (!disposed && request === filesRequest) loading.value = false
   }
 }
 
@@ -354,6 +369,7 @@ const batchProgress = ref('')
 const notice = ref('')
 let noticeTimer: number | undefined
 const showNotice = (message: string) => {
+  if (disposed) return
   notice.value = message
   window.clearTimeout(noticeTimer)
   noticeTimer = window.setTimeout(() => { notice.value = '' }, 4000)
@@ -678,14 +694,17 @@ const shares = ref<ShareLink[]>([])
 const sharesLoading = ref(false)
 
 const loadShares = async () => {
+  const request = ++sharesRequest
   sharesLoading.value = true
   try {
-    shares.value = await core.cloudShares()
+    const result = await core.cloudShares()
+    if (!disposed && request === sharesRequest) shares.value = result
   } catch {
+    if (disposed || request !== sharesRequest) return
     shares.value = []
     showNotice('分享列表加载失败')
   } finally {
-    sharesLoading.value = false
+    if (!disposed && request === sharesRequest) sharesLoading.value = false
   }
 }
 
@@ -734,15 +753,19 @@ const versionsLoading = ref(false)
 const openVersions = async () => {
   const file = selectedFile.value
   if (!file) return
+  const request = ++versionsRequest
   versionsOpen.value = true
   versionsLoading.value = true
+  versions.value = []
   try {
-    versions.value = await core.cloudVersions(file.key)
+    const result = await core.cloudVersions(file.key)
+    if (!disposed && request === versionsRequest) versions.value = result
   } catch {
+    if (disposed || request !== versionsRequest) return
     versions.value = []
     showNotice('版本历史加载失败')
   } finally {
-    versionsLoading.value = false
+    if (!disposed && request === versionsRequest) versionsLoading.value = false
   }
 }
 
@@ -759,6 +782,12 @@ const restoreVersion = async (version: VersionEntry) => {
     showNotice(e instanceof Error ? e.message : '恢复失败')
   }
 }
+watch(() => selectedFile.value?.key, () => {
+  ++versionsRequest
+  versionsOpen.value = false
+  versionsLoading.value = false
+})
+
 // 分享条上的有效期：只显示到日，不必精确到分钟
 const shareExpiryLabel = computed(() => {
   if (!shareExpires.value) return '有效'
@@ -767,13 +796,13 @@ const shareExpiryLabel = computed(() => {
   return `至 ${d.getMonth() + 1}/${d.getDate()}`
 })
 const closePreview = () => {
+  ++previewRequest
   previewOpen.value = false
-  previewLoading.value = false
-  previewError.value = ''
-  previewData.value = null
+  // 退出期间保留当前画面；下次打开再重置内容。
 }
 
 const openPreview = async (file: CloudFile) => {
+  const request = ++previewRequest
   // 预览也算一次访问：从行内按钮进来时不经过 openFile，这里补埋点
   touchRecent(file.key)
   previewOpen.value = true
@@ -782,14 +811,16 @@ const openPreview = async (file: CloudFile) => {
   previewData.value = null
   try {
     const result = await core.cloudPreview(file.key)
+    if (disposed || request !== previewRequest) return
     previewData.value = result
     if (result.kind === 'unsupported') {
       previewError.value = '此格式暂不支持在线预览，请下载后打开。'
     }
   } catch (error) {
+    if (disposed || request !== previewRequest) return
     previewError.value = error instanceof Error ? error.message : '预览服务暂不可用，请稍后重试。'
   } finally {
-    previewLoading.value = false
+    if (!disposed && request === previewRequest) previewLoading.value = false
   }
 }
 
@@ -837,6 +868,9 @@ onMounted(() => {
   window.addEventListener('scroll', closeCtxMenu, true)
 })
 onBeforeUnmount(() => {
+  disposed = true
+  ++previewRequest
+  window.clearTimeout(noticeTimer)
   stopCloudChanged?.()
   document.removeEventListener('keydown', onGlobalKeydown)
   document.removeEventListener('click', closeCtxMenu)
@@ -851,7 +885,7 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
   <SharedDrivePanel v-if="sharedSelected" ref="sharedRef" :operator-id="user?.userId ?? ''" :knowledge-enabled="user?.features.knowledge" />
   <section v-show="!sharedSelected" class="card cloud-panel" :class="{ 'detail-open': detailOpen }">
     <!-- 左栏：工具条 + 列表。详情面板展开时本列收窄，列表仍吃满剩余宽度 -->
-    <div class="cloud-browser">
+    <div v-content-motion="!enabled ? 'disabled' : loading ? 'loading' : filesError ? 'error' : currentPath + ':' + onlyStarred + ':' + (visibleCount ? 'ready' : 'empty')" :aria-busy="loading" class="cloud-browser">
     <header class="card-header">
       <div>
         <span class="section-label">云端</span>
@@ -876,6 +910,7 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
 
     <template v-else>
       <!-- 批量条：有选中项时顶掉常规工具条，避免两套操作同时占着顶部 -->
+      <Transition v-bind="presenceMotion" name="es-content">
       <div v-if="checkedCount" class="cloud-batch-bar">
         <button class="batch-clear" type="button" title="取消选择" @click="clearChecked">
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
@@ -924,8 +959,11 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
           </div>
         </div>
       </div>
+      </Transition>
 
+      <Transition v-bind="presenceMotion" name="es-fade">
       <div v-if="notice" class="cloud-notice">{{ notice }}</div>
+      </Transition>
 
       <!-- 列头：与列表行共用同一套 grid 模板，点哪列按哪列排。
            排序做成列头而不是工具栏下拉框——用户视线在文件列表上，操作就在视线上。 -->
@@ -975,13 +1013,19 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
         <div v-if="spaceUsage" class="cloud-usage" :title="usageLabel">
           <span class="usage-text">{{ usageLabel }}</span>
           <span v-if="usagePercent !== null" class="usage-bar">
-            <i :style="{ width: usagePercent + '%' }" :class="{ warn: usagePercent >= 90 }"></i>
+            <i :style="{ transform: `scaleX(${Math.max(0, usagePercent) / 100})` }" :class="{ warn: usagePercent >= 90 }"></i>
           </span>
         </div>
       </div>
 
       <div v-if="loading" class="empty-state compact-empty">
         <strong>加载中…</strong>
+      </div>
+
+      <div v-else-if="filesError" class="empty-state compact-empty" role="alert">
+        <strong>文件列表加载失败</strong>
+        <p>{{ filesError }}</p>
+        <button class="text-button" type="button" @click="loadFiles">重试</button>
       </div>
 
       <div v-else-if="!visibleCount" class="empty-state compact-empty">
@@ -1030,7 +1074,9 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
               @click.stop="toggleCheck(file.key)"
             ><i></i></button>
             <!-- 星标徽章钉在图标右上角：不进任何一列，三列对齐不会被它破坏 -->
+            <Transition v-bind="presenceMotion" name="es-fade">
             <svg v-if="isStarred(file.key)" class="star-badge" aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.8Z"/></svg>
+            </Transition>
           </div>
           <div class="cloud-info">
             <strong>{{ file.name }}</strong>
@@ -1053,18 +1099,21 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
         <div class="cloud-list-end">{{ view.searching ? '搜索完毕' : '没有更多了' }}</div>
       </div>
 
+      <Transition v-bind="presenceMotion" name="es-disclosure">
       <div v-if="shareUrl" class="share-bar">
         <span class="share-label">{{ shareKey }} 分享链接（{{ shareExpiryLabel }} 有效，可撤销）：</span>
         <code class="share-url">{{ shareUrl }}</code>
         <button class="primary-button compact" type="button" @click="copyShare">复制</button>
         <button class="text-button" type="button" @click="revokeShare">撤销</button>
       </div>
+      </Transition>
     </template>
     </div>
 
     <!-- 右栏：文件详情（对标 WPS 右侧属性卡 / 钉钉右侧详情）。
          点行展开、再点收起；字段缺失就整行不渲染，不用占位符充数。 -->
-    <aside v-if="detailOpen" class="cloud-detail">
+    <Transition v-bind="presenceMotion" name="es-disclosure">
+    <aside v-content-motion="selectedFile?.key" v-if="detailOpen" class="cloud-detail">
       <header class="detail-head">
         <b>文件详情</b>
         <button type="button" title="关闭" @click="closeDetail">
@@ -1077,7 +1126,7 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
           <svg viewBox="0 0 24 24"><path d="M6 2h8l5 5v15H6z"/><path d="M14 2v6h6"/></svg>
         </div>
 
-        <div class="detail-title">
+        <div v-content-motion="renaming" class="detail-title">
           <template v-if="!renaming">
             <h2 class="detail-name" :title="detail.name">{{ detail.name }}</h2>
             <button
@@ -1103,7 +1152,9 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
             @blur="commitRename"
           >
         </div>
+        <Transition v-bind="presenceMotion" name="es-fade">
         <p v-if="renameError" class="detail-rename-error">{{ renameError }}</p>
+        </Transition>
         <p class="detail-sub">{{ fileTypeLabel(detail.name) }} · {{ formatSize(detail.size) }}</p>
 
         <div class="detail-actions">
@@ -1127,9 +1178,11 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
         <button class="detail-danger" type="button" @click="$emit('delete', detail.key)">删除此文件</button>
       </div>
     </aside>
+    </Transition>
   </section>
 
   <!-- 右键菜单：位置贴鼠标，动作与行尾按钮同源，只是入口不同 -->
+  <Transition v-bind="presenceMotion" name="es-popover">
   <div
     v-if="ctxMenu"
     class="ctx-menu"
@@ -1154,8 +1207,10 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
     </template>
     <button class="ctx-item danger" type="button" @click="ctxDelete">删除</button>
   </div>
+  </Transition>
 
   <!-- 版本历史：留档发生在 presign-put，只有被覆盖过的文件才有记录 -->
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <div v-if="versionsOpen" class="move-overlay" @click.self="versionsOpen = false">
     <div class="share-dialog" role="dialog" aria-label="历史版本">
       <header class="move-head">
@@ -1164,7 +1219,7 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
       </header>
-      <div class="share-body">
+      <div v-content-motion="versionsLoading ? 'loading' : versions.length ? 'ready' : 'empty'" class="share-body">
         <p v-if="versionsLoading" class="share-empty">加载中…</p>
         <p v-else-if="!versions.length" class="share-empty">
           这个文件还没有历史版本。每次覆盖上传前会保留一份旧内容，届时这里会出现记录。
@@ -1181,8 +1236,10 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
       </div>
     </div>
   </div>
+  </Transition>
 
   <!-- 我的分享：保留已撤销与已过期的记录，否则「我明明分享过」会变成悬案 -->
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <div v-if="sharesOpen" class="move-overlay" @click.self="sharesOpen = false">
     <div class="share-dialog" role="dialog" aria-label="我的分享">
       <header class="move-head">
@@ -1192,7 +1249,7 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
         </button>
       </header>
 
-      <div class="share-body">
+      <div v-content-motion="sharesLoading ? 'loading' : shares.length ? 'ready' : 'empty'" class="share-body">
         <p v-if="sharesLoading" class="share-empty">加载中…</p>
         <p v-else-if="!shares.length" class="share-empty">还没有分享过文件。在文件上右键选「分享链接」即可创建。</p>
         <template v-else>
@@ -1216,8 +1273,10 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
       </div>
     </div>
   </div>
+  </Transition>
 
   <!-- 移动到：目录选择浮层。目录清单由文件 key 前缀推导，不额外请求后端 -->
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <div v-if="moveOpen" class="move-overlay" @click.self="moveOpen = false">
     <div class="move-dialog" role="dialog" aria-label="移动文件">
       <header class="move-head">
@@ -1265,8 +1324,10 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
       </footer>
     </div>
   </div>
+  </Transition>
 
   <!-- 新建文件夹：名称输入浮层。Enter 直接提交——唯一动作就是打字后确认 -->
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <div v-if="mkdirOpen" class="move-overlay" @click.self="mkdirOpen = false">
     <div class="move-dialog" role="dialog" aria-label="新建文件夹">
       <header class="move-head">
@@ -1302,8 +1363,10 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
       </footer>
     </div>
   </div>
+  </Transition>
 
   <!-- 批量删除确认：走自己的浮层，不用 window.confirm（原生弹窗在 WebView 里样式与产品割裂） -->
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <div v-if="batchConfirmOpen" class="move-overlay" @click.self="batchConfirmOpen = false">
     <div class="move-dialog confirm-dialog" role="dialog" aria-label="删除文件">
       <header class="move-head"><b>删除 {{ checkedCount }} 个文件</b></header>
@@ -1314,8 +1377,13 @@ defineExpose({ refresh: () => sharedSelected.value ? sharedRef.value?.refresh() 
       </footer>
     </div>
   </div>
+  </Transition>
 
+  <Transition v-bind="presenceMotion" name="es-dialog">
   <CloudPreviewView v-if="previewOpen" :preview="previewData" :loading="previewLoading" :error="previewError" @close="closePreview" />
+  </Transition>
   <!-- 回收站覆盖网盘区；返回时刷新主列表确认还原落点 -->
+  <Transition v-bind="presenceMotion" name="es-content">
   <RecyclePanel v-if="recycleOpen" class="recycle-overlay" @back="recycleOpen = false; loadFiles()" />
+  </Transition>
 </template>

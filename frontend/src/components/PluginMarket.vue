@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 // PluginMarket：插件中心（官方自营商城 + 已装管理）。
 // 商城数据来自控制面 /easyshare/plugins（匿名）；安装 = 下载 zip（SHA256 校验）→
 // 解压登记（Go 侧完成）；已装管理与设置页同一套动作（启停/卸载，内置不可动）。
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { core } from '../services/core'
 import { usePlugins } from '../composables/usePlugins'
 import { useConfirm } from '../composables/useConfirm'
@@ -17,18 +18,25 @@ const market = ref<MarketItem[]>([])
 // 进入插件中心即清除启动检查的红点（页面内「更新」按钮继续引导）
 pluginSys.clearUpdateNotices()
 const loading = ref(false)
+let disposed = false
+let loadRequest = 0
+onBeforeUnmount(() => { disposed = true; ++loadRequest })
 const loadError = ref('')
 const busyId = ref('') // 正在安装/更新的插件 ID
 
 const load = async () => {
+  if (disposed) return
+  const request = ++loadRequest
   loading.value = true
   loadError.value = ''
   try {
-    market.value = await core.pluginMarketList()
+    const result = await core.pluginMarketList()
+    if (!disposed && request === loadRequest) market.value = result
   } catch (e) {
+    if (disposed || request !== loadRequest) return
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (!disposed && request === loadRequest) loading.value = false
   }
 }
 
@@ -95,12 +103,19 @@ const permLabel = (perm: string): string => ({
   'drive.upload': '上传到个人云盘',
 }[perm] ?? perm)
 
-const togglePlugin = async (id: string, disabled: boolean) => {
-  await pluginSys.setDisabled(id, disabled)
+const changeInstalled = async (id: string, action: () => Promise<unknown>) => {
+  if (busyId.value || disposed) return
+  busyId.value = id
+  loadError.value = ''
+  try { await action() }
+  catch (e) { if (!disposed) loadError.value = e instanceof Error ? e.message : String(e) }
+  finally { busyId.value = '' }
 }
+const togglePlugin = (id: string, disabled: boolean) => changeInstalled(id, () => pluginSys.setDisabled(id, disabled))
 const removePlugin = async (id: string) => {
+  if (busyId.value) return
   if (!await confirm({ title: '卸载插件', message: '确定卸载该插件？其私有数据将被清除。', confirmText: '卸载', danger: true })) return
-  await pluginSys.uninstall(id)
+  await changeInstalled(id, () => pluginSys.uninstall(id))
 }
 
 const isIconPath = (icon: string) => !!icon && /[/.]/.test(icon)
@@ -112,7 +127,7 @@ const formatBytes = (n: number) => {
 </script>
 
 <template>
-  <div class="plugin-market">
+  <div v-content-motion="tab + ':' + (loading ? 'loading' : loadError ? 'error' : 'ready')" :aria-busy="loading" class="plugin-market">
     <header class="workspace-header">
       <div>
         <span class="section-label">扩展</span>
@@ -129,7 +144,9 @@ const formatBytes = (n: number) => {
       </div>
     </header>
 
+    <Transition v-bind="presenceMotion" name="es-fade">
     <p v-if="loadError" class="update-error market-error">{{ loadError }}</p>
+    </Transition>
 
     <!-- 商城 -->
     <div v-if="tab === 'market'" class="market-grid">
@@ -155,11 +172,11 @@ const formatBytes = (n: number) => {
           <small class="market-card-meta">
             {{ item.publishedAt }}<template v-if="item.asset"> · {{ formatBytes(item.asset.sizeBytes) }}</template>
           </small>
-          <button
+          <button v-content-motion="busyId === item.id ? 'busy' : item.updateAvailable ? 'update' : installedById.has(item.id) ? 'installed' : 'new'"
             v-if="item.asset && !localNewer(item)"
             class="primary-button compact"
             type="button"
-            :disabled="busyId === item.id || (!!installedById.get(item.id)?.builtin && item.updateAvailable)"
+            :disabled="!!busyId || (!!installedById.get(item.id)?.builtin && item.updateAvailable)"
             @click="install(item)"
           >
             {{ busyId === item.id ? '安装中…' : item.updateAvailable ? '更新' : installedById.has(item.id) ? '重新安装' : '安装' }}
@@ -188,10 +205,10 @@ const formatBytes = (n: number) => {
             :class="['plugin-switch', !p.disabled ? 'on' : '', p.builtin ? 'disabled' : '']"
             type="button"
             :aria-label="p.disabled ? '启用插件' : '禁用插件'"
-            :disabled="p.builtin"
+            :disabled="p.builtin || !!busyId"
             @click="togglePlugin(p.id, !p.disabled)"
           />
-          <button v-if="!p.builtin" class="secondary-button danger compact" type="button" @click="removePlugin(p.id)">
+          <button v-if="!p.builtin" class="secondary-button danger compact" type="button" :disabled="!!busyId" @click="removePlugin(p.id)">
             卸载
           </button>
         </div>

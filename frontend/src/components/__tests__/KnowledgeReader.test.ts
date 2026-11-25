@@ -1,7 +1,37 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import KnowledgeReader from '../KnowledgeReader.vue'
+import KnowledgePanel from '../KnowledgePanel.vue'
 import type { KnowledgeDocumentView } from '../../types/core'
+
+const knowledgeMocks = vi.hoisted(() => ({
+  status: vi.fn(), ask: vi.fn(), documents: vi.fn(), document: vi.fn(),
+  events: new Map<string, () => unknown>(), stop: vi.fn(),
+}))
+vi.mock('../../services/core', () => ({ core: {
+  knowledgeStatus: knowledgeMocks.status,
+  knowledgeHealth: vi.fn().mockResolvedValue(null),
+  knowledgeAsk: knowledgeMocks.ask,
+  knowledgeDocuments: knowledgeMocks.documents,
+  knowledgeDocument: knowledgeMocks.document,
+} }))
+vi.mock('../../composables/useEasyShare', () => ({ useEasyShare: () => ({ currentUser: { value: { userName: 'employee' } } }) }))
+vi.mock('../../../wailsjs/runtime/runtime', () => ({
+  EventsOn: (event: string, callback: () => unknown) => {
+    knowledgeMocks.events.set(event, callback)
+    return knowledgeMocks.stop
+  },
+}))
+enableAutoUnmount(afterEach)
+const loggedIn = { configured: true, loggedIn: true, serverUrl: 'https://knowledge.test', username: 'employee', role: 'user', mode: 'sso' }
+beforeEach(() => {
+  knowledgeMocks.status.mockReset().mockResolvedValue(loggedIn)
+  knowledgeMocks.ask.mockReset()
+  knowledgeMocks.documents.mockReset().mockResolvedValue({ documents: [] })
+  knowledgeMocks.document.mockReset()
+  knowledgeMocks.events.clear()
+  knowledgeMocks.stop.mockClear()
+})
 
 const view: KnowledgeDocumentView = {
   manifest: {
@@ -23,6 +53,18 @@ const view: KnowledgeDocumentView = {
 }
 
 describe('KnowledgeReader', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('positions a heading immediately when reduced motion is requested', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    const wrapper = mount(KnowledgeReader, { props: { view, loading: false, error: '' }, attachTo: document.body })
+    const scroll = vi.fn()
+    wrapper.get('#knowledge-block-h1').element.scrollIntoView = scroll
+    await wrapper.get('.reader-outline button').trigger('click')
+    expect(scroll).toHaveBeenCalledWith({ block: 'center', behavior: 'instant' })
+    wrapper.unmount()
+  })
+
   it('renders headings, paragraphs and tables as read-only content', () => {
     const wrapper = mount(KnowledgeReader, { props: { view, loading: false, error: '' } })
     expect(wrapper.get('.reader-title h2').text()).toBe('差旅制度.doc')
@@ -62,5 +104,44 @@ describe('KnowledgeReader', () => {
     await wrapper.get('.reader-actions button').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
     expect(wrapper.emitted('download')).toHaveLength(1)
+  })
+})
+
+
+describe('KnowledgePanel session lifecycle', () => {
+  it('discards an answer if the session ends while the request is pending', async () => {
+    let finish!: (value: { answer: string; contexts: never[] }) => void
+    knowledgeMocks.ask.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(KnowledgePanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+    await wrapper.get('.knowledge-input').setValue('待回答的问题')
+    await wrapper.get('.knowledge-composer').trigger('submit')
+    await flushPromises()
+    knowledgeMocks.status.mockResolvedValue({ ...loggedIn, loggedIn: false })
+    await knowledgeMocks.events.get('knowledge:session-changed')?.()
+    await flushPromises()
+    finish({ answer: '旧会话中的回答', contexts: [] })
+    await flushPromises()
+    expect(wrapper.find('.knowledge-composer').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('旧会话中的回答')
+    expect(wrapper.text()).toContain('连接公司知识服务器')
+  })
+
+  it('ignores a document list from a session that has been cleared', async () => {
+    let finish!: (value: { documents: unknown[] }) => void
+    knowledgeMocks.documents.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(KnowledgePanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+    await wrapper.findAll('.knowledge-tabs button')[1]!.trigger('click')
+    knowledgeMocks.status.mockResolvedValue({ ...loggedIn, loggedIn: false })
+    await knowledgeMocks.events.get('knowledge:session-changed')?.()
+    await flushPromises()
+    finish({ documents: [{ file_id: 'old', filename: '旧会话文档', ready: true, read_version_id: 'v1' }] })
+    await flushPromises()
+    knowledgeMocks.status.mockResolvedValue(loggedIn)
+    await knowledgeMocks.events.get('knowledge:session-changed')?.()
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('旧会话文档')
+    expect(wrapper.text()).toContain('知识库还没有文档')
   })
 })

@@ -38,6 +38,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class DriveChangeLogService {
 
+    /** 单页硬上限，避免长时间离线的客户端一次读取整个日志表。 */
+    public static final int CHANGE_PAGE_SIZE = 500;
+
     private final EsSpaceMapper spaceMapper;
     private final EsFileChangeLogMapper logMapper;
 
@@ -50,18 +53,45 @@ public class DriveChangeLogService {
     }
 
     /**
-     * 拉取 {@code sinceVersion} 之后（不含它本身）的变更。
-     *
-     * <p>参数约定与钉盘 {@code listRedologs} 一致：
-     * {@code sinceVersion = 0} 表示从该空间有日志以来全拉；
-     * {@code null} 由 Controller 层翻译成“全量重建”，不走本方法。
+     * 在请求开始的版本水位内取一页连续日志；游标只能推进到本页实际交付的位置。
+     * 日志被裁剪、游标超前或中间缺条时必须重建，不能把不完整差异当成成功。
      */
-    public List<EsFileChangeLog> changesAfter(String spaceType, Long ownerId, long sinceVersion) {
-        return logMapper.selectList(new LambdaQueryWrapper<EsFileChangeLog>()
+    public ChangePage changesAfter(String spaceType, Long ownerId, long sinceVersion, long throughVersion) {
+        if (sinceVersion < 0 || sinceVersion > throughVersion) {
+            return ChangePage.reset(sinceVersion);
+        }
+        if (sinceVersion == throughVersion) {
+            return new ChangePage(List.of(), sinceVersion, false, false);
+        }
+        List<EsFileChangeLog> entries = logMapper.selectList(new LambdaQueryWrapper<EsFileChangeLog>()
             .eq(EsFileChangeLog::getSpaceType, spaceType)
             .eq(EsFileChangeLog::getOwnerId, ownerId)
             .gt(EsFileChangeLog::getSpaceVersion, sinceVersion)
-            .orderByAsc(EsFileChangeLog::getSpaceVersion));
+            .le(EsFileChangeLog::getSpaceVersion, throughVersion)
+            .orderByAsc(EsFileChangeLog::getSpaceVersion)
+            .last("LIMIT " + CHANGE_PAGE_SIZE));
+        long cursor = sinceVersion;
+        for (EsFileChangeLog entry : entries) {
+            Long version = entry.getSpaceVersion();
+            if (cursor == Long.MAX_VALUE || version == null || version != cursor + 1
+                || version > throughVersion) {
+                return ChangePage.reset(sinceVersion);
+            }
+            cursor = version;
+        }
+        // 未满页却没有走到读取水位，说明尾部日志缺失；满页则由下一页继续验证。
+        if (entries.size() < CHANGE_PAGE_SIZE && cursor < throughVersion) {
+            return ChangePage.reset(sinceVersion);
+        }
+        return new ChangePage(List.copyOf(entries), cursor, cursor < throughVersion, false);
+    }
+
+    /** reset 时不交付任何部分日志，也不把失败的读取水位交给客户端保存。 */
+    public record ChangePage(List<EsFileChangeLog> entries, long nextVersion,
+                             boolean hasMore, boolean resetRequired) {
+        private static ChangePage reset(long sinceVersion) {
+            return new ChangePage(List.of(), sinceVersion, false, true);
+        }
     }
 
     /**
@@ -118,25 +148,30 @@ public class DriveChangeLogService {
     /**
      * 变更日志裁剪（切片 2：日志是缓存，不是真相源）。
      *
-     * <p>日志只服务于「增量拉取」这一个用途；客户端带的 {@code sinceVersion}
-     * 早于 {@code keepVersions} 条最早的日志时，说明日志已不够覆盖它的差距——
-     * 此时**全删日志也无妨**（客户端反正要退全量重建），留着只会无限增长。
-     *
-     * <p>裁剪策略（简单且安全）：每次调用只保留**最近 {@code keep} 条**，
-     * 更早的一次性删除。调用点放在全量重建响应返回前（客户端即将拿到完整列表，
-     * 老日志从此无人需要）。裁剪失败不阻塞列举——它是空间回收，不是正确性的一部分。
+     * <p>每个空间独立保留最近 {@code keep} 条；其他客户端可能仍在使用更早的游标，
+     * {@link #changesAfter} 会检测其日志是否连续并要求重建，不能假设一次全量让所有旧日志失效。
+     * 裁剪失败不阻塞列举，日志回收不改变已经交付的文件视图。
      */
-    public void trim(int keep) {
+    public void trim(String spaceType, Long ownerId, int keep) {
+        if (keep <= 0) {
+            throw new IllegalArgumentException("日志保留条数必须大于零");
+        }
         try {
-            List<EsFileChangeLog> all = logMapper.selectList(
+            // 不同空间的版本不可比较；只裁剪当前空间，查询也不再加载整张日志表。
+            List<EsFileChangeLog> boundary = logMapper.selectList(
                 new LambdaQueryWrapper<EsFileChangeLog>()
-                    .orderByAsc(EsFileChangeLog::getSpaceVersion));
-            if (all.size() <= keep) {
+                    .select(EsFileChangeLog::getSpaceVersion)
+                    .eq(EsFileChangeLog::getSpaceType, spaceType)
+                    .eq(EsFileChangeLog::getOwnerId, ownerId)
+                    .orderByDesc(EsFileChangeLog::getSpaceVersion)
+                    .last("LIMIT 1 OFFSET " + (keep - 1)));
+            if (boundary.isEmpty()) {
                 return;
             }
-            // 保留最近 keep 条（已按 spaceVersion 升序），更早的一次性删除
-            long cutoff = all.get(all.size() - keep).getSpaceVersion();
+            long cutoff = boundary.getFirst().getSpaceVersion();
             logMapper.delete(new LambdaQueryWrapper<EsFileChangeLog>()
+                .eq(EsFileChangeLog::getSpaceType, spaceType)
+                .eq(EsFileChangeLog::getOwnerId, ownerId)
                 .lt(EsFileChangeLog::getSpaceVersion, cutoff));
         } catch (RuntimeException ex) {
             log.warn("变更日志裁剪失败（忽略，不影响列举）: {}", ex.getMessage());

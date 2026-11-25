@@ -9,6 +9,8 @@ import org.dromara.easyshare.drive.mapper.EsUserRoleMapper;
 import org.dromara.easyshare.drive.service.FeaturePermissionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.dromara.easyshare.drive.service.PermissionSubjectService;
+import org.dromara.easyshare.drive.service.PermissionWriteService;
 import org.mockito.ArgumentCaptor;
 
 import java.util.List;
@@ -39,7 +41,9 @@ class FeaturePermissionServiceTest {
     void setUp() {
         mapper = mock(EsUserPermissionMapper.class);
         userRoleMapper = mock(EsUserRoleMapper.class);
-        service = new FeaturePermissionService(mapper, userRoleMapper);
+        service = new FeaturePermissionService(mapper, userRoleMapper,
+            PermissionTestFixtures.directory(mock(org.dromara.easyshare.drive.mapper.SysUserDeptMapper.class),
+                mock(org.dromara.easyshare.drive.mapper.SysDeptRowMapper.class)), mock(PermissionWriteService.class));
     }
 
     private static EsPermissionRole role(boolean knowledge, boolean meeting, boolean drive,
@@ -153,15 +157,20 @@ class FeaturePermissionServiceTest {
     void listExplicitMapsRows() {
         when(mapper.selectList(any())).thenReturn(List.of(row(false, true, true, true, true)));
 
-        List<PermissionVo> list = service.listExplicit();
+        try (var login = org.mockito.Mockito.mockStatic(org.dromara.common.satoken.utils.LoginHelper.class)) {
+            login.when(org.dromara.common.satoken.utils.LoginHelper::getUserId).thenReturn(1L);
+            login.when(() -> org.dromara.common.satoken.utils.LoginHelper.isSuperAdmin(1L)).thenReturn(true);
+            List<PermissionVo> list = service.listExplicit();
 
-        assertEquals(1, list.size());
-        assertFalse(list.get(0).knowledge());
-        assertTrue(list.get(0).meeting());
+            assertEquals(1, list.size());
+            assertFalse(list.get(0).knowledge());
+            assertTrue(list.get(0).meeting());
+        }
     }
 
     @Test
     void roleUnionOverridesPerUserRow() {
+        when(userRoleMapper.selectRoleIdsOfUser(1L)).thenReturn(List.of(9L, 10L));
         // 两个角色的并集：knowledge 来自第一个，meeting/shared 来自第二个，plugin 两个都没开
         when(userRoleMapper.selectRolesOfUser(1L)).thenReturn(List.of(
             role(true, false, true, false, false),

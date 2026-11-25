@@ -11,6 +11,21 @@ const status = {
 }
 
 describe('DrivePanel', () => {
+  it('keeps the focused action usable while share status changes rapidly', async () => {
+    const wrapper = mount(DrivePanel, { props: { status }, attachTo: document.body })
+    const button = wrapper.get('.drive-actions button')
+    ;(button.element as HTMLButtonElement).focus()
+    await wrapper.setProps({ status: { ...status, webdav: true } })
+    expect(wrapper.get('.drive-actions button').element).toBe(button.element)
+    expect(document.activeElement).toBe(button.element)
+    await button.trigger('click')
+    expect(wrapper.emitted('stop')).toHaveLength(1)
+    await wrapper.setProps({ status })
+    await button.trigger('click')
+    expect(wrapper.emitted('start')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('offers to start the share when WebDAV is stopped', async () => {
     const wrapper = mount(DrivePanel, { props: { status } })
     const startButton = wrapper.findAll('button').find(button => button.text().includes('启动共享'))

@@ -101,12 +101,15 @@ Authorization: Bearer <apiToken>
 | `GET` | `/health?nonce=...` | Core 身份和健康检查 |
 | `GET` | `/api/status` | Core、发现、接收、WebDAV、云盘状态 |
 | `GET` | `/api/peers` | 附近设备 |
-| `GET` | `/api/tasks` | 传输任务列表 |
+| `GET` | `/api/tasks` | 当前账号云任务与设备级局域网任务 |
+| `POST` | `/api/tasks` | 创建任务；云任务归属由服务端核验账号生成 |
+| `PATCH` | `/api/tasks/{id}` | 仅修改当前账号可见任务，归属字段不可变 |
+| `POST` | `/api/tasks/check-path` | 打开已记录云下载路径前验证账号归属 |
 | `GET` | `/api/events` | WebSocket 实时事件流 |
 | `POST` | `/api/transfers` | 发起文件发送 |
 | `POST` | `/api/transfers/{id}/accept` | 接受接收（可指定 saveDir） |
 | `POST` | `/api/transfers/{id}/reject` | 拒绝接收 |
-| `POST` | `/api/tasks/clear` | 清除全部任务记录 |
+| `POST` | `/api/tasks/clear` | 清除当前可见终态任务；云下载保留隐藏归属记录 |
 | `DELETE` | `/api/tasks/{id}` | 删除单条任务 |
 | `POST` | `/api/drive/start` | 启动 WebDAV 共享 |
 | `POST` | `/api/drive/stop` | 停止 WebDAV 共享 |
@@ -154,6 +157,10 @@ Authorization: Bearer <apiToken>
 | `GET` / `POST` | `/api/mcp/info` · `/api/mcp/regenerate` | MCP 接入信息与令牌重新生成（走 apiToken，仅设置页调用） |
 | `POST` | `/api/shutdown` | 优雅退出全部 Core 服务 |
 
+**任务账号隔离（2026-11-25）**：除本机 apiToken 外，桌面向 Core 任务路径及事件连接提供 `X-EasyShare-Account-Token`；Core 实时查询控制面的稳定账号与 Drive 权限，并将服务地址和账号合成不可由请求声明的 ownerId。账号服务故障/撤权时列表仅保留设备任务并返回 `X-EasyShare-Task-Scope: device`，云任务写入拒绝。历史云任务缺少 ownerId 不自动认领；删除云下载历史只隐藏，保留路径归属供应用打开/定位时核验。该边界不改变 Windows 文件系统 ACL，也不能阻止同一操作系统用户通过其他软件读取已经下载的文件。
+
+云进度事件以任务 ID 合并最新值，待处理最多 64 项，每批重新验权，批间至少一秒；不缓存正向授权。设备事件使用独立通道，不被控制面等待阻塞；溢出后的完整状态由快照恢复。换号取消旧订阅，界面立即清掉云任务并阻止旧快照回填。证据：`internal/api/task_scope.go` · `taskOwner`、`internal/api/events.go` · `EventHub`、`internal/task/scope.go` · `VisibleTo`。
+
 ## 4b. 控制面升级接口（platform-drive，2026-08-31 起）
 
 客户端在线升级（`internal/update` + `appupdate.go`）。升级检查先于登录发生，故前两个端点**匿名**（`security.excludes` 白名单放行，`@SaIgnore` 只是注解层保险；安装包本就公开）；管理端点要求 superadmin。安装包本体存 RustFS `releases/{version}/` 前缀，控制面不在数据路径上。
@@ -190,22 +197,22 @@ Authorization: Bearer <apiToken>
 
 企业化整改第二轮：成员能自助改昵称/头像/密码，超管按人配置五项功能开关。第三轮（2026-10-27）补上角色/权限组与子管理员。DDL 见 `deploy/ruoyi-db/easyshare-user-permission.sql`（`es_user_permission`）、`easyshare-user-profile.sql`（`es_user_profile`）与 `easyshare-permission-role.sql`（`es_permission_role` / `es_user_role`），均幂等并纳入 `scripts/ship-control-plane.ps1` 的 `$easyshareSql` 每次重放。迭代记录见 [`iterations/2026-10-27-桌面端企业化整改-第二轮.md`](iterations/2026-10-27-桌面端企业化整改-第二轮.md) 与 [`iterations/2026-10-27-企业权限角色与子管理员.md`](iterations/2026-10-27-企业权限角色与子管理员.md)。
 
-**权限模型（角色优先，逐账号兜底）**：三层依次裁决——① 账号挂了角色（`es_user_role`）时，五项开关取所挂角色的**并集**，逐账号行不再生效；② 没有角色时读逐账号行（`es_user_permission`）；③ 也没有行则五项全开（存量账号零迁移）。裁决规则唯一实现在 `FeaturePermissionService.effective`，`/mine`、管理页成员列表与实际拦截共用。角色表 `es_permission_role` 除五项开关外带 `admin_scope`：`none` 普通权限组、`dept` 子管理员（可进管理页，但只看到、只修改本部门成员）。drive 关闭时 shared 一并失效，角色并集与逐账号行同此口径。管理接口本身（`/easyshare/permission/*`、`/system/user/*`）不受矩阵管辖，管理员关掉自己的某项仍能回管理页改回来。
+**权限模型（角色优先，逐账号兜底）**：先验证账号及所属部门仍有效，再裁决功能。① 有角色绑定时取五项开关并集，逐账号行不参与；② 无角色时读逐账号行；③ 有效账号也没有逐账号行时保持既有五项全开的开箱策略。缺失/停用/删除主体、孤儿角色绑定和空布尔值不会获得缺省权限。drive 关闭时 shared 一并失效。删除角色或移除成员最后一个角色会先保存其当前有效限制，再解绑，避免复活旧的宽松配置。证据：`platform-drive/src/main/java/org/dromara/easyshare/drive/service/FeaturePermissionService.java` · `snapshot`、`platform-drive/src/main/java/org/dromara/easyshare/drive/service/PermissionSubjectService.java` · `activeUser`。
 
-**子管理员范围**：`PermissionRoleService.adminScopeOf` 判超管 → all，挂了 dept 角色且本人有部门 → dept，其余 none；`canManage` 对 dept 只认 `sys_user.dept_id` 精确相等（下级部门递归留给数据权限片）。没有部门的账号拿不到 dept 范围——范围无法界定时不放开管理入口。角色定义与分配跨部门，全部要求 `superadmin`；子管理员只能改本部门成员的逐账号开关，目标挂了角色时服务端拒绝（角色优先，写逐账号行不会生效）。删除角色时，只挂该角色的成员会先落一行逐账号快照，避免「删角色 = 五项全开」。
+**子管理员范围**：支持 `none`、`dept`（本部门）、`dept_children`（本部门及下级）、`specified`（指定有效部门）、`all`，多个角色取并集。指定范围从数据库真实加载；空、非法或溢出的部门 ID 拒绝扩大范围。子管理员不能修改超级管理员；角色定义、角色分配和空间授权仅超管可写。保存逐账号开关时在事务中再次确认当前管理范围；目标挂角色时拒绝无效的逐账号覆盖。证据：`platform-drive/src/main/java/org/dromara/easyshare/drive/service/PermissionRoleService.java` · `canManage`。
 
 **强制落地**：网盘由 `DriveFeatureInterceptor` 按路径覆盖 `/easyshare/drive/**`（未登录放行给 `@SaCheckLogin` 回 401，避免把「没登录」误导成「没权限」，新增端点自动受管）；共享空间在 `SpaceService` 的 `sharedPermissionOf`/`checkSharedWritable`/`checkSharedReadable` 收口，`SpaceController.mine()` 在 drive 关闭时返回空列表；知识服务见第 11 节「功能权限拦截」。
 
 | 方法 | 路径 | 鉴权 | 用途 |
 | --- | --- | --- | --- |
 | `GET` | `/easyshare/permission/mine` | 登录 | 自己的五项开关 + `adminScope` + 角色名（缺行按全开；SSO 与桌面端据此隐藏入口） |
-| `GET` | `/easyshare/permission/admin/members` | 超管或 dept 子管理员 | 管理页成员矩阵：身份 + 生效权限 + 角色，按操作者范围裁剪 |
+| `GET` | `/easyshare/permission/admin/members` | 超管或范围内子管理员 | 管理页成员矩阵：身份 + 生效权限 + 角色，按操作者范围裁剪 |
 | `GET` | `/easyshare/permission/admin/list` | superadmin | 全部**显式配置行**（旧版桌面端兼容；新客户端改读 `/admin/members`） |
-| `PUT` | `/easyshare/permission/admin` | 超管或 dept 子管理员 | 保存某账号的逐账号五项开关（子管理员限本部门；目标挂角色时拒绝） |
+| `PUT` | `/easyshare/permission/admin` | 超管或范围内子管理员 | 保存某账号的逐账号五项开关（子管理员限有效管理范围；目标挂角色时拒绝） |
 | `GET` | `/easyshare/permission/admin/roles` | superadmin | 全部权限角色及成员数 |
 | `PUT` | `/easyshare/permission/admin/roles` | superadmin | 新建或更新角色（`roleId` 空=新建，角色名全局唯一） |
 | `DELETE` | `/easyshare/permission/admin/roles/{roleId}` | superadmin | 删除角色（单角色成员落逐账号快照后解绑） |
-| `PUT` | `/easyshare/permission/admin/members/{userId}/roles` | superadmin | 整组替换成员角色（空列表=回到逐账号配置） |
+| `PUT` | `/easyshare/permission/admin/members/{userId}/roles` | superadmin | 整组替换成员角色（显式空列表=保存当前限制后解绑；缺失列表拒绝） |
 | `GET` | `/easyshare/profile/mine` | 登录 | 自己的头像地址（相对控制面；空串=未设置） |
 | `POST` | `/easyshare/profile/avatar` | 登录 | 上传头像（multipart `file`，≤2MB，文件头嗅探 MIME，拒绝 SVG） |
 | `DELETE` | `/easyshare/profile/avatar` | 登录 | 清除头像（客户端回落昵称首字） |
@@ -213,9 +220,11 @@ Authorization: Bearer <apiToken>
 
 昵称与密码**不走**本模块：RuoYi 标准个人中心 `/system/user/profile`、`/system/user/profile/updatePwd` 已允许任何登录用户改自己。头像不用 `sys_user.avatar` + `sys_oss` 的原因：标准上传接口要求 `system:oss:upload` 权限（普通成员没有），且控制面只配了 EasyShare 自己的 RustFS。
 
-**桌面端权限态**：`AuthUser` 增加 `userId`/`features`/`adminScope`（`account.FeatureFlags`、all/dept/none，空串=未知）。`App.syncAccountProfile` 在登录成功、启动恢复会话、后台校验刷新三处拉取 `MyPermission`（features + adminScope + roles）与头像地址；拉取失败 fail-open 为五项全开、`adminScope` 留空（入口沿用 `isAdmin`，旧控制面行为不变），真正拦截在服务端。登出清空；管理员改权限/角色后立即 `RefreshProfile()`；`auth:user-updated` 事件驱动前端重取。新增绑定：`UpdateNickName`/`ChangePassword`/`UploadAvatar`/`RemoveAvatar`/`RefreshProfile`/`AdminPermissionMembers`/`AdminPermissionRoles`/`AdminSavePermissionRole`/`AdminDeletePermissionRole`/`AdminAssignRoles`/`AdminSavePermissions`。前端只做入口显隐（`App.vue` 的 `canAdmin`/`sectionVisible`/`sectionHome`、设置页卡片、管理页「权限」Tab）——**藏按钮不是鉴权**。管理页里角色管理与角色分配仅超管可用，子管理员只看到本部门成员的矩阵。
+**桌面端权限态**：登录、恢复和后台校验刷新通过 `MyPermission` 获取功能、管理范围及角色。读取失败时保留可展示的账号身份，但清空功能和管理入口并通知界面，不再按全开放行；管理桥也拒绝无效权限。请求绑定发起时的账号状态，迟到的失败/注销不能覆盖后续成功登录。管理员保存后重新读取实际状态；保存失败保留草稿，写成功但重读失败明确显示需要核验。角色管理/分配仅超管可见，子管理员看到自己的有效管理范围。证据：`app.go` · `syncAccountProfile`、`frontend/src/composables/useEasyShare.ts` · `useEasyShare`。
 
-**已知边界**：插件商城保持匿名（`/easyshare/plugins`），plugin 开关只有客户端入口显隐；桌面知识会话已于 2026-10-27 改走控制面 SSO（见 §8a），knowledge / meeting 两项在桌面端服务端闭环。子管理员范围暂为精确部门（无下级递归），数据权限范围与文档级成员角色分别留待后续切片。
+**已知边界**：插件商城的公开包目录保持匿名，plugin 开关控制企业客户端的使用入口，不等同于撤回已经安装的包。功能角色取并集；新有效账号无配置仍为全开；移除文件显式成员后回到继承授权，不是显式拒绝。既有已下载字节和已签发存储 URL 无法追溯撤回。需要最小权限开户的企业应先分配受限角色。
+
+**授权写入与审计（2026-11-25）**：权限开关、角色、角色分配、空间成员与文件成员变更在同一事务内先取得数据库授权互斥行，再锁定组织/相关账号并复验操作者范围，最后记录修改前后状态。锁冲突立即返回刷新重试，审计失败回滚授权；未完成迁移时写入失败关闭。需要先执行 `deploy/ruoyi-db/easyshare-permission-hardening.sql`，再升级所有控制面实例；旧实例不遵守新锁协议，不可混跑授权写入口。证据：`platform-drive/src/main/java/org/dromara/easyshare/drive/service/PermissionWriteService.java` · `begin`、`platform-drive/src/main/java/org/dromara/easyshare/drive/service/PermissionWriteService.java` · `audit`。
 
 ## 4b-4. 文件成员与知识实时权限（2026-11-23 起）
 
@@ -227,6 +236,10 @@ Authorization: Bearer <apiToken>
 | `GET` | `/easyshare/file-member/{fileId}/candidates` | 先验文件 manage，再按关键词与上限返回同共享空间有效账号/部门的最小展示字段；写接口执行同一候选范围规则 |
 | `POST` | `/easyshare/knowledge/acl/access` | 根据当前登录身份批量裁决文件阅读/原件下载；无权限或非 active 文件不返回可用授权 |
 | `POST` | `/easyshare/knowledge/acl/bind` | 按文件身份＋预期版本或旧受管对象 key 核验真实源与内容，返回可信文件关联，不接受客户端声明归属 |
+
+共享文件首先要求账号有效且仍有空间访问权，然后才裁决上传者/显式文件成员/可见部门/空间默认角色。空间撤权后，上传者和旧文件成员也失去入口。
+
+共享空间 `GET /easyshare/drive/changes` 的增量请求返回业务码 `409`、`DRIVE_SYNC_RESET_REQUIRED` 与 `resetRequired=true`，不携带旧文件名或部分日志；调用方清空游标及缓存后，重新取得按实时权限过滤的全量。桌面挂载的共享列表直接重取全量；个人缓存绑定当前令牌。个人增量仍支持分页，但水位仅推进到本页最后事件，日志有缺口或游标非法时要求重建；全量交付列举开始前水位，避免跳过并发变化。代价是共享全量及实时授权请求增加，尚未做生产规模压测。证据：`platform-drive/src/main/java/org/dromara/easyshare/drive/DriveController.java` · `changes`、`platform-drive/src/main/java/org/dromara/easyshare/drive/service/DriveChangeLogService.java` · `changesAfter`。
 
 网盘页的共享入口按服务端 `effectiveRole` 展示动作；普通上传者/manage 成员与超管管理页复用成员编辑器，所有文件/版本/主体 ID 保持字符串。个人原功能保留；共享 CFAPI、自动入库及安全水印不在本片范围。
 
@@ -341,7 +354,7 @@ desktop eventStream (Go 协程，指数退避重连)
 ## 8a. 知识网关（桌面端 ↔ 知识服务）
 
 - `internal/knowledge` 是知识服务的 HTTP 客户端与会话存储；Core 经 `/api/knowledge/*` 代理登录/健康探测/问答/会议听记，是桌面端与后续 WPS/Shell 扩展访问知识库的唯一通道（服务器地址在登录页配置，令牌不进前端）。
-- **统一登录免登（2026-10-27）**：客户端账号登录后，桌面壳把控制面令牌交给 Core（`POST /api/knowledge/sso`）；Core 先调知识服务 `GET /auth/me` 探测，成功才落 `mode=sso` 会话，失败保留手动登录通道。登出客户端账号或启动校验遇 401 时只清 SSO 会话，手动知识账号不受影响。注册与清理由 `App.knowledgeSyncMu` 串行化，注册成功后二次校验账号令牌，避免已登出的账号把知识会话留活。会话令牌沿用控制面有效期，知识服务按它解析的 features 强制功能权限。
+- **统一登录免登（2026-10-27）**：客户端账号登录后，桌面壳把控制面令牌交给 Core（`POST /api/knowledge/sso`）；Core 先调知识服务 `GET /auth/me` 探测，成功才落 `mode=sso` 会话，自动探测失败保留独立部署的已有密码会话；企业身份不能降级为本地令牌。登出客户端账号或启动校验遇 401 时只清 SSO 会话，手动知识账号不受影响。注册与清理由 `App.knowledgeSyncMu` 串行化，注册成功后二次校验账号令牌，避免已登出的账号把知识会话留活。会话令牌沿用控制面有效期，知识服务按它解析的 features 强制功能权限。
 - 问答代理 handler 解除 Core 全局 30s 写超时（`http.NewResponseController`），120s 上下文兜底；desktop.Client 对问答走无客户端级超时的专用 HTTP client。
 - **会议听记大文件通道（2026-10-12）**：音频上传/回放不经 Wails 绑定（绑定是 JSON 通道，塞不下上百 MB），前端同源 `fetch /kapi/meetings/*` → 桌面进程 `pluginAssetMiddleware` 接管（`appmeetings.go`；dev 下 Vite 会吞 fallback Handler，必须 Middleware 阶段拦截）→ desktop.Client 流式转发 → Core 上述 meetings 路由 → 知识服务 `/meetings`。列表/详情/管理/归档走常规 Wails 绑定。
 - **听记实时上屏（2026-10-13，刻意不用 WebSocket）**：录音时按 600ms 定长分片（16kHz 单声道 s16le = 19200 字节）经 Wails 绑定（base64）→ Core → 知识服务 `POST /meetings/{id}/stream`，**请求即回当前字幕快照**——推流方向是采集端主动供数，请求-响应天然带背压，避开 WebView 跨源与 apiToken 不能进前端两件事。稳态单片往返实测 176ms（RTF 0.303）。流式会话只活在知识服务内存（闲置 30min 回收），**实时文本是预览**：停止后整段离线重跑（同一条记录，`transcribe` 带 `meeting_id` 复用）给出终态分段/标点/说话人。听记页挂载即调 `stream/warm`，否则首片承担约 70s 的模型冷加载。
@@ -359,6 +372,14 @@ desktop eventStream (Go 协程，指数退避重连)
 | 构建 | `wails build` + NSIS | GitHub Actions macos-latest |
 
 平台拆分通过 build tags 实现：`*_windows.go` / `*_darwin.go`。Wails macOS 版不可从 Windows 交叉编译（WebKit/CGO）。
+
+## 9a. 状态变化与动效
+
+桌面 Vue 使用 `frontend/src/style.css` 的统一 token：反馈 120ms、进入 200ms、退出 120ms、进度 180ms、减少动效下淡入 80ms。常规曲线为 `cubic-bezier(0.2, 0, 0, 1)`，退出为 `cubic-bezier(0.4, 0, 1, 1)`。`es-fade/content/icon/popover/dialog/drawer/disclosure/list` 表达变化类型；内容更换通过 `frontend/src/directives/contentMotion.ts` · `animateContentChange` 从当前透明度衔接，业务状态不等待动画。离场立即 inert，确认框与活动抽屉可反向复用同一节点，保留焦点循环及恢复。
+
+只对必要的 opacity/transform 插值：进度使用固定宽度 scaleX，数值使用等宽数字；拖动、窗口调整和脑图直接操作立即跟手。长任务列表复用未变化的行对象，并对第 25 行之后做 feature-detected `content-visibility` 延迟渲染，保留固有高度与键盘访问。系统减少动态效果时停止空间位移、旋转与进度补间，保留静态加载文字和短反馈；设置在运行中变化也生效。Windows 悬浮面板和桌宠重新遵循系统客户端动画开关。
+
+插件、知识实验台、驾驶舱和 WPS 静态页面沿用相同节奏，轮询保留可复用节点，旧请求不能覆盖新视图，隐藏/取消不等退出动画。Motion 守卫与浏览器实测见 `scripts/diag/check-motion-browser.mjs`、`scripts/diag/check-static-ui-motion-browser.mjs` 和本次[迭代记录](iterations/2026-11-25-企业权限与状态动效.md)。
 
 ## 10. 安全边界
 
@@ -379,11 +400,12 @@ desktop eventStream (Go 协程，指数退避重连)
 - 检索质量评测：`tests/retrieval/` 标注集 + recall@5 / MRR 基线进入 pytest 回归
 - 对象存储：复用 RustFS；派生产物写 `derived/{fileId}/{versionId}/`
 - 凭据存 `knowledge/.env`（.gitignore 已排除）
-- `/lab` 本地实验台（仅回环）：上传观察八阶段处理 + 检索问答（引用溯源 clean.md）
+- `/lab` 与 `/debug` 是未配置控制面的独立部署诊断工具，仅回环且需启用 local lab；企业模式关闭这些可直接访问索引/管线的调试路由，统一通过受保护业务 API 与 WPS/桌面入口访问。
 - MCP Server（可选，`pip install mcp` 后 `python -m app.mcp_server`）：stdio 薄桥转发 `/query` 与 `/health`，任何 AI 工具（Claude Code/Cursor/OA 助手）可检索企业知识
-- 账号与登录（薄控制面 2a，`AUTH_ENABLED` 默认关闭）：SQLite 用户库 + PBKDF2，`/auth/bootstrap`（首管理员）/`/auth/login`（Bearer 令牌）/`/auth/users`（管理员）；启用后 `/documents`、`/query`、`/ingest`、`/lab/api/uploads` 需令牌（GET 支持 `?token=`），`/auth`、`/health`、`/lab`、`/debug` 白名单；/lab 内置登录条。**控制面 SSO（2026-10-11）**：`CONTROL_PLANE_URL` 配置后，auth 中间件对本地未命中的令牌回查控制面 `/system/user/getInfo` 验票（introspection + 60s 缓存，`app/auth/sso.py`，请求头/解析同 Go 客户端一套），有效即放行并 JIT 建本地档案（role 按控制面 superadmin/*:*:* 判定、dept 取 deptId 跟随同步；已有本地人保留 role）——同事一套控制面账号通行桌面端与知识服务，本地口令登录保留（WPS/浏览器与 admin 备用通道）
-- **功能权限拦截（2026-10-27）**：SSO 验票同时调 `GET /easyshare/permission/mine` 取五项开关，并入 user dict 的 `features`（`ControlPlaneSSO._feature_flags`）；auth 中间件按 `_FEATURE_PREFIXES` 拦截——`/documents`、`/query`、`/ingest`、`/lab/api/uploads` 归 knowledge，`/meetings` 归 meeting，命中且 `features` 存在（即身份来自控制面 SSO）时关闭项回 403。本地账号的 user dict 没有 `features`，不受矩阵管辖，行为与引入前一致。权限端点不可用时**按全开并告警**（fail-open）：身份已经验过，为一次附加查询把所有人挡在门外代价更大。桌面端自 2026-10-27 起由 Core 用控制面令牌注册 SSO 会话（见 §8a），矩阵对桌面同样强制；本地账号登录保留给 WPS 加载项、浏览器驾驶舱与 admin 备用通道
-- 权限感知检索（2b/2c，2026-09-01）：文档归属 `owner`（用户名）贯通 `processing_jobs` 表、任务响应、manifest 与索引 chunk metadata；入库归属以**令牌用户为准**（lab 上传谁传归谁；`/documents/process` 带令牌时忽略请求显式 owner，防伪造；watcher 监听目录与无令牌调用落 None=共享）；`/query` 服务端按令牌计算可见集——owner 为 None/缺失的文档共享给所有人（存量数据天然共享），非空仅本人与 admin 可见，与请求显式 `doc_ids` 求交集（空交集短路返回无结果，不进检索层）；未登录不过滤（行为不变）；可见集数据源为向量库 `doc_owners()`（JSON/Milvus 双实现）；Core 知识网关已透传 Bearer 令牌，桌面端/WPS 问答链路零改动生效；`/debug/query` 驾驶舱不做权限过滤（回环管理员视角）
+- 账号与登录：未配置控制面的独立部署保留 SQLite/PBKDF2 本地账号，由 `AUTH_ENABLED` 控制业务认证。配置 `CONTROL_PLANE_URL` 后进入企业模式，每个受保护请求都实时回查控制面身份及功能权限，企业模式不接受本地令牌作为备用身份。请求的管理员角色来自当前控制面结果，不继承同名本地档案的旧管理员角色；没有 60 秒正向授权缓存。证据：`knowledge/app/auth/sso.py` · `ControlPlaneSSO`、`knowledge/app/main.py` · `auth_middleware`。
+- **WPS 登录与注销**：企业 `POST /auth/login` 转发到控制面 password grant，复验返回令牌后交付该企业令牌；不保存密码或签发本地备用身份。`POST /auth/logout` 注销提交的企业令牌，失败明确返回 503；独立模式只撤销提交的本地令牌。WPS 退出立即清除本地显示并调用注销，失败说明服务端注销未完成。Core 知识退出仍只解绑本地会话，不顺带注销共享桌面令牌。当前密码代理未适配控制面额外验证码/加密挑战，遇到要求时返回错误，不绕过；部署前必须验证实际登录策略。
+- **功能权限拦截**：企业模式始终保护知识文档、问答、入库、任务、统计和会议路径；只接受明确的布尔 `true`。权限端点失败、字段缺失或格式异常均拒绝访问。会议归档同时要求知识权限；任务读取/重试按知识权限保护；统计需管理员。企业 `/lab`、`/debug` 直接关闭，回环地址不能绕过业务权限。快检与无 LLM 检索也在返回结果前重新确认文件 ACL。证据：`knowledge/app/main.py` · `_FEATURE_PREFIXES`、`knowledge/app/api/routes.py` · `query`。
+- 权限感知检索（2b/2c，2026-09-01）：文档归属 `owner`（用户名）贯通 `processing_jobs` 表、任务响应、manifest 与索引 chunk metadata；入库归属以**令牌用户为准**（lab 上传谁传归谁；`/documents/process` 带令牌时忽略请求显式 owner，防伪造；watcher 监听目录与无令牌调用落 None=共享）；`/query` 服务端按令牌计算可见集——owner 为 None/缺失的文档共享给所有人（存量数据天然共享），非空仅本人与 admin 可见，与请求显式 `doc_ids` 求交集（空交集短路返回无结果，不进检索层）；未登录不过滤（行为不变）；可见集数据源为向量库 `doc_owners()`（JSON/Milvus 双实现）；Core 知识网关已透传 Bearer 令牌，桌面端/WPS 问答链路零改动生效；企业 `/debug/query` 不开放，回环地址本身不构成授权
 - 生产检索编排（2026-09-01）：`/query` 由 `QueryOrchestrator`（`app/rag/orchestrator.py`）按 `QUERY_STRATEGY` 调度——`vector`（旧单路，embedding 故障自动降级 BM25）/ `hybrid`（默认；向量+BM25 RRF 融合）/ `hybrid_rerank`（融合池 ×3 后 Cross-Encoder 精排，未配置 rerank 等价 hybrid）/ `multi_hop`（分轮混合+LLM 充分性裁判，需 LLM，未配置自动降级 hybrid_rerank，响应 `degraded` 字段说明）；部署级配置不暴露给终端用户，非法值启动即报错；响应新增 `strategy`（实际执行策略）字段；生产查询/生成事件落 `QueryLog`（逐句忠实度仅驾驶舱审计计算，生产传 None）；向量库双后端实现 `count()`/`snapshot_records()` 协议供 BM25 懒构建与健康度聚合（修复 Milvus 后端无 `records` 属性导致的崩溃）
 - 目录监听自动入库（`WATCH_DIRS` 分号分隔，默认关闭）：轮询扫描（SMB 共享盘可靠）+ mtime 稳定性窗口 + 内容哈希版本去重 + 失败自动重试；与 lab 上传同链路（storage → job → pipeline）
 - WPS 加载项（`/wps/ribbon.xml`、`/wps/index.html`、`/wps/taskpane.html`）：知识服务自托管加载项页面，与 `/auth`、`/query` 同源免跨域；WPS 文字功能区「知识」页签一键查选中段落，任务窗格内登录（令牌存窗格 localStorage）。本机安装/卸载：`knowledge/scripts/install_wps_addon.ps1`（登记 `%APPDATA%\kingsoft\wps\jsaddons\jsplugins.xml`）

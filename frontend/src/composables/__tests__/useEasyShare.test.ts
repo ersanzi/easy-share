@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   logDirectory: vi.fn(),
   currentUser: vi.fn().mockResolvedValue({ loggedIn: false, userName: '', nickName: '', avatar: '', isAdmin: false }),
   login: vi.fn(),
+  mySpaces: vi.fn().mockResolvedValue([]),
   logout: vi.fn(),
   openAdminConsole: vi.fn(),
   onFileDrop: vi.fn(),
@@ -61,6 +62,9 @@ const AuthHarness = defineComponent({
     <span data-test="error">{{ error }}</span>
     <span data-test="admin">{{ currentUser.isAdmin }}</span>
     <span data-test="logged-in">{{ currentUser.loggedIn }}</span>
+    <span data-test="feature-drive">{{ currentUser.features?.drive }}</span>
+    <span data-test="task-state">{{ snapshot.tasks[0]?.status }}</span>
+    <span data-test="task-names">{{ snapshot.tasks.map(task => task.fileName).join(",") }}</span>
     <button data-test="login" @click="login('admin', 'fixture-only-password')">login</button>
     <button data-test="logout" @click="logout">logout</button>
     <button data-test="open-admin" @click="openAdminConsole">admin</button>
@@ -230,6 +234,94 @@ describe('useEasyShare', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-test="error"]').text()).toContain('管理后台地址无效')
+    wrapper.unmount()
+  })
+  it('权限刷新失败收回入口，不保留之前的管理员能力', async () => {
+    mocks.currentUser.mockResolvedValue({ loggedIn: true, userId: '7', userName: 'admin', isAdmin: true,
+      features: { drive: true, shared: true, knowledge: true, meeting: true, plugin: true } })
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('true')
+    mocks.currentUser.mockRejectedValueOnce(new Error('bridge unavailable'))
+    mocks.eventsOn.mock.calls.find(call => call[0] === 'auth:user-updated')![1]()
+    await flushPromises()
+    expect(wrapper.get('[data-test="admin"]').text()).toBe('false')
+    expect(wrapper.get('[data-test="feature-drive"]').text()).toBe('false')
+    expect(wrapper.get('[data-test="error"]').text()).toContain('无法确认访问权限')
+    wrapper.unmount()
+  })
+
+  it('迟到的退出响应不覆盖后来登录的账号', async () => {
+    let finishLogout!: () => void
+    mocks.logout.mockReturnValueOnce(new Promise<void>(resolve => { finishLogout = resolve }))
+    mocks.login.mockResolvedValue({ loggedIn: true, userName: 'new', isAdmin: true })
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    await wrapper.get('[data-test="logout"]').trigger('click')
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+    await wrapper.get('[data-test="login"]').trigger('click')
+    await flushPromises()
+    finishLogout()
+    await flushPromises()
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('退出后的迟到登录失败不污染新状态', async () => {
+    let failLogin!: (reason: Error) => void
+    mocks.login.mockReturnValueOnce(new Promise((_resolve, reject) => { failLogin = reject }))
+    mocks.logout.mockResolvedValue(undefined)
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    await wrapper.get('[data-test="login"]').trigger('click')
+    await wrapper.get('[data-test="logout"]').trigger('click')
+    failLogin(new Error('old login failed'))
+    await flushPromises()
+    expect(wrapper.get('[data-test="error"]').text()).not.toContain('old login failed')
+    expect(wrapper.get('[data-test="logged-in"]').text()).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('换号立即清除云任务；旧快照和退出后的云事件不能恢复私有文件名', async () => {
+    const user = { loggedIn: true, userId: 'alice', userName: 'alice', features: { drive: true } }
+    const lan = { id: 'lan', fileName: '附近文件', status: 'completed', kind: 'lan_send' }
+    const cloud = { id: 'cloud', fileName: '甲的机密文件', status: 'completed', kind: 'cloud_download', ownerId: 'alice-scope' }
+    mocks.currentUser.mockResolvedValue(user)
+    mocks.snapshot.mockResolvedValue({ ...runningSnapshot, tasks: [cloud, lan] })
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    expect(wrapper.get('[data-test="task-names"]').text()).toContain('甲的机密文件')
+    const event = mocks.eventsOn.mock.calls.find(call => call[0] === 'core-event')![1]
+    let finishOld!: (value: unknown) => void
+    mocks.snapshot.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+    event(JSON.stringify({ type: 'status.changed' }))
+    await flushPromises()
+    mocks.logout.mockResolvedValue(undefined)
+    mocks.snapshot.mockResolvedValue({ ...runningSnapshot, tasks: [lan] })
+    await wrapper.get('[data-test="logout"]').trigger('click')
+    expect(wrapper.get('[data-test="task-names"]').text()).toBe('附近文件')
+    event(JSON.stringify({ type: 'transfer.updated', data: cloud }))
+    finishOld({ ...runningSnapshot, tasks: [cloud, lan] })
+    await flushPromises()
+    expect(wrapper.get('[data-test="task-names"]').text()).toBe('附近文件')
+    wrapper.unmount()
+  })
+
+  it('合并重复快照请求，实时完成事件不被旧快照回滚', async () => {
+    const wrapper = mount(AuthHarness)
+    await flushPromises()
+    const event = mocks.eventsOn.mock.calls.find(call => call[0] === 'core-event')![1]
+    let resolveSnapshot!: (value: unknown) => void
+    mocks.snapshot.mockReturnValueOnce(new Promise(resolve => { resolveSnapshot = resolve }))
+    const calls = mocks.snapshot.mock.calls.length
+    event(JSON.stringify({ type: 'status.changed' }))
+    event(JSON.stringify({ type: 'status.changed' }))
+    await flushPromises()
+    expect(mocks.snapshot.mock.calls.length).toBe(calls + 1)
+    event(JSON.stringify({ type: 'transfer.updated', data: { id: 'task', status: 'completed' } }))
+    resolveSnapshot({ ...runningSnapshot, tasks: [{ id: 'task', status: 'running' }] })
+    await flushPromises()
+    expect(wrapper.get('[data-test="task-state"]').text()).toBe('completed')
     wrapper.unmount()
   })
 })

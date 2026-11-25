@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { presenceMotion, vContentMotion } from '../directives/contentMotion'
 import { onMounted, ref } from 'vue'
 
-defineProps<{ loading: boolean; error: string }>()
+const props = defineProps<{ loading: boolean; error: string }>()
 const emit = defineEmits<{ (e: 'submit', username: string, password: string): void }>()
 
 const username = ref('')
@@ -17,7 +18,7 @@ onMounted(() => {
 })
 
 const submit = () => {
-  if (!username.value.trim() || !password.value) return
+  if (props.loading || !username.value.trim() || !password.value) return
   emit('submit', username.value.trim(), password.value)
 }
 </script>
@@ -63,12 +64,14 @@ const submit = () => {
           </label>
           <label class="login-field">
             <span>密码</span>
-            <input ref="passwordInput" v-model="password" type="password" autocomplete="current-password" placeholder="密码" @keyup.enter="submit" />
+            <input ref="passwordInput" v-model="password" type="password" autocomplete="current-password" placeholder="密码" />
           </label>
 
+          <Transition v-bind="presenceMotion" name="es-fade">
           <p v-if="error" class="login-error" role="alert">{{ error }}</p>
+          </Transition>
 
-          <button class="login-btn" type="submit" :disabled="loading">
+          <button v-content-motion="loading" :aria-busy="loading" class="login-btn" type="submit" :disabled="loading">
             {{ loading ? '登录中…' : '登录' }}
           </button>
         </form>
@@ -152,7 +155,6 @@ const submit = () => {
 .login-mobile-brand strong { color: var(--ink); font-size: 16px; font-weight: 600; }
 .login-card {
   width: min(360px, 100%);
-  animation: login-enter .2s ease-out both;
 }
 .login-header h2 { margin: 0; color: var(--ink); font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
 .login-header p { margin: 5px 0 0; color: var(--muted); font-size: 12.5px; }
@@ -192,17 +194,11 @@ const submit = () => {
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background .15s, filter .15s, transform .12s;
+  transition: background .15s, filter .15s;
 }
 .login-btn:hover:not(:disabled) { background: var(--blue-dark); border-color: var(--blue-dark); }
-.login-btn:active:not(:disabled) { transform: scale(.99); }
 .login-btn:disabled { opacity: .55; cursor: default; }
 .login-hint { margin: 20px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
-
-@keyframes login-enter {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
-}
 
 @media (max-width: 1180px) {
   .login-intro { padding: 36px 40px 30px; }

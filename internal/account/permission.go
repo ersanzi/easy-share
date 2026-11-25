@@ -8,9 +8,8 @@ import (
 
 // FeatureFlags 是一个账号的五项功能开关，与控制面 es_user_permission 一一对应。
 //
-// 缺行账号在控制面按「全开」返回，所以这里拿到的永远是一个完整的判断依据；
-// 旧版控制面没有这个接口时调用方回落到 AllFeatures()——不隐藏入口，
-// 服务端仍会按真实配置拦。挂了权限角色的账号，控制面返回的是角色并集。
+// 五项能力均以控制面的实时应答为准，不在客户端推断缺行账号的授权；
+// 调用失败或缺字段时不能在本地补授权；挂了权限角色的账号由控制面返回角色并集。
 type FeatureFlags struct {
 	// Admin 接口会带 userId；/mine 也有，客户端不必关心，仅用于管理页回写
 	UserID    string `json:"userId,omitempty"`

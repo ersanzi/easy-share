@@ -27,7 +27,7 @@ import java.util.Set;
 /**
  * 文档级成员角色：四档梯子**一处收口**，列表过滤与动作拦截共用同一份裁决。
  * <p>
- * 裁决顺序（{@link #ladder}，企业权限第三片，参照钉钉文档权限模型
+ * 裁决前必须仍是有效共享空间成员。裁决顺序（{@link #ladder}，企业权限第三片，参照钉钉文档权限模型
  * docs/intelligence/2026-11-05-dingtalk-docs-permission-reverse.md）：
  * <ol>
  *   <li>上传者恒 manage（隐式，不落表——今天上传者可改可见性，升级为全权）；</li>
@@ -63,6 +63,7 @@ public class FileRoleService {
     private final SpaceService spaceService;
     private final SysUserDeptMapper sysUserDeptMapper;
     private final SysDeptRowMapper sysDeptRowMapper;
+    private final PermissionWriteService writes;
 
     /** 档位高低（比较用）：manage > edit > download > read；未知档位按 0 处理（宁少勿错） */
     public static int rank(String role) {
@@ -90,7 +91,9 @@ public class FileRoleService {
      */
     public static String ladder(EsFile row, Long userId, Long deptId, String spacePermission,
                                 String userRoleRow, String deptRoleRow) {
-        if (row == null || !EsSpace.TYPE_SHARED.equals(row.getSpaceType())) {
+        if (row == null || !EsSpace.TYPE_SHARED.equals(row.getSpaceType())
+            || !EsFile.STATE_ACTIVE.equals(row.getState())
+            || (!EsSpaceMember.PERM_READ.equals(spacePermission) && !EsSpaceMember.PERM_WRITE.equals(spacePermission))) {
             return null;
         }
         // 1. 上传者恒 manage（存量补账行 uploadBy=0 不认，避免「全网上传者」）
@@ -100,7 +103,7 @@ public class FileRoleService {
         }
         // 2. 显式成员行覆盖一切默认（user 行与 dept 行取高，与空间权限 widen 取宽同向）
         String explicit = higher(userRoleRow, deptRoleRow);
-        if (explicit != null) {
+        if (userRoleRow != null || deptRoleRow != null) {
             return explicit;
         }
         boolean restricted = row.getVisibleDepts() != null && !row.getVisibleDepts().isBlank();
@@ -123,6 +126,8 @@ public class FileRoleService {
 
     /** 两档取高；同档取任一（null 与 null 还是 null） */
     private static String higher(String a, String b) {
+        if (rank(a) == 0) a = null;
+        if (rank(b) == 0) b = null;
         if (a == null) {
             return b;
         }
@@ -159,6 +164,8 @@ public class FileRoleService {
                                                  Map<String, EsFile> rowsByPath, Long userId) {
         Long deptId = spaceService.deptIdOf(userId);
         String spacePermission = spaceService.sharedPermissionOf(userId);
+        if (!EsSpaceMember.PERM_READ.equals(spacePermission) && !EsSpaceMember.PERM_WRITE.equals(spacePermission))
+            return List.of();
         Map<Long, String> userRows = new HashMap<>();
         for (EsFileMember member : memberMapper.selectUserRowsOf(userId)) {
             userRows.put(member.getFileId(), member.getRole());
@@ -220,13 +227,6 @@ public class FileRoleService {
 
     /** 改可见性门槛：上传者恒可（既有行为），其余按 manage 档 */
     public void assertVisibilityManageable(EsFile row, Long userId) {
-        if (row == null) {
-            return;
-        }
-        if (userId != null && row.getUploadBy() != null && row.getUploadBy() > 0
-            && row.getUploadBy().equals(userId)) {
-            return;
-        }
         assertManage(row, userId);
     }
 
@@ -304,15 +304,24 @@ public class FileRoleService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void replaceMembers(Long fileId, List<EsFileMember> members, Long operatorId) {
+        if (members == null || members.stream().anyMatch(Objects::isNull))
+            throw new ServiceException("成员列表非法；清空授权请明确提交空列表");
+        List<Long> affected = new ArrayList<>();
+        affected.add(operatorId);
+        for (EsFileMember member : members)
+            if (EsFileMember.TYPE_USER.equals(member.getMemberType())) affected.add(member.getMemberId());
+        writes.begin(affected.toArray(Long[]::new));
+        lockFile(fileId);
         requireManageable(fileId, operatorId);
         String keepOperatorRole = memberMapper.selectRole(fileId, EsFileMember.TYPE_USER, operatorId);
+        List<EsFileMember> before = memberMapper.selectByFile(fileId);
         Map<String, String> existing = new HashMap<>();
-        for (EsFileMember row : memberMapper.selectByFile(fileId)) {
+        for (EsFileMember row : before) {
             existing.put(row.getMemberType() + ":" + row.getMemberId(), row.getRole());
         }
         Set<String> seen = new HashSet<>();
         List<EsFileMember> rows = new ArrayList<>();
-        for (EsFileMember member : members == null ? List.<EsFileMember>of() : members) {
+        for (EsFileMember member : members) {
             validateRole(member.getRole());
             // 自改护栏先于主体存在性校验：护栏是授权语义，不该被「主体查不到」抢先后掩盖
             if (EsFileMember.TYPE_USER.equals(member.getMemberType())
@@ -339,15 +348,52 @@ public class FileRoleService {
         if (keepOperatorRole != null) {
             memberMapper.insertRow(fileId, EsFileMember.TYPE_USER, operatorId, keepOperatorRole);
         }
+        writes.audit("file.members.replace", fileId, before, memberMapper.selectByFile(fileId));
     }
 
     /** 删除单条成员行（manage 门 + 不能删自己的行） */
+    @Transactional(rollbackFor = Exception.class)
     public void removeMember(Long fileId, String memberType, Long memberId, Long operatorId) {
+        writes.begin(operatorId);
+        lockFile(fileId);
         requireManageable(fileId, operatorId);
         if (EsFileMember.TYPE_USER.equals(memberType) && Objects.equals(operatorId, memberId)) {
             throw new ServiceException("不能修改自己的角色");
         }
+        String before = memberMapper.selectRole(fileId, memberType, memberId);
         memberMapper.deleteRow(fileId, memberType, memberId);
+        writes.audit("file.member.remove", fileId + ":" + memberType + ":" + memberId, before, null);
+    }
+
+    /** 可见部门也是授权状态，必须与成员替换、空间撤权共用同一事务写边界。 */
+    @Transactional(rollbackFor = Exception.class)
+    public String replaceVisibleDepts(Long fileId, Long operatorId, String visibleDepts) {
+        writes.begin(operatorId);
+        lockFile(fileId);
+        EsFile row = requireManageable(fileId, operatorId);
+        String before = row.getVisibleDepts();
+        if (visibleDepts != null && !visibleDepts.isBlank()) {
+            for (String id : visibleDepts.split(",")) {
+                Long deptId;
+                try { deptId = Long.valueOf(id); }
+                catch (NumberFormatException e) { throw new ServiceException("部门标识非法"); }
+                // 失效的既有条目允许保留或移除，但不能重新添加。
+                if (deptId <= 0) throw new ServiceException("部门标识非法");
+                if (before != null && DriveFileService.deptListContains(before, deptId)) continue;
+                SysDeptRow dept = sysDeptRowMapper.selectById(deptId);
+                if (dept == null || !"0".equals(dept.getStatus()) || !"0".equals(dept.getDelFlag()))
+                    throw new ServiceException("部门不存在或已停用");
+            }
+        }
+        row.setVisibleDepts(visibleDepts);
+        fileMapper.updateById(row);
+        writes.audit("file.visibility", fileId, before, visibleDepts);
+        return visibleDepts;
+    }
+
+    private void lockFile(Long fileId) {
+        if (fileId == null || fileMapper.lockForPermissionUpdate(fileId) == null)
+            throw new ServiceException("文件不存在或已删除");
     }
 
     /** 文件删除（purge）时随行清理，防孤儿行 */

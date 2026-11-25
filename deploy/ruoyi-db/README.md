@@ -13,28 +13,36 @@
 ## 首次搭建
 
 ```powershell
-# 1) 起 PG + Redis
-Set-Location deploy/ruoyi-db
-docker compose up -d
+# 从仓库根执行；platform/ 必须已按下文接线
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+docker compose -f deploy/ruoyi-db/compose.yaml up -d
 
-# 2) 灌入 RuoYi 的 PostgreSQL 建表脚本（4 个基础 + 2 个 EasyShare 业务表）
-Set-Location ../../platform/script/sql/postgres
-foreach ($f in 'postgres_ry_vue.sql','postgres_ry_workflow.sql','postgres_ry_job.sql','postgres_ry_ai.sql') {
-  docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < $f
+# RuoYi 基础表，再按业务依赖顺序迁移；psql 任一错误立即停止
+$baseSql = @("postgres_ry_vue.sql", "postgres_ry_workflow.sql", "postgres_ry_job.sql", "postgres_ry_ai.sql")
+foreach ($file in $baseSql) {
+    Get-Content -LiteralPath "platform/script/sql/postgres/$file" -Raw -Encoding UTF8 |
+        docker exec -i easyshare-ruoyi-pg psql -v ON_ERROR_STOP=1 -U ruoyi -d ryvue
+    if ($LASTEXITCODE -ne 0) { throw "基础迁移失败：$file" }
 }
-Set-Location ../../..    # 回到仓库根
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-space.sql
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-app-release.sql
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-plugin.sql
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-file.sql
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-permission.sql
-docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-user-profile.sql
+$businessSql = @(
+    "easyshare-space.sql", "easyshare-file.sql", "easyshare-file-visibility.sql",
+    "easyshare-space-member-type.sql", "easyshare-upload-session.sql",
+    "easyshare-app-release.sql", "easyshare-plugin.sql", "easyshare-file-recycle.sql",
+    "easyshare-content-hash.sql", "easyshare-incremental-list.sql",
+    "easyshare-file-mark.sql", "easyshare-share.sql", "easyshare-file-version.sql",
+    "easyshare-client-session.sql", "easyshare-directory.sql",
+    "easyshare-user-permission.sql", "easyshare-user-profile.sql",
+    "easyshare-permission-role.sql", "easyshare-file-member.sql", "easyshare-permission-hardening.sql"
+)
+foreach ($file in $businessSql) {
+    Get-Content -LiteralPath "deploy/ruoyi-db/$file" -Raw -Encoding UTF8 |
+        docker exec -i easyshare-ruoyi-pg psql -v ON_ERROR_STOP=1 -U ruoyi -d ryvue
+    if ($LASTEXITCODE -ne 0) { throw "业务迁移失败：$file" }
+}
 
-# 3) 构建（首建下依赖，走 pom 里的华为云镜像；可选模块 ruoyi-snailai-server 因
-#    milvus/es 依赖下载损坏会失败，不影响 ruoyi-admin fat jar 产出）
-Set-Location platform
-$env:JAVA_HOME = 'D:\Develop\java21'
-./mvnw clean package -DskipTests
+# 构建；首建需要下载依赖，须使用 JDK21
+$env:JAVA_HOME = "D:/Develop/java21"
+mvn -B -ntp -f platform/pom.xml -pl ruoyi-admin -am clean package -DskipTests
 ```
 
 ## 日常启动
@@ -99,7 +107,7 @@ docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easys
 ```
 
 - `es_user_permission`：一行一账号的五项功能开关（知识问答 / 会议听记 / 网盘 / 共享空间 / 插件中心）。**没有行 = 五项全开**，存量账号不需要迁移；只有管理员关过某项的账号才会落行。网盘关闭时共享空间一并失效。接口：`/easyshare/permission/mine`（登录即可读自己）、`/easyshare/permission/admin/list` 与 `PUT /easyshare/permission/admin`（超管）。
-- `es_permission_role` + `es_user_role`：**角色/权限组与子管理员**（2026-10-27 第三轮；2026-11-05 管理范围表达式化）。成员挂了角色后，五项开关取所挂角色的并集，逐账号行暂不参与；没挂角色时仍走 `es_user_permission`，再没有行则全开。`admin_scope` 非 `none` 的角色是「子管理员」，成员能进管理页的权限矩阵，范围按档位裁剪：`dept`（本部门精确匹配）/ `dept_children`（本部门及下级，按 `sys_dept.parent_id` 内存 BFS）/ `specified`（`scope_dept_ids` 逗号分隔的部门 ID，2026-11-05 新增列，幂等补列）/ `all`（全部成员）；多个管理角色取并集。角色定义与分配仅超管可改；删除角色时，只挂该角色的成员会先落一行逐账号快照，不会被放大成全开。接口：`GET /easyshare/permission/admin/members`（超管/子管理员，按范围裁剪）、`/admin/roles` 增删改与 `PUT /admin/members/{userId}/roles`（超管）。
+- `es_permission_role` + `es_user_role`：**角色/权限组与子管理员**（2026-10-27 第三轮；2026-11-05 管理范围表达式化）。成员挂了角色后，五项开关取所挂角色的并集，逐账号行暂不参与；没挂角色时仍走 `es_user_permission`，再没有行则全开。`admin_scope` 非 `none` 的角色是「子管理员」，成员能进管理页的权限矩阵，范围按档位裁剪：`dept`（本部门精确匹配）/ `dept_children`（本部门及下级，按 `sys_dept.parent_id` 内存 BFS）/ `specified`（`scope_dept_ids` 逗号分隔的部门 ID，2026-11-05 新增列，幂等补列）/ `all`（全部成员）；多个管理角色取并集。角色定义与分配仅超管可改；删除角色或移除成员最后一个角色时，先保存其当前有效限制，再解绑；不会复活旧的宽松配置或因缺行变成全开。子管理员不能修改超级管理员。接口：`GET /easyshare/permission/admin/members`（超管/子管理员，按范围裁剪）、`/admin/roles` 增删改与 `PUT /admin/members/{userId}/roles`（超管）。
 - `es_user_profile`：头像字节（≤2MB，按文件头嗅探，拒绝 SVG）。不用 RuoYi 的 `sys_user.avatar` + `sys_oss`，原因是标准上传接口需要 `system:oss:upload` 权限、普通成员没有。读接口 `/easyshare/profile/avatars/{userId}` 匿名可访问（`<img>` 发不了 Authorization），带 7 天缓存与版本号；写接口要求登录本人。昵称与密码仍走 RuoYi 标准个人中心 `/system/user/profile`。
 
 ## 文档级成员角色（2026-11-05，企业权限第三片）
@@ -110,7 +118,24 @@ docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easys
 docker exec -i easyshare-ruoyi-pg psql -U ruoyi -d ryvue < deploy/ruoyi-db/easyshare-file-member.sql
 ```
 
-- `es_file_member`：一行 = 一个主体（user/dept）对一份共享空间文件的显式角色，四档 `manage/edit/download/read`（删除是 manage 独占，对齐钉钉）。裁决收口 `FileRoleService.ladder`：上传者恒 manage → 成员行取高 → `es_file.visible_depts` 命中=download → 空间默认（write 成员 manage / read 成员 download）→ 不可见。列表过滤、下载签发、删除、改名、覆盖上传、改可见性六处共用同一份梯子。**未配角色的文件行为与本表引入前完全一致**。护栏：不能修改自己的角色行；仅上传者/manage 档可授权（`/easyshare/file-member/*`）。成员行随回收站 purge 摘行清理。
+- `es_file_member`：一行 = 一个主体（user/dept）对一份共享空间文件的显式角色，四档 `manage/edit/download/read`（删除是 manage 独占，对齐钉钉）。裁决收口 `FileRoleService.ladder`：先要求有效账号仍有共享空间访问权 → 上传者 manage → 有效成员行取高 → `es_file.visible_depts` 命中=download → 空间默认（write 成员 manage / read 成员 download）→ 不可见。列表过滤、下载签发、删除、改名、覆盖上传、改可见性六处共用同一份梯子。**未配角色的文件行为与本表引入前完全一致**。护栏：不能修改自己的角色行；仅上传者/manage 档可授权（`/easyshare/file-member/*`）。成员行随回收站 purge 摘行清理。
+
+## 授权事务与会话升级（2026-11-25）
+
+升级顺序：备份数据库并暂停授权写入 → 执行 `easyshare-permission-hardening.sql` → 升级全部控制面实例 → 升级知识服务及桌面端 → 用专用账号验证授予/撤销/降权/停用。不能混跑未遵守事务锁的旧控制面写入口。迁移已加入 `scripts/ship-control-plane.ps1`；源码修改本身不会执行迁移或部署。
+
+```powershell
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Get-Content -LiteralPath deploy/ruoyi-db/easyshare-permission-hardening.sql -Raw -Encoding UTF8 |
+    docker exec -i easyshare-ruoyi-pg psql -v ON_ERROR_STOP=1 -U ruoyi -d ryvue
+if ($LASTEXITCODE -ne 0) { throw "权限迁移失败，停止升级" }
+```
+
+该幂等迁移新增授权互斥行与事务审计表；权限变更记录操作者、动作、目标及修改前后状态，审计失败时授权一并回滚。缺表时写入拒绝；锁冲突立即提示刷新后重试。审计表是事务事实记录，当前没有独立审计检索界面或防数据库管理员篡改能力。
+
+企业知识服务每次请求回查控制面身份/功能，查询失败关闭访问；企业本地令牌不再作为备用身份。共享 `/changes?sinceVersion=...` 返回 `DRIVE_SYNC_RESET_REQUIRED`，客户端必须清空缓存并重新全量同步；只更新 UI 不能获得这些服务端边界。旧预签名 URL、此前下载字节不会被追溯撤回，新有效账号无角色/逐账号配置仍保留全开策略。
+
+部署后至少验证：停用账号和部门、撤销共享空间后旧文件成员及上传者、子管理员越范围、移除最后角色、权限服务不可用、快速退出/换号、变更日志断档与分页。还应观测实时授权请求量及共享全量列举耗时。本次本地单元回归通过不代表已完成公司多账号/数据库/对象存储验收；记录见[本次迭代](../../docs/iterations/2026-11-25-企业权限与状态动效.md)。回退程序时保留新增表与审计数据，旧版本会重新引入本次修复的漏洞，不能作为静默降级方案。
 
 ## 关键改动与本机坑（都已在配置/脚本里处理）
 

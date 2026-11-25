@@ -179,5 +179,6 @@ describe('RecyclePanel safe recycle compatibility', () => {
     await flushPromises()
     expect(mocks.list).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('回收站网络失败')
+    expect(wrapper.text()).not.toContain('回收站为空')
   })
 })

@@ -1,9 +1,38 @@
 // 待办周报插件：待办 CRUD（storage 持久化）+ 本周聚合生成 markdown 周报
 // （复制到剪切板 / 存入个人云盘）。
 (function () {
+  // 内容先落到最终态；动画只作提示，可取消，宿主不支持 WAAPI 时直接可见。
+  var stateMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: no-preference)') : null;
+  var stateMotions = [];
+  function revealState(element) {
+    stateMotions.slice().forEach(function (entry) {
+      if (entry.element === element) entry.animation.cancel();
+    });
+    if (!stateMotionQuery || !stateMotionQuery.matches || !element.animate) return;
+    var tokens = getComputedStyle(document.documentElement);
+    var animation = element.animate([{ opacity: .55 }, { opacity: 1 }], {
+      duration: parseFloat(tokens.getPropertyValue('--motion-enter')) || 200,
+      easing: tokens.getPropertyValue('--motion-ease').trim() || 'cubic-bezier(.2,0,0,1)'
+    });
+    var entry = { element: element, animation: animation };
+    stateMotions.push(entry);
+    animation.onfinish = animation.oncancel = function () {
+      var index = stateMotions.indexOf(entry);
+      if (index >= 0) stateMotions.splice(index, 1);
+    };
+  }
+  if (stateMotionQuery) {
+    var stopStateMotion = function () {
+      if (!stateMotionQuery.matches) stateMotions.slice().forEach(function (entry) { entry.animation.cancel(); });
+    };
+    if (stateMotionQuery.addEventListener) stateMotionQuery.addEventListener('change', stopStateMotion);
+    else if (stateMotionQuery.addListener) stateMotionQuery.addListener(stopStateMotion);
+  }
   var STORAGE_KEY = 'todos';
   var todos = [];            // {id, text, done, createdAt, doneAt}
   var filter = 'all';
+  var saving = false, loaded = false, reportUpload = false;
+  var returnFocus = null;
 
   var listEl = document.getElementById('list');
   var emptyEl = document.getElementById('empty');
@@ -13,6 +42,8 @@
   var reportBody = document.getElementById('reportBody');
   var reportHint = document.getElementById('reportHint');
   var toastEl = document.getElementById('toast');
+  var saveStatus = document.getElementById('saveStatus');
+  var retryLoad = document.getElementById('retryLoad');
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -28,13 +59,51 @@
 
   // ── 持久化（storage 能力：按插件隔离的 KV）──
   function load() {
+    setBusy(true);
+    saveStatus.textContent = '正在读取待办…';
+    retryLoad.hidden = true;
     return eshare.storage.get(STORAGE_KEY).then(function (v) {
       todos = Array.isArray(v) ? v : [];
+      loaded = true;
+      saveStatus.textContent = '';
+      setBusy(false);
       render();
-    }).catch(function () { todos = []; render(); });
+    }).catch(function (err) {
+      saveStatus.textContent = '读取失败：' + (err.message || '请重试');
+      retryLoad.hidden = false;
+      setBusy(false);
+    });
   }
-  function save() {
-    return eshare.storage.set(STORAGE_KEY, todos);
+  function setBusy(busy) {
+    saving = busy;
+    listEl.setAttribute('aria-busy', String(busy));
+    newEl.disabled = weeklyBtn.disabled = busy || !loaded;
+    listEl.querySelectorAll('input, button').forEach(function (el) { el.disabled = busy; });
+  }
+  // 保存失败恢复原状态；一次写入期间不叠加写入，避免反馈与持久化顺序相反。
+  function saveChange(next, message, onSuccess) {
+    if (saving || !loaded) return;
+    var previousFocus = document.activeElement;
+    var previous = todos;
+    todos = next;
+    render();
+    setBusy(true);
+    saveStatus.textContent = '正在保存…';
+    eshare.storage.set(STORAGE_KEY, next).then(function () {
+      saveStatus.textContent = message;
+      if (onSuccess) onSuccess();
+    }).catch(function (err) {
+      todos = previous;
+      render();
+      saveStatus.textContent = '保存失败：' + (err.message || '请重试');
+      toast(saveStatus.textContent);
+    }).then(function () {
+      setBusy(false);
+      if (reportPanel.hidden && document.activeElement === document.body) {
+        if (previousFocus && previousFocus.isConnected) previousFocus.focus();
+        else newEl.focus();
+      }
+    });
   }
 
   function render() {
@@ -43,14 +112,26 @@
       if (filter === 'done') return t.done;
       return true;
     });
-    listEl.innerHTML = '';
-    shown.forEach(function (t) { listEl.appendChild(row(t)); });
+    var rows = Object.create(null);
+    listEl.querySelectorAll('.row').forEach(function (el) { rows[el.dataset.id] = el; });
+    var cursor = listEl.firstElementChild;
+    shown.forEach(function (t) {
+      var el = rows[t.id] || row(t);
+      el.classList.toggle('done', t.done);
+      el.querySelector('input').checked = t.done;
+      if (el !== cursor) listEl.insertBefore(el, cursor);
+      cursor = el.nextElementSibling;
+      delete rows[t.id];
+    });
+    Object.keys(rows).forEach(function (id) { rows[id].remove(); });
+    listEl.querySelectorAll('input, button').forEach(function (el) { el.disabled = saving; });
     emptyEl.hidden = shown.length > 0;
   }
 
   function row(t) {
     var div = document.createElement('div');
     div.className = 'row' + (t.done ? ' done' : '');
+    div.dataset.id = t.id;
     var date = new Date(t.createdAt);
     var label = (date.getMonth() + 1) + '/' + date.getDate();
     div.innerHTML =
@@ -59,25 +140,24 @@
       '<time>' + label + '</time>' +
       '<button class="del" title="删除">✕</button>';
     div.querySelector('input').addEventListener('change', function () {
-      t.done = this.checked;
-      t.doneAt = this.checked ? Date.now() : null;
-      save().then(render);
+      var done = this.checked;
+      saveChange(todos.map(function (item) {
+        return item.id === t.id ? Object.assign({}, item, { done: done, doneAt: done ? Date.now() : null }) : item;
+      }), done ? '已完成' : '已恢复为未完成');
     });
     div.querySelector('.del').addEventListener('click', function () {
-      todos = todos.filter(function (x) { return x.id !== t.id; });
-      save().then(render);
+      saveChange(todos.filter(function (x) { return x.id !== t.id; }), '已删除');
     });
     return div;
   }
 
   // ── 添加 ──
   newEl.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
+    if (e.key !== 'Enter' || e.isComposing || saving || !loaded) return;
     var text = newEl.value.trim();
     if (!text) return;
-    todos.unshift({ id: String(Date.now()) + Math.random().toString(36).slice(2, 6), text: text, done: false, createdAt: Date.now(), doneAt: null });
-    newEl.value = '';
-    save().then(render);
+    var item = { id: String(Date.now()) + Math.random().toString(36).slice(2, 6), text: text, done: false, createdAt: Date.now(), doneAt: null };
+    saveChange([item].concat(todos), '已添加', function () { newEl.value = ''; });
   });
 
   // ── 过滤 ──
@@ -87,6 +167,7 @@
       chip.classList.add('active');
       filter = chip.dataset.filter;
       render();
+      revealState(listEl);
     });
   });
   document.querySelector('.chip[data-filter="all"]').classList.add('active');
@@ -128,17 +209,21 @@
     return lines.join('\n');
   }
 
-  // 周报弹窗开关：open/close 统一走内联 display（hidden 属性会被作者样式覆盖的环境里也可靠），
-  // 关闭用 document 级事件委托（即使个别宿主环境监听器挂载时序异常，点击仍可达）
+  // 固定蒙层通过 visibility/opacity 过渡；hidden、焦点与交互立即切换，不等结束事件。
   function openReport() {
+    returnFocus = document.activeElement;
     reportBody.textContent = buildReport();
-    reportHint.textContent = '';
+    reportHint.textContent = reportUpload ? '上传中…' : '';
     reportPanel.hidden = false;
-    reportPanel.style.display = 'flex';
+    reportPanel.removeAttribute('inert');
+    reportPanel.setAttribute('aria-hidden', 'false');
+    document.getElementById('closeReport').focus();
   }
   function closeReport() {
     reportPanel.hidden = true;
-    reportPanel.style.display = 'none';
+    reportPanel.setAttribute('inert', '');
+    reportPanel.setAttribute('aria-hidden', 'true');
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus();
   }
   weeklyBtn.addEventListener('click', openReport);
   document.addEventListener('click', function (e) {
@@ -148,7 +233,14 @@
     if (e.target === reportPanel) closeReport();   // 点背景（蒙层）关闭
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && !reportPanel.hidden) closeReport();
+    if (reportPanel.hidden) return;
+    if (e.key === 'Escape') closeReport();
+    if (e.key === 'Tab') {
+      var controls = reportPanel.querySelectorAll('button:not(:disabled)');
+      var first = controls[0], last = controls[controls.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
   });
 
   document.getElementById('copyReport').addEventListener('click', function () {
@@ -158,6 +250,11 @@
   });
 
   document.getElementById('saveReport').addEventListener('click', function () {
+    if (reportUpload) return;
+    reportUpload = true;
+    var button = this;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
     var d = new Date();
     var stamp = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
     reportHint.textContent = '上传中…';
@@ -169,10 +266,15 @@
       toast('周报已上传到个人云盘');
     }).catch(function (err) {
       reportHint.textContent = err.message || '上传失败';
+    }).then(function () {
+      reportUpload = false;
+      button.disabled = false;
+      button.setAttribute('aria-busy', 'false');
     });
   });
 
   function pad(n) { return n < 10 ? '0' + n : '' + n; }
 
+  retryLoad.addEventListener('click', load);
   load();
 })();
